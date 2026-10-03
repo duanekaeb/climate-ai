@@ -1,0 +1,1681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Climate AI Blueprint</title>
+<meta name="description" content="Plan, app mockup and optimization write-up for a whole-house ecobee optimizer with weather-normalized analytics and a Claude analyst.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,500..800&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: a long-form blueprint column (prose ~70ch) with full-width panels for the house diagram,
+   and a framed, working app mockup in the middle of the document. Copper = the line-set accent. */
+:root{
+  --bg:#f2f5f6; --surface:#ffffff; --surface-2:#e9eef1; --surface-3:#dde5e9;
+  --ink:#13212a; --ink-2:#41515b; --muted:#687882; --line:#d4dde2; --line-strong:#b4c1c8;
+  --accent:#9c4f25; --accent-strong:#7f3e1b; --accent-soft:#f5e6dc; --on-accent:#ffffff;
+  --code-bg:#14212a; --code-ink:#dce7ec; --code-dim:#8ea3ae; --code-key:#f0b48c; --code-str:#9fd8b8;
+  /* chart series (validated: blue / orange / aqua adjacent-safe; policy pair yellow / violet) */
+  --s-main:#2a78d6; --s-up:#eb6834; --s-bed:#1baf7a; --s-total:#13212a; --s-out:#687882;
+  --s-a:#eda100; --s-b:#4a3aa7;
+  --grid:#e3e9ec; --axis:#b4c1c8; --area:.10;
+  /* status (never a series) */
+  --good:#0ca30c; --good-ink:#006300; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --good-soft:#e3f4e3; --warn-soft:#fdf1d6; --crit-soft:#fae3e3; --cool-soft:#e2edfb; --cool-ink:#1c5cab;
+  /* sequential ramp for duty heatmap, near-zero recedes to surface */
+  --h0:#eef4fc; --h1:#cde2fb; --h2:#9ec5f4; --h3:#6da7ec; --h4:#3987e5; --h5:#256abf; --h6:#184f95; --h7:#0d366b;
+  --div-neg:#2a78d6; --div-pos:#e34948; --div-mid:#c8d1d6;
+  --shadow:0 1px 2px rgba(19,33,42,.06),0 6px 24px rgba(19,33,42,.07);
+  --font-display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --font-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  --step--1:.8125rem; --step-0:1rem; --step-1:1.1875rem; --step-2:1.5rem; --step-3:2rem; --step-4:clamp(2.4rem,5vw,3.6rem);
+  --radius:10px; --radius-sm:6px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1418; --surface:#161e23; --surface-2:#1c262c; --surface-3:#243139;
+    --ink:#e6edf0; --ink-2:#b2c0c7; --muted:#83939c; --line:#2a363d; --line-strong:#3c4a52;
+    --accent:#e39466; --accent-strong:#f0ad84; --accent-soft:#3a2518; --on-accent:#1a0f08;
+    --code-bg:#0a0f12; --code-ink:#dce7ec; --code-dim:#7f939d; --code-key:#f0b48c; --code-str:#9fd8b8;
+    --s-main:#3987e5; --s-up:#d95926; --s-bed:#199e70; --s-total:#e6edf0; --s-out:#83939c;
+    --s-a:#c98500; --s-b:#9085e9;
+    --grid:#232e34; --axis:#3c4a52; --area:.14;
+    --good-soft:#15301a; --warn-soft:#352a10; --crit-soft:#3a1a1a; --cool-soft:#152a44; --cool-ink:#86b6ef; --good-ink:#0ca30c;
+    --h0:#18232b; --h1:#16304f; --h2:#1c4677; --h3:#205da3; --h4:#2a78d6; --h5:#5598e7; --h6:#86b6ef; --h7:#b7d3f6;
+    --div-neg:#3987e5; --div-pos:#e66767; --div-mid:#3c4a52;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.35);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1418; --surface:#161e23; --surface-2:#1c262c; --surface-3:#243139;
+  --ink:#e6edf0; --ink-2:#b2c0c7; --muted:#83939c; --line:#2a363d; --line-strong:#3c4a52;
+  --accent:#e39466; --accent-strong:#f0ad84; --accent-soft:#3a2518; --on-accent:#1a0f08;
+  --code-bg:#0a0f12; --code-ink:#dce7ec; --code-dim:#7f939d; --code-key:#f0b48c; --code-str:#9fd8b8;
+  --s-main:#3987e5; --s-up:#d95926; --s-bed:#199e70; --s-total:#e6edf0; --s-out:#83939c;
+  --s-a:#c98500; --s-b:#9085e9;
+  --grid:#232e34; --axis:#3c4a52; --area:.14;
+  --good-soft:#15301a; --warn-soft:#352a10; --crit-soft:#3a1a1a; --cool-soft:#152a44; --cool-ink:#86b6ef; --good-ink:#0ca30c;
+  --h0:#18232b; --h1:#16304f; --h2:#1c4677; --h3:#205da3; --h4:#2a78d6; --h5:#5598e7; --h6:#86b6ef; --h7:#b7d3f6;
+  --div-neg:#3987e5; --div-pos:#e66767; --div-mid:#3c4a52;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.35);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+.grid-2>*,.grid-3>*,.hero-grid>*{min-width:0}
+.card .pill{white-space:normal}
+.eq,.tree,pre.code,.card,.table-wrap{min-width:0;max-width:100%}
+html{scroll-behavior:smooth;scroll-padding-top:72px}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:var(--step-0);line-height:1.6;margin:0;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-underline-offset:2px}
+a:hover{color:var(--accent-strong)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+h1,h2,h3,h4{font-family:var(--font-display);font-stretch:112%;line-height:1.15;text-wrap:balance;margin:0;color:var(--ink)}
+h2{font-size:var(--step-3);font-weight:750;letter-spacing:-.01em}
+h3{font-size:var(--step-2);font-weight:700}
+h4{font-size:var(--step-1);font-weight:700}
+p{margin:0}
+code,kbd{font-family:var(--font-mono);font-size:.88em;background:var(--surface-2);border:1px solid var(--line);padding:.05em .35em;border-radius:4px}
+strong{font-weight:650}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.eyebrow{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:600}
+.muted{color:var(--muted)}
+.small{font-size:var(--step--1)}
+
+/* ------- page shell ------- */
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:40;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.topbar-inner{max-width:1180px;margin:0 auto;padding:0 20px;display:flex;align-items:center;gap:18px;min-height:56px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-stretch:118%;font-weight:800;font-size:1.05rem;color:var(--ink);text-decoration:none;white-space:nowrap}
+.brand-mark{width:26px;height:26px;flex:none}
+.toc{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;min-width:0;flex:1}
+.toc::-webkit-scrollbar{display:none}
+.toc a{font-size:.84rem;color:var(--ink-2);text-decoration:none;padding:6px 10px;border-radius:999px;white-space:nowrap}
+.toc a:hover{background:var(--surface-2);color:var(--ink)}
+.toc a.on{background:var(--ink);color:var(--bg)}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:20px}
+.prose{max-width:72ch}
+.prose p+p{margin-top:.9em}
+section.block{padding-block:72px 24px;border-top:1px solid var(--line)}
+section.block:first-of-type{border-top:0}
+.sec-head{display:grid;gap:10px;margin-bottom:28px;max-width:72ch}
+.sec-head p{color:var(--ink-2);font-size:var(--step-1);line-height:1.5}
+
+/* ------- hero ------- */
+.hero{padding-block:56px 40px}
+.hero h1{font-size:var(--step-4);font-weight:800;letter-spacing:-.02em;font-stretch:118%;max-width:18ch}
+.hero .lede{font-size:clamp(1.1rem,2vw,1.3rem);color:var(--ink-2);max-width:62ch;margin-top:18px;line-height:1.55}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:40px;align-items:end}
+.pillars{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-top:40px}
+.pillar{background:var(--surface);padding:18px 18px 20px;display:grid;gap:6px;align-content:start}
+.pillar .k{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.pillar h4{font-size:1.05rem}
+.pillar p{font-size:.92rem;color:var(--ink-2);line-height:1.5}
+.callout{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;padding:16px 18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.callout .ic{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-family:var(--font-mono);font-size:.85rem}
+.callout.warn .ic{background:var(--warn-soft);color:var(--ink)}
+.callout.info .ic{background:var(--cool-soft);color:var(--cool-ink)}
+.callout.good .ic{background:var(--good-soft);color:var(--good-ink)}
+.callout h4{font-size:1rem;margin-bottom:4px}
+.callout p{color:var(--ink-2);font-size:.95rem}
+
+/* ------- generic grids & cards ------- */
+.grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px;min-width:0}
+.card h4{margin-bottom:8px}
+.card p{color:var(--ink-2);font-size:.95rem}
+.card ul,.prose ul,.prose ol{margin:.6em 0 0;padding-left:1.2em;color:var(--ink-2)}
+.card li,.prose li{margin:.3em 0}
+.card li::marker,.prose li::marker{color:var(--muted)}
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+table.t{border-collapse:collapse;width:100%;font-size:.92rem;min-width:620px}
+table.t th,table.t td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+table.t th{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--surface-2)}
+table.t tr:last-child td{border-bottom:0}
+table.t td.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:baseline}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap;border:1px solid var(--line)}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.cool{background:var(--cool-soft);color:var(--cool-ink);border-color:transparent}
+.pill.good{background:var(--good-soft);color:var(--good-ink);border-color:transparent}
+.pill.warn{background:var(--warn-soft);color:var(--ink);border-color:transparent}
+.pill.warn .dot{background:var(--warn)}
+.pill.crit{background:var(--crit-soft);color:var(--crit);border-color:transparent}
+.pill.accent{background:var(--accent-soft);color:var(--accent-strong);border-color:transparent}
+
+/* ------- code ------- */
+pre.code{background:var(--code-bg);color:var(--code-ink);border-radius:var(--radius);padding:16px 18px;overflow-x:auto;font-family:var(--font-mono);font-size:.82rem;line-height:1.6;margin:0;border:1px solid var(--line)}
+pre.code .c{color:var(--code-dim)} pre.code .k{color:var(--code-key)} pre.code .s{color:var(--code-str)}
+.code-cap{font-family:var(--font-mono);font-size:.74rem;color:var(--muted);margin:0 0 6px;letter-spacing:.04em}
+
+/* ------- house diagram ------- */
+.diagram{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px;overflow-x:auto}
+.diagram svg{display:block;width:100%;min-width:720px;height:auto}
+.diagram text{font-family:var(--font-body)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:.82rem;color:var(--ink-2);align-items:center}
+.legend .key{display:inline-flex;align-items:center;gap:6px}
+.legend .ln{width:16px;height:2px;border-radius:2px;display:inline-block}
+.legend .sq{width:10px;height:10px;border-radius:2px;display:inline-block}
+
+/* ------- numbered process (real sequences only) ------- */
+.steps{display:grid;gap:0;border-left:2px solid var(--line);margin-left:14px}
+.step{position:relative;padding:0 0 26px 30px}
+.step:last-child{padding-bottom:0}
+.step .n{position:absolute;left:-15px;top:0;width:28px;height:28px;border-radius:50%;background:var(--surface);border:2px solid var(--accent);color:var(--accent-strong);font-family:var(--font-mono);font-weight:600;font-size:.8rem;display:grid;place-items:center}
+.step h4{font-size:1.08rem;margin-bottom:4px;padding-top:2px}
+.step p{color:var(--ink-2);font-size:.96rem;max-width:72ch}
+.step .meta{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
+
+/* ------- equations ------- */
+.eq{font-family:var(--font-mono);font-size:.86rem;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px 14px;overflow-x:auto;white-space:pre;color:var(--ink);line-height:1.7}
+
+/* ------- architecture ------- */
+.arch{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.lane{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;display:grid;gap:10px;align-content:start;min-width:0}
+.lane h4{font-size:.95rem;font-family:var(--font-mono);font-stretch:100%;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.svc{border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px 12px;background:var(--surface-2)}
+.svc b{display:block;font-size:.92rem}
+.svc span{display:block;font-size:.82rem;color:var(--ink-2);line-height:1.45;margin-top:2px}
+.tree{font-family:var(--font-mono);font-size:.82rem;line-height:1.65;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;overflow-x:auto;white-space:pre;color:var(--ink-2)}
+.tree b{color:var(--ink);font-weight:600}
+
+/* ------- roadmap ------- */
+.phase{display:grid;grid-template-columns:150px minmax(0,1fr);gap:20px;padding:18px 0;border-top:1px solid var(--line)}
+.phase:first-child{border-top:0}
+.phase .when{font-family:var(--font-mono);font-size:.8rem;color:var(--muted)}
+.phase .when b{display:block;font-family:var(--font-display);font-stretch:112%;font-size:1.05rem;color:var(--ink);margin-bottom:2px}
+.phase ul{margin:.4em 0 0;padding-left:1.1em;color:var(--ink-2);font-size:.95rem}
+.phase .exit{margin-top:8px;font-size:.88rem;color:var(--ink)}
+.phase .exit b{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--good-ink);margin-right:6px}
+
+.qlist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;counter-reset:q}
+.q{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px 14px;font-size:.94rem;color:var(--ink-2)}
+.q b{color:var(--ink)}
+
+footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-top:1px solid var(--line);margin-top:48px}
+
+@media (max-width: 960px){
+  .hero-grid{grid-template-columns:minmax(0,1fr)}
+  .pillars{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .arch{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid-3{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width: 680px){
+  .grid-2,.qlist{grid-template-columns:minmax(0,1fr)}
+  .pillars,.arch{grid-template-columns:minmax(0,1fr)}
+  .phase{grid-template-columns:minmax(0,1fr);gap:6px}
+  section.block{padding-block:52px 16px}
+  .brand span.full{display:none}
+}
+</style>
+<style>
+/* ======== App mockup ======== */
+.app{background:var(--surface);border:1px solid var(--line-strong);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;min-width:0}
+.app-bar{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap}
+.app-bar .brand{font-size:.98rem}
+.app-house{font-size:.85rem;color:var(--muted)}
+.live{display:inline-flex;align-items:center;gap:7px;font-size:.8rem;color:var(--ink-2);margin-left:auto}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 0 color-mix(in srgb,var(--good) 60%,transparent);animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--good) 55%,transparent)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.mode-chip{font-size:.78rem}
+.app-tabs{display:flex;gap:2px;padding:0 10px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin;background:var(--surface)}
+.app-tabs button{appearance:none;border:0;background:none;font:inherit;font-size:.88rem;font-weight:600;color:var(--muted);padding:12px 12px 10px;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap}
+.app-tabs button:hover{color:var(--ink)}
+.app-tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.app-body{padding:18px;background:var(--bg);min-height:560px}
+.view{display:grid;gap:16px}
+.view-note{font-size:.8rem;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;min-width:0}
+.panel-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.panel-h h5{margin:0;font-family:var(--font-display);font-stretch:108%;font-size:1rem;font-weight:700}
+.panel-h .sub{font-size:.8rem;color:var(--muted)}
+.row{display:grid;gap:16px}
+.row.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.row.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.row.c21{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+.row.c12{grid-template-columns:minmax(0,1fr) minmax(0,2fr)}
+
+/* weather strip */
+.wx{display:flex;flex-wrap:wrap;gap:6px 22px;align-items:center;padding:12px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+.wx .big{font-family:var(--font-display);font-stretch:110%;font-size:1.6rem;font-weight:750}
+.wx .item{display:grid;gap:0}
+.wx .item small{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-family:var(--font-mono)}
+.wx .item b{font-family:var(--font-mono);font-weight:500;font-size:.95rem;font-variant-numeric:tabular-nums}
+.wx .src{margin-left:auto;font-size:.75rem;color:var(--muted)}
+
+/* zones */
+.zones{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.zone{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+.zone-h{display:flex;align-items:center;gap:8px;padding:12px 14px 6px}
+.zone-h .bar{width:4px;height:18px;border-radius:2px}
+.zone-h b{font-family:var(--font-display);font-stretch:108%;font-size:1rem}
+.zone-h .pill{margin-left:auto}
+.zone-sub{padding:0 14px 8px;font-size:.78rem;color:var(--muted)}
+.zone-main{display:flex;align-items:flex-end;gap:14px;padding:4px 14px 10px}
+.zone-main .t{font-family:var(--font-display);font-stretch:105%;font-weight:700;font-size:2.6rem;line-height:1;letter-spacing:-.02em}
+.zone-main .t sup{font-size:1rem;font-weight:600;vertical-align:top;margin-left:2px;color:var(--ink-2)}
+.zone-main .sp{display:grid;gap:2px;font-size:.78rem;color:var(--ink-2);padding-bottom:4px}
+.zone-main .sp b{font-family:var(--font-mono);font-weight:600;color:var(--ink);font-size:.9rem}
+.rooms{display:grid;gap:0;border-top:1px solid var(--line)}
+.room{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line);font-size:.86rem}
+.room:last-child{border-bottom:0}
+.room .nm{display:flex;align-items:center;gap:7px;min-width:0}
+.room .nm span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.room .occ{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--line-strong);flex:none}
+.room .occ.on{background:var(--good);border-color:var(--good)}
+.room .tag{font-size:.68rem;color:var(--muted);font-family:var(--font-mono)}
+.room .v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:500}
+.room .v.hot{color:var(--crit)}
+.zone-f{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 14px;background:var(--surface-2);border-top:1px solid var(--line)}
+.duty{display:grid;gap:4px}
+.duty small{font-size:.72rem;color:var(--muted)}
+.meter{height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:3px}
+.zone-f .rt{font-family:var(--font-mono);font-size:.82rem;text-align:right}
+.zone-f .rt small{display:block;font-size:.68rem;color:var(--muted);font-family:var(--font-body)}
+
+/* stat tiles */
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;display:grid;gap:4px;min-width:0}
+.tile .lbl{font-size:.8rem;color:var(--ink-2)}
+.tile .val{font-family:var(--font-display);font-stretch:105%;font-weight:700;font-size:1.7rem;line-height:1.1}
+.tile .val small{font-size:.9rem;font-weight:600;color:var(--ink-2)}
+.tile .delta{font-size:.78rem;color:var(--muted)}
+.tile .delta.good{color:var(--good-ink)}
+.tile .delta.bad{color:var(--crit)}
+
+/* suggestion + feed */
+.suggest{border:1px solid var(--accent);background:var(--accent-soft);border-radius:var(--radius);padding:14px 16px;display:grid;gap:8px}
+.suggest .who{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-strong);font-weight:600}
+.suggest p{font-size:.92rem;color:var(--ink)}
+.suggest .acts{display:flex;gap:8px;flex-wrap:wrap}
+.btn{appearance:none;font:inherit;font-size:.85rem;font-weight:600;border-radius:8px;padding:7px 12px;cursor:pointer;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink)}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.primary:hover{background:var(--accent-strong)}
+.btn[disabled]{opacity:.55;cursor:default}
+.feed{display:grid;gap:0;font-size:.85rem}
+.feed .ev{display:grid;grid-template-columns:58px minmax(0,1fr);gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.feed .ev:last-child{border-bottom:0}
+.feed .ev time{font-family:var(--font-mono);font-size:.76rem;color:var(--muted);padding-top:1px}
+.feed .ev b{font-weight:600}
+.feed .ev .who{font-size:.7rem;font-family:var(--font-mono);color:var(--muted);letter-spacing:.04em}
+
+/* charts */
+.chart{position:relative;min-width:0}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.chart text{font-family:var(--font-body);font-size:11px;fill:var(--muted)}
+.chart .lbl-strong{fill:var(--ink);font-weight:600}
+.tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow);padding:8px 10px;font-size:.78rem;min-width:140px;z-index:5;opacity:0;transition:opacity .08s}
+.tip.on{opacity:1}
+.tip .tt{font-size:.72rem;color:var(--muted);margin-bottom:4px}
+.tip .tr{display:grid;grid-template-columns:14px auto minmax(0,1fr);gap:6px;align-items:center;line-height:1.5}
+.tip .tr i{display:block;width:12px;height:2px;border-radius:1px}
+.tip .tr b{font-family:var(--font-mono);font-weight:600;font-variant-numeric:tabular-nums}
+.tip .tr span{color:var(--ink-2)}
+.chart-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--ink-2);margin-bottom:8px}
+.chart-legend .key{display:inline-flex;align-items:center;gap:6px}
+.chart-legend .sq{width:10px;height:10px;border-radius:2px}
+.chart-legend .ln{width:16px;height:2px;border-radius:1px}
+.chart-legend .dt{width:9px;height:9px;border-radius:50%}
+
+/* analytics callout */
+.verdict{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.verdict > div{background:var(--surface);padding:14px 16px;display:grid;gap:4px;align-content:start}
+.verdict .lbl{font-size:.8rem;color:var(--ink-2)}
+.verdict .val{font-family:var(--font-display);font-stretch:105%;font-weight:750;font-size:1.9rem;line-height:1.05}
+.verdict .note{font-size:.8rem;color:var(--muted)}
+.verdict .hl .val{color:var(--good-ink)}
+
+/* slider */
+.ctl{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;font-size:.86rem;color:var(--ink-2)}
+.ctl label{display:flex;align-items:center;gap:10px}
+.ctl input[type=range]{accent-color:var(--accent);width:200px;max-width:50vw}
+.ctl output{font-family:var(--font-mono);font-weight:600;color:var(--ink);min-width:4ch}
+.readout{font-size:.92rem;color:var(--ink);background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 12px}
+.readout b{font-family:var(--font-mono)}
+
+/* experiments */
+.exp{display:grid;gap:12px}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.cal .d{border-radius:6px;padding:6px 4px;text-align:center;font-size:.72rem;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-2);display:grid;gap:2px}
+.cal .d b{font-family:var(--font-mono);font-size:.9rem;color:var(--ink)}
+.cal .d.A{box-shadow:inset 0 3px 0 var(--s-a)}
+.cal .d.B{box-shadow:inset 0 3px 0 var(--s-b)}
+.cal .d.future{opacity:.5;border-style:dashed}
+.cal .d.today{outline:2px solid var(--accent);outline-offset:1px}
+.queue{display:grid;gap:8px}
+.qi{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.qi b{font-size:.9rem}
+.qi span{display:block;font-size:.8rem;color:var(--muted)}
+.ci{position:relative;height:34px;margin-top:6px}
+.ci .axis{position:absolute;left:0;right:0;top:16px;height:1px;background:var(--axis)}
+.ci .zero{position:absolute;top:4px;bottom:4px;width:1px;background:var(--ink-2)}
+.ci .bar{position:absolute;top:12px;height:9px;border-radius:5px;background:color-mix(in srgb,var(--s-b) 30%,transparent);border:1.5px solid var(--s-b)}
+.ci .pt{position:absolute;top:10px;width:13px;height:13px;border-radius:50%;background:var(--s-b);border:2px solid var(--surface);transform:translateX(-50%)}
+.ci-scale{display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);font-family:var(--font-mono)}
+
+/* analyst chat */
+.chat{display:grid;gap:12px}
+.qchips{display:flex;flex-wrap:wrap;gap:8px}
+.qchip{appearance:none;font:inherit;font-size:.84rem;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 12px;cursor:pointer;text-align:left}
+.qchip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.msg{display:grid;gap:8px;max-width:78ch}
+.msg.user{justify-self:end;background:var(--surface-2);border-radius:12px 12px 2px 12px;padding:10px 14px;font-size:.92rem}
+.msg.ai{background:var(--surface);border:1px solid var(--line);border-radius:12px 12px 12px 2px;padding:14px 16px;font-size:.92rem;line-height:1.6}
+.msg.ai p+p{margin-top:.6em}
+.tools{display:flex;flex-wrap:wrap;gap:6px}
+.toolcall{font-family:var(--font-mono);font-size:.72rem;padding:3px 8px;border-radius:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink-2)}
+.toolcall::before{content:"⟶ ";color:var(--accent)}
+.composer{display:flex;gap:8px}
+.composer input{flex:1;min-width:0;font:inherit;font-size:.9rem;padding:9px 12px;border-radius:8px;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink)}
+.report{font-size:.9rem;color:var(--ink-2);display:grid;gap:8px}
+.report h6{margin:0;font-family:var(--font-display);font-stretch:108%;font-size:.95rem;color:var(--ink)}
+.report ul{margin:0;padding-left:1.1em}
+
+/* guardrails form */
+.form-grid{display:grid;gap:12px}
+.f-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:.9rem}
+.f-row:last-child{border-bottom:0}
+.f-row small{display:block;color:var(--muted);font-size:.78rem}
+.f-row select,.f-row input[type=number]{font:inherit;font-size:.88rem;padding:6px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);width:110px}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:8px;overflow:hidden}
+.seg button{appearance:none;border:0;background:var(--surface);color:var(--ink-2);font:inherit;font-size:.82rem;font-weight:600;padding:7px 12px;cursor:pointer;border-right:1px solid var(--line-strong)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.band-table{width:100%;border-collapse:collapse;font-size:.86rem;min-width:520px}
+.band-table th,.band-table td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}
+.band-table th{font-family:var(--font-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.band-table td.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+@media (max-width: 960px){
+  .zones{grid-template-columns:minmax(0,1fr)}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .row.c2,.row.c3,.row.c21,.row.c12{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width: 560px){
+  .app-body{padding:12px}
+  .verdict{grid-template-columns:minmax(0,1fr)}
+  .cal{gap:4px}
+  .cal .d{padding:4px 2px;font-size:.62rem}
+  .tiles{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .tile .val{font-size:1.4rem}
+}
+</style>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#top" aria-label="Climate AI, back to top">
+      <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="7" fill="var(--ink)"/><path d="M7 15.5a6 6 0 0 1 12 0" fill="none" stroke="var(--bg)" stroke-width="2.2" stroke-linecap="round"/><circle cx="13" cy="15.5" r="2.2" fill="var(--accent)"/><path d="M13 15.5 16.6 11" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>Climate&nbsp;AI</span>
+    </a>
+    <nav class="toc" aria-label="Sections">
+      <a href="#house">Your house</a>
+      <a href="#app">App mockup</a>
+      <a href="#playbook">Running 3 units</a>
+      <a href="#learning">Learning loop</a>
+      <a href="#weather">Weather &amp; analytics</a>
+      <a href="#claude">Claude</a>
+      <a href="#build">Architecture</a>
+      <a href="#roadmap">Roadmap</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+<div class="wrap">
+
+<!-- ================= HERO ================= -->
+<section class="hero" aria-labelledby="h-hero">
+  <div class="hero-grid">
+    <div>
+      <p class="eyebrow">duanekaeb/climate-ai · project blueprint · October 2026</p>
+      <h1 id="h-hero">One brain for three ecobees</h1>
+      <p class="lede">Your ecobees each see one floor and report one floor at a time. Climate AI treats the house as one connected system. It watches all seven sensors, learns how the floors push heat into each other, and checks every change against the weather. Then it adjusts the schedules to cut total runtime without letting a room you're using get uncomfortable.</p>
+    </div>
+    <div class="callout warn" role="note">
+      <div class="ic" aria-hidden="true">!</div>
+      <div>
+        <h4>First thing to know: ecobee API access</h4>
+        <p>ecobee stopped issuing new developer API keys in March 2024. Home Assistant has worked around it since release 2026.3 by signing in with your normal ecobee account, and this plan does the same. That route isn't an official ecobee developer program, so the app keeps a local HomeKit backup. <a href="#build-access">Details and options</a>.</p>
+      </div>
+    </div>
+  </div>
+  <div class="pillars">
+    <div class="pillar"><span class="k">Monitor</span><h4>Every sensor, one view</h4><p>All three thermostats and four room sensors, plus equipment state, every 3 minutes. Each unit's runtime in 5-minute detail.</p></div>
+    <div class="pillar"><span class="k">Normalize</span><h4>Weather is the control</h4><p>Every runtime number is compared with what this weather should have cost. A cooler week never gets credited as a win.</p></div>
+    <div class="pillar"><span class="k">Learn</span><h4>A thermal model of your house</h4><p>Learns how fast each floor gains heat, how much the main floor pushes upstairs, and what the sun adds. It improves every night.</p></div>
+    <div class="pillar"><span class="k">Act</span><h4>Small, bounded, measured changes</h4><p>A deterministic controller moves setpoints inside your limits. Claude reviews results, explains them, and proposes the next experiment.</p></div>
+  </div>
+</section>
+
+<!-- ================= HOUSE ================= -->
+<section class="block" id="house" aria-labelledby="h-house">
+  <div class="sec-head">
+    <p class="eyebrow">Your house</p>
+    <h2 id="h-house">Three units, one building, seven sensors</h2>
+    <p>This is the house as you described it. The coupling arrows show what you've observed: the main floor drives heat into the upstairs, and the bedroom wing may be affected by the main floor slightly. The app's first job is to measure each of these links.</p>
+  </div>
+
+  <figure class="diagram" style="margin:0">
+    <svg viewBox="0 0 1000 450" role="img" aria-labelledby="dia-title dia-desc">
+      <title id="dia-title">House elevation with three HVAC zones</title>
+      <desc id="dia-desc">Two-story block on the left with the upstairs (Toy Room, Girls' Room) above the main floor (School Room, Hallway, Living Room, Kitchen). One-story bedroom wing on the right (Bedroom, Office). Heat rises from the main floor into the upstairs through the floor and stairwell. The sun heats the roof. A weak link may exist between the main floor and the bedroom wing. No link between upstairs and the wing.</desc>
+      <defs>
+        <marker id="arwA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+        <marker id="arwM" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--muted)"/></marker>
+      </defs>
+      <style>
+        .dz{font-family:var(--font-display);font-stretch:110%;font-weight:750;font-size:15px;fill:var(--ink)}
+        .dr{font-size:12.5px;fill:var(--ink-2)}
+        .dn{font-size:12px;fill:var(--ink-2)}
+        .dnb{font-size:12.5px;fill:var(--accent-strong);font-weight:650}
+        .wall{fill:none;stroke:var(--ink-2);stroke-width:2}
+        .part{stroke:var(--line-strong);stroke-width:1.2}
+      </style>
+      <!-- ground -->
+      <line x1="20" y1="382" x2="980" y2="382" stroke="var(--line-strong)" stroke-width="2"/>
+      <!-- sun -->
+      <g aria-hidden="true"><circle cx="92" cy="46" r="15" style="fill:var(--s-a)"/>
+        <g style="stroke:var(--s-a)" stroke-width="2.4" stroke-linecap="round"><line x1="92" y1="18" x2="92" y2="24"/><line x1="92" y1="68" x2="92" y2="74"/><line x1="64" y1="46" x2="70" y2="46"/><line x1="114" y1="46" x2="120" y2="46"/><line x1="72" y1="26" x2="76" y2="30"/><line x1="108" y1="62" x2="112" y2="66"/><line x1="72" y1="66" x2="76" y2="62"/><line x1="108" y1="30" x2="112" y2="26"/></g></g>
+      <path d="M118 58 Q160 70 196 92" fill="none" style="stroke:var(--accent)" stroke-width="2" marker-end="url(#arwA)"/>
+      <text x="132" y="30" class="dnb">Roof &amp; afternoon sun</text>
+      <!-- two-story roof -->
+      <polygon points="40,122 300,44 560,122" fill="var(--surface-2)" stroke="var(--ink-2)" stroke-width="2"/>
+      <text x="300" y="104" text-anchor="middle" class="dn">attic</text>
+      <!-- upstairs -->
+      <rect x="60" y="122" width="480" height="130" style="fill:color-mix(in srgb,var(--s-up) 11%,var(--surface))"/>
+      <line x1="300" y1="122" x2="300" y2="252" class="part"/>
+      <text x="74" y="146" class="dz">Upstairs</text>
+      <text x="74" y="166" class="dr">Toy Room</text>
+      <text x="314" y="146" class="dr">Girls' Room</text>
+      <!-- main floor -->
+      <rect x="60" y="252" width="480" height="130" style="fill:color-mix(in srgb,var(--s-main) 11%,var(--surface))"/>
+      <line x1="180" y1="252" x2="180" y2="382" class="part"/><line x1="300" y1="252" x2="300" y2="382" class="part"/><line x1="420" y1="252" x2="420" y2="382" class="part"/>
+      <text x="74" y="276" class="dz">Main floor</text>
+      <text x="74" y="296" class="dr">School Room</text>
+      <text x="194" y="276" class="dr">Hallway</text>
+      <text x="314" y="276" class="dr">Living Room</text>
+      <text x="434" y="276" class="dr">Kitchen</text>
+      <!-- stairs -->
+      <polyline points="196,382 196,368 212,368 212,354 228,354 228,340 244,340 244,326 260,326 260,312 276,312 276,298 292,298 292,252" fill="none" stroke="var(--line-strong)" stroke-width="1.5"/>
+      <rect x="196" y="249" width="96" height="6" fill="var(--surface)"/>
+      <!-- outer walls two-story -->
+      <rect x="60" y="122" width="480" height="260" class="wall"/>
+      <line x1="60" y1="252" x2="196" y2="252" stroke="var(--ink-2)" stroke-width="2"/><line x1="292" y1="252" x2="540" y2="252" stroke="var(--ink-2)" stroke-width="2"/>
+      <!-- wing -->
+      <polygon points="584,252 770,198 956,252" fill="var(--surface-2)" stroke="var(--ink-2)" stroke-width="2"/>
+      <rect x="600" y="252" width="340" height="130" style="fill:color-mix(in srgb,var(--s-bed) 11%,var(--surface))"/>
+      <line x1="770" y1="252" x2="770" y2="382" class="part"/>
+      <rect x="600" y="252" width="340" height="130" class="wall"/>
+      <text x="614" y="276" class="dz">Bed / Office wing</text>
+      <text x="614" y="296" class="dr">Bedroom</text>
+      <text x="784" y="296" class="dr">Office</text>
+      <!-- devices: thermostats (rounded squares) and sensors (circles) -->
+      <g aria-hidden="true">
+        <rect x="74" y="178" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="83" cy="190" r="4" style="fill:var(--s-up)"/>
+        <circle cx="330" cy="168" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="330" cy="168" r="2.5" style="fill:var(--ink)"/>
+        <rect x="194" y="290" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="203" cy="302" r="4" style="fill:var(--s-main)"/>
+        <circle cx="90" cy="318" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="90" cy="318" r="2.5" style="fill:var(--ink)"/>
+        <circle cx="330" cy="298" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="330" cy="298" r="2.5" style="fill:var(--ink)"/>
+        <circle cx="450" cy="298" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="450" cy="298" r="2.5" style="fill:var(--ink)"/>
+        <rect x="614" y="308" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="623" cy="320" r="4" style="fill:var(--s-bed)"/>
+        <circle cx="800" cy="320" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="800" cy="320" r="2.5" style="fill:var(--ink)"/>
+      </g>
+      <text x="98" y="196" class="dn">ecobee Essential</text>
+      <text x="218" y="307" class="dn">ecobee</text>
+      <text x="638" y="326" class="dn">ecobee</text>
+      <!-- heat flow main -> upstairs -->
+      <g style="stroke:var(--accent)" stroke-width="3" fill="none" stroke-linecap="round">
+        <line x1="360" y1="348" x2="360" y2="214" marker-end="url(#arwA)"/>
+        <line x1="420" y1="348" x2="420" y2="214" marker-end="url(#arwA)" opacity=".75"/>
+        <line x1="480" y1="348" x2="480" y2="214" marker-end="url(#arwA)" opacity=".55"/>
+        <path d="M244 362 C244 300 250 250 262 214" marker-end="url(#arwA)"/>
+      </g>
+      <rect x="368" y="150" width="166" height="46" rx="6" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.2"/>
+      <text x="378" y="169" class="dnb">Strong link: heat rises</text>
+      <text x="378" y="186" class="dn">floor + open stairwell</text>
+      <!-- main <-> wing -->
+      <line x1="548" y1="330" x2="592" y2="330" style="stroke:var(--muted)" stroke-width="1.8" stroke-dasharray="4 4" marker-start="url(#arwM)" marker-end="url(#arwM)"/>
+      <text x="548" y="352" class="dn">weak?</text>
+      <text x="548" y="367" class="dn">measure</text>
+      <!-- upstairs x wing -->
+      <text x="600" y="150" class="dn">Upstairs and the wing don't share</text>
+      <text x="600" y="167" class="dn">walls or air: no link expected</text>
+      <!-- outside -->
+      <text x="975" y="410" text-anchor="end" class="dn">Outdoor air, humidity and sun load all three units</text>
+      <text x="25" y="410" class="dn">Thermostat (built-in sensor)</text>
+      <rect x="25" y="420" width="12" height="16" rx="3" style="fill:var(--ink)"/>
+      <text x="44" y="433" class="dn">ecobee</text>
+      <circle cx="122" cy="428" r="6" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/>
+      <text x="134" y="433" class="dn">SmartSensor (temp + motion)</text>
+    </svg>
+  </figure>
+
+  <div class="table-wrap" style="margin-top:20px">
+    <table class="t">
+      <thead><tr><th>Unit</th><th>Thermostat</th><th>Room sensors</th><th>What it fights</th><th>What the app will measure</th></tr></thead>
+      <tbody>
+        <tr><td><span class="swatch" style="background:var(--s-main)"></span><b>Main floor</b></td><td>ecobee in the Hallway</td><td>School Room, Living Room, Kitchen</td><td>Outdoor heat, kitchen loads, sun on its windows</td><td>How much of its heat ends up upstairs. Its own cooling rate.</td></tr>
+        <tr><td><span class="swatch" style="background:var(--s-up)"></span><b>Upstairs</b></td><td>ecobee Smart Thermostat Essential in the Toy Room</td><td>Girls' Room</td><td>Roof and attic heat, plus heat rising from the main floor</td><td>Its load as a function of the main-floor temperature, outdoor temperature and sun</td></tr>
+        <tr><td><span class="swatch" style="background:var(--s-bed)"></span><b>Bed / Office</b></td><td>ecobee in the Bedroom <span class="muted">(confirm)</span></td><td>Office</td><td>Outdoor heat on the far side of the house</td><td>Whether the main floor affects it at all. If not, it gets its own schedule.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted" style="margin-top:10px">Seven temperature points in total, each with motion-based occupancy. Humidity comes from the three thermostats only; ecobee SmartSensors report temperature and occupancy. A sensor reads "occupied" for 30 minutes after it last saw motion.</p>
+</section>
+
+<!-- ================= APP MOCKUP ================= -->
+<section class="block" id="app" aria-labelledby="h-app">
+  <div class="sec-head">
+    <p class="eyebrow">App mockup · working prototype</p>
+    <h2 id="h-app">What you'll open every day</h2>
+    <p>Click through the tabs. Every chart responds to hover, and the controls work. The numbers are generated example data shaped like a real late-summer house, so the screens show realistic patterns. None of them are your readings yet.</p>
+  </div>
+
+  <div class="app" id="mock">
+    <div class="app-bar">
+      <span class="brand"><svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="7" fill="var(--ink)"/><path d="M7 15.5a6 6 0 0 1 12 0" fill="none" stroke="var(--bg)" stroke-width="2.2" stroke-linecap="round"/><circle cx="13" cy="15.5" r="2.2" fill="var(--accent)"/><path d="M13 15.5 16.6 11" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>Climate AI</span>
+      <span class="app-house">Home · 3 units · 7 sensors</span>
+      <span class="pill accent mode-chip" id="modeChip">Suggest mode</span>
+      <span class="live" aria-live="off"><i aria-hidden="true"></i><span id="liveAgo">Live · updated 8 s ago</span></span>
+    </div>
+    <div class="app-tabs" role="tablist" aria-label="App screens">
+      <button role="tab" id="t-live" aria-controls="v-live" aria-selected="true">Live</button>
+      <button role="tab" id="t-runtime" aria-controls="v-runtime" aria-selected="false" tabindex="-1">Runtime</button>
+      <button role="tab" id="t-analytics" aria-controls="v-analytics" aria-selected="false" tabindex="-1">Did it work?</button>
+      <button role="tab" id="t-coupling" aria-controls="v-coupling" aria-selected="false" tabindex="-1">Floor coupling</button>
+      <button role="tab" id="t-exp" aria-controls="v-exp" aria-selected="false" tabindex="-1">Experiments</button>
+      <button role="tab" id="t-claude" aria-controls="v-claude" aria-selected="false" tabindex="-1">Ask Claude</button>
+      <button role="tab" id="t-rules" aria-controls="v-rules" aria-selected="false" tabindex="-1">Guardrails</button>
+    </div>
+    <div class="app-body">
+
+      <!-- LIVE -->
+      <div class="view" id="v-live" role="tabpanel" aria-labelledby="t-live">
+        <div class="view-note"><span class="pill">Example data</span>A hot afternoon. The Linked floors policy is active and Claude is in Suggest mode.</div>
+        <div class="wx">
+          <div class="item"><small>Outdoor</small><span class="big">93°F</span></div>
+          <div class="item"><small>Feels like</small><b>97°F</b></div>
+          <div class="item"><small>Humidity</small><b>41%</b></div>
+          <div class="item"><small>Dew point</small><b>66°F</b></div>
+          <div class="item"><small>Sun</small><b>780 W/m²</b></div>
+          <div class="item"><small>Cloud</small><b>10%</b></div>
+          <div class="item"><small>Next 3 h</small><b>95° → 91°F</b></div>
+          <span class="src"><a href="https://open-meteo.com/" target="_blank" rel="noopener">Weather data by Open-Meteo.com</a></span>
+        </div>
+        <div class="zones">
+          <article class="zone" aria-label="Main floor">
+            <div class="zone-h"><span class="bar" style="background:var(--s-main)"></span><b>Main floor</b><span class="pill cool"><span class="dot"></span>Cooling</span></div>
+            <div class="zone-sub">Hallway ecobee · Home comfort setting</div>
+            <div class="zone-main"><span class="t" data-live="main">77.4<sup>°F</sup></span><span class="sp">Target <b>77°</b><span>1° below upstairs (linked)</span></span></div>
+            <div class="rooms">
+              <div class="room"><span class="nm"><i class="occ"></i><span>Hallway</span></span><span class="tag">ecobee</span><span class="v">77.4°</span></div>
+              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Living Room</span></span><span class="tag">sensor</span><span class="v">77.9°</span></div>
+              <div class="room"><span class="nm"><i class="occ"></i><span>Kitchen</span></span><span class="tag">sensor</span><span class="v">78.3°</span></div>
+              <div class="room"><span class="nm"><i class="occ"></i><span>School Room</span></span><span class="tag">sensor</span><span class="v">76.8°</span></div>
+            </div>
+            <div class="zone-f"><div class="duty"><small>Duty, last hour · 54%</small><div class="meter"><i style="width:54%;background:var(--s-main)"></i></div></div><div class="rt">4h 12m<small>today</small></div></div>
+          </article>
+          <article class="zone" aria-label="Upstairs">
+            <div class="zone-h"><span class="bar" style="background:var(--s-up)"></span><b>Upstairs</b><span class="pill cool"><span class="dot"></span>Cooling</span></div>
+            <div class="zone-sub">Toy Room ecobee Essential · Home</div>
+            <div class="zone-main"><span class="t" data-live="up">78.4<sup>°F</sup></span><span class="sp">Target <b>78°</b><span>Toy Room + Girls' Room</span></span></div>
+            <div class="rooms">
+              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Toy Room</span></span><span class="tag">ecobee</span><span class="v">78.6°</span></div>
+              <div class="room"><span class="nm"><i class="occ"></i><span>Girls' Room</span></span><span class="tag">sensor</span><span class="v">78.1°</span></div>
+            </div>
+            <div class="zone-f"><div class="duty"><small>Duty, last hour · 71%</small><div class="meter"><i style="width:71%;background:var(--s-up)"></i></div></div><div class="rt">5h 40m<small>today</small></div></div>
+          </article>
+          <article class="zone" aria-label="Bed and Office">
+            <div class="zone-h"><span class="bar" style="background:var(--s-bed)"></span><b>Bed / Office</b><span class="pill"><span class="dot"></span>Idle</span></div>
+            <div class="zone-sub">Bedroom ecobee · Office in use, daytime sensor set</div>
+            <div class="zone-main"><span class="t" data-live="bed">75.9<sup>°F</sup></span><span class="sp">Target <b>76°</b><span>Office only (9–5)</span></span></div>
+            <div class="rooms">
+              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Office</span></span><span class="tag">sensor</span><span class="v">75.8°</span></div>
+              <div class="room"><span class="nm"><i class="occ"></i><span>Bedroom</span></span><span class="tag">ecobee</span><span class="v">76.4°</span></div>
+            </div>
+            <div class="zone-f"><div class="duty"><small>Duty, last hour · 33%</small><div class="meter"><i style="width:33%;background:var(--s-bed)"></i></div></div><div class="rt">2h 05m<small>today</small></div></div>
+          </article>
+        </div>
+        <div class="tiles">
+          <div class="tile"><span class="lbl">House runtime today</span><span class="val">11h 57m</span><span class="delta good">13% under weather-expected</span></div>
+          <div class="tile"><span class="lbl">Comfort, occupied rooms</span><span class="val">97<small>%</small></span><span class="delta">of minutes within your band</span></div>
+          <div class="tile"><span class="lbl">Upstairs maxed out</span><span class="val">0<small> min</small></span><span class="delta good">Was 142 min/day under Smart Away</span></div>
+          <div class="tile"><span class="lbl">Short cycles today</span><span class="val">0</span><span class="delta">Runs under 5 min</span></div>
+        </div>
+        <div class="row c21">
+          <div class="panel"><div class="panel-h"><h5>Zone temperatures, last 6 hours</h5><span class="sub">average of each zone's active sensors</span></div><div id="ch-temps"></div></div>
+          <div class="row" style="align-content:start">
+            <div class="suggest" id="suggest">
+              <span class="who">Claude · suggestion</span>
+              <p>No motion in the Kitchen or Living Room for 2 hours. The main floor can go to <b>78°F</b>, level with the upstairs instead of 1° below it. The house model expects 12 minutes less total runtime by 6 PM, and the upstairs stays below 85% duty.</p>
+              <div class="acts"><button class="btn primary" type="button" id="sgApply">Apply until 6 PM</button><button class="btn" type="button" id="sgSkip">Not now</button></div>
+            </div>
+            <div class="panel"><div class="panel-h"><h5>Activity</h5><span class="sub">every write is logged</span></div>
+              <div class="feed" id="feed">
+                <div class="ev"><time>3:42 PM</time><div><b>Upstairs started cooling</b><div class="who">Toy Room 78.6° above 78.5° trigger</div></div></div>
+                <div class="ev"><time>3:30 PM</time><div><b>Kept main floor at 77°</b><div class="who">Controller · upstairs occupied, setback capped by the linked rule</div></div></div>
+                <div class="ev"><time>2:58 PM</time><div><b>Ignored ecobee Away on main floor</b><div class="who">Controller · Smart Away is off; the linked rule decides</div></div></div>
+                <div class="ev"><time>1:15 PM</time><div><b>Pre-cool finished</b><div class="who">Controller · upstairs 76° → 78° as the sun peaked</div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RUNTIME -->
+      <div class="view" id="v-runtime" role="tabpanel" aria-labelledby="t-runtime" hidden>
+        <div class="ctl"><span>Range</span><div class="seg" id="rangeSeg" role="group" aria-label="Date range"><button type="button" data-n="14" aria-pressed="false">14 days</button><button type="button" data-n="28" aria-pressed="true">28 days</button><button type="button" data-n="56" aria-pressed="false">56 days</button></div><span class="muted small">All three units on one timeline, which ecobee's own reports don't offer.</span></div>
+        <div class="panel"><div class="panel-h"><h5>Daily runtime by unit</h5><span class="sub">from ecobee 5-minute runtime reports · hover or use arrow keys</span></div><div id="ch-runtime"></div>
+          <details style="margin-top:10px"><summary class="small">Show as table</summary><div class="table-wrap" style="margin-top:8px;max-height:260px;overflow:auto"><table class="t" id="rtTable"></table></div></details>
+        </div>
+        <div class="panel"><div class="panel-h"><h5>When the upstairs works hardest</h5><span class="sub">last 21 days · each cell is one hour</span></div><div id="ch-heat"></div></div>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div class="view" id="v-analytics" role="tabpanel" aria-labelledby="t-analytics" hidden>
+        <div class="view-note"><span class="pill">Example data</span>Question: the Linked floors policy started Sep 19 and runtime dropped. Was it the policy, or was it just cooler?</div>
+        <div class="verdict" id="verdict"></div>
+        <div class="row c2">
+          <div class="panel"><div class="panel-h"><h5>Runtime against weather</h5><span class="sub">each dot is a day · hover for detail</span></div><div id="ch-scatter"></div></div>
+          <div class="panel"><div class="panel-h"><h5>What changed the total</h5><span class="sub">last 14 days vs the 14 before</span></div><div id="ch-water"></div></div>
+        </div>
+        <div class="panel small" id="modelCard"></div>
+      </div>
+
+      <!-- COUPLING -->
+      <div class="view" id="v-coupling" role="tabpanel" aria-labelledby="t-coupling" hidden>
+        <div class="view-note"><span class="pill">Simulated</span>The house model's prediction for a 12-hour afternoon with the upstairs held at 77°F. The real curve is learned from your data.</div>
+        <div class="panel">
+          <div class="panel-h"><h5>Where should the main floor sit when it's empty?</h5><span class="sub">drag the outdoor high to see the best offset move</span></div>
+          <div class="ctl" style="margin-bottom:10px"><label for="toutR">Outdoor high</label><input type="range" id="toutR" min="85" max="100" step="1" value="95"><output id="toutO" for="toutR">95°F</output></div>
+          <div id="ch-coupling"></div>
+          <p class="small muted" style="margin-top:6px">x-axis: main-floor target minus upstairs target, with each pair shown as main/upstairs °F. Left of zero the main floor is warmer; right of zero it is cooler.</p>
+          <p class="readout" id="couplingRead" style="margin-top:12px"></p>
+        </div>
+        <div class="row c3">
+          <div class="panel"><div class="panel-h"><h5>Learned link: main → upstairs</h5></div><p class="small" style="color:var(--ink-2)">Each 1°F the main floor sits above the upstairs adds about <b class="mono">0.4°F/hr</b> of heat gain upstairs at 95°F outside. That works out to about <b class="mono">7 min</b> of upstairs runtime per hour.</p></div>
+          <div class="panel"><div class="panel-h"><h5>Learned link: main → bed wing</h5></div><p class="small" style="color:var(--ink-2)">Measured at <b class="mono">0.03°F/hr</b> per °F, not distinguishable from zero. The wing keeps its own schedule.</p></div>
+          <div class="panel"><div class="panel-h"><h5>Cost per run-minute</h5></div><p class="small" style="color:var(--ink-2)">With example sizes, a 3-ton main unit uses about <b class="mono">58 Wh</b> per run-minute and a 2-ton upstairs unit about <b class="mono">40 Wh</b>. Add a power monitor and the app optimizes energy instead of raw minutes.</p></div>
+        </div>
+      </div>
+
+      <!-- EXPERIMENTS -->
+      <div class="view" id="v-exp" role="tabpanel" aria-labelledby="t-exp" hidden>
+        <div class="panel exp">
+          <div class="panel-h"><h5>Running · How much cooler should the main floor be?</h5><span class="pill accent">Day 10 of 14</span></div>
+          <p class="small" style="color:var(--ink-2)">Randomized switchback. Each day is assigned at random to <b>A: main 1° cooler than upstairs</b> or <b>B: main 2° cooler</b>. The first 3 hours after each switch are dropped, because the house's thermal mass carries over.</p>
+          <div class="chart-legend"><span class="key"><span class="sq" style="background:var(--s-a)"></span>A · 1° cooler</span><span class="key"><span class="sq" style="background:var(--s-b)"></span>B · 2° cooler</span><span class="key muted">outlined = today</span></div>
+          <div class="cal" id="cal"></div>
+          <div>
+            <div class="panel-h" style="margin:8px 0 0"><h5>Interim result: B vs A, weather-normalized house runtime</h5><span class="sub">90% interval</span></div>
+            <div class="ci" aria-label="B saves 4 percent, 90 percent interval from 9 percent saved to 1 percent more"><div class="axis"></div><div class="zero" style="left:60%"></div><div class="bar" style="left:36%;width:28%"></div><div class="pt" style="left:44%"></div></div>
+            <div class="ci-scale"><span>−15%</span><span>−10%</span><span>−5%</span><span>0</span><span>+5%</span><span>+10%</span></div>
+            <p class="readout" style="margin-top:10px">Not conclusive yet. B is ahead by <b>4%</b>, but the interval still crosses zero. Comfort is fine in both: upstairs out of band <b>22 min/day</b> on A and <b>9 min/day</b> on B. Four more days, then Claude writes it up.</p>
+          </div>
+        </div>
+        <div class="row c2">
+          <div class="panel"><div class="panel-h"><h5>Finished</h5></div>
+            <div class="queue">
+              <div class="qi"><div><b>Linked floors vs ecobee default</b><span id="finishedLine">Adopted Sep 19</span></div><span class="pill good">Adopted</span></div>
+              <div class="qi"><div><b>Upstairs night sensor: Girls' Room only</b><span>Bedtime comfort up, runtime flat. Kept for comfort.</span></div><span class="pill good">Adopted</span></div>
+            </div>
+          </div>
+          <div class="panel"><div class="panel-h"><h5>Queue, proposed by Claude</h5><span class="sub">you approve each one</span></div>
+            <div class="queue">
+              <div class="qi"><div><b>Main floor leads recovery by 20 min</b><span>Cool the main floor first so the upstairs recovers with less heat coming up</span></div><button class="btn" type="button">Approve</button></div>
+              <div class="qi"><div><b>Pre-cool 2° before noon on 92°F+ days</b><span>Run in the cooler morning, coast through the solar peak</span></div><button class="btn" type="button">Approve</button></div>
+              <div class="qi"><div><b>Fan circulate 10 min/hr upstairs</b><span>Check whether mixing reduces Girls' Room hot spots</span></div><button class="btn" type="button">Approve</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CLAUDE -->
+      <div class="view" id="v-claude" role="tabpanel" aria-labelledby="t-claude" hidden>
+        <div class="row c21">
+          <div class="panel chat">
+            <div class="panel-h"><h5>Ask about your house</h5><span class="sub">Claude Opus 5.5 · read-only tools for questions</span></div>
+            <div class="qchips" id="qchips" role="group" aria-label="Example questions">
+              <button class="qchip" type="button" data-q="0" aria-pressed="true">Is Linked floors working, or was it just cooler?</button>
+              <button class="qchip" type="button" data-q="1" aria-pressed="false">Why did the house run so much yesterday?</button>
+              <button class="qchip" type="button" data-q="2" aria-pressed="false">Does the main floor affect the bedroom wing?</button>
+            </div>
+            <div id="chatLog" class="chat" aria-live="polite"></div>
+            <form class="composer" id="composer"><input id="askIn" type="text" aria-label="Ask Claude about your house" placeholder="In the real app you type here. In this mockup, pick a question above." disabled><button class="btn primary" type="submit" disabled>Ask</button></form>
+          </div>
+          <div class="panel report">
+            <div class="panel-h"><h5>Weekly report</h5><span class="sub">Sun Sep 28 · written by Claude</span></div>
+            <h6>Headline</h6>
+            <p>House runtime ran <b>12% under</b> what this week's weather predicts. Raw runtime fell more than that, but most of the drop was the cooler weather.</p>
+            <h6>What worked</h6>
+            <ul><li>Upstairs never hit 100% duty. Under Smart Away it averaged 142 min/day maxed out.</li><li>Morning pre-cool on the two 90°F days shifted 40 min of upstairs runtime before noon.</li></ul>
+            <h6>Watch</h6>
+            <ul><li>Main floor cooling rate is 8% slower than August after adjusting for weather. Check the filter before blaming the model.</li></ul>
+            <h6>Next</h6>
+            <ul><li>Finish the 1° vs 2° offset test, then try the 20-minute recovery lead.</li></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- GUARDRAILS -->
+      <div class="view" id="v-rules" role="tabpanel" aria-labelledby="t-rules" hidden>
+        <div class="row c2">
+          <div class="panel">
+            <div class="panel-h"><h5>How much can the app do on its own?</h5></div>
+            <div class="seg" id="autoSeg" role="group" aria-label="Autonomy"><button type="button" data-m="Observe only" aria-pressed="false">Observe</button><button type="button" data-m="Suggest mode" aria-pressed="true">Suggest</button><button type="button" data-m="Auto within limits" aria-pressed="false">Auto within limits</button></div>
+            <p class="small" id="autoDesc" style="margin-top:10px;color:var(--ink-2)"></p>
+            <div class="form-grid" style="margin-top:8px">
+              <div class="f-row"><div>Never cool above, occupied rooms<small>Hard ceiling, enforced by the controller, not by Claude</small></div><input type="number" id="g1" value="79" aria-label="Maximum occupied cooling setpoint, °F"></div>
+              <div class="f-row"><div>Never cool below<small>Protects comfort and keeps the coils from icing</small></div><input type="number" id="g2" value="70" aria-label="Minimum cooling setpoint, °F"></div>
+              <div class="f-row"><div>Largest single change<small>Per unit, per 30 minutes</small></div><select id="g3" aria-label="Largest single change"><option>1°F</option><option selected>2°F</option><option>3°F</option></select></div>
+              <div class="f-row"><div>When someone changes a thermostat by hand<small>The app backs off and logs it as a signal</small></div><select id="g4" aria-label="Manual override backoff"><option>1 hour</option><option selected>3 hours</option><option>Until next schedule</option></select></div>
+              <div class="f-row"><div>Quiet hours<small>Only comfort fixes overnight, no experiments</small></div><select id="g5" aria-label="Quiet hours"><option selected>10 PM – 6 AM</option><option>11 PM – 7 AM</option><option>Off</option></select></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h5>Comfort bands</h5><span class="sub">°F, cooling season</span></div>
+            <div class="table-wrap" style="border:0">
+              <table class="band-table">
+                <thead><tr><th>Zone</th><th>Day</th><th>Evening</th><th>Night</th><th>Rooms that count</th></tr></thead>
+                <tbody>
+                  <tr><td>Main floor</td><td class="num">76–78</td><td class="num">76–77</td><td class="num">buffer</td><td>Living, Kitchen, School</td></tr>
+                  <tr><td>Upstairs</td><td class="num">77–79</td><td class="num">76–78</td><td class="num">74–76</td><td>Toy Room day · Girls' Room night</td></tr>
+                  <tr><td>Bed / Office</td><td class="num">75–77</td><td class="num">76–78</td><td class="num">72–74</td><td>Office day · Bedroom night</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="small muted" style="margin-top:8px">"Buffer" means the zone has no comfort target and is managed for the floors around it by the linked rule.</p>
+            <div class="form-grid" style="margin-top:10px">
+              <div class="f-row"><div>ecobee Smart Home/Away<small>Off. It would fight the linked rule.</small></div><span class="pill">Off · set by app</span></div>
+              <div class="f-row"><div>ecobee Follow Me<small>Off. The app picks sensors per time block instead.</small></div><span class="pill">Off · set by app</span></div>
+              <div class="f-row"><div>eco+ Schedule Assistant / Time of Use<small>Off while experiments run, so results stay clean</small></div><span class="pill warn"><span class="dot"></span>Check in ecobee app</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ================= PLAYBOOK (the write-up) ================= -->
+<section class="block" id="playbook" aria-labelledby="h-play">
+  <div class="sec-head">
+    <p class="eyebrow">The write-up</p>
+    <h2 id="h-play">How Climate AI runs your three units together</h2>
+    <p>Yes, this makes complete sense, and it's the most common way multi-zone houses waste runtime. Each thermostat optimizes its own floor, and the floors work against each other.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="prose">
+      <h3 style="margin-bottom:12px">What happens today</h3>
+      <p>The main floor sees no motion, so ecobee's Smart Away lets the hallway float to 80°F. You're upstairs, and that ecobee is holding 77°F. The main floor is now 3°F warmer than the upstairs. Warm air rises through the open stairwell, and the ceiling between the floors carries heat up as well.</p>
+      <p>The upstairs unit was already the hardest-working one, under a hot roof and probably with ducts in the attic. That extra load pushes it to 100% duty. It runs all afternoon, the Girls' Room drifts, and the main floor's "savings" cost the house more than they saved.</p>
+      <p>ecobee can't see any of this. Each thermostat reports only itself, so its reports can't show one floor creating work for another.</p>
+    </div>
+    <div class="prose">
+      <h3 style="margin-bottom:12px">Your instinct, with one refinement</h3>
+      <p>Linking the floors is right. Keeping the main floor a little cooler than the upstairs, moving both floors together on setback, and bringing both back together on recovery should beat letting them drift independently.</p>
+      <p>The refinement is that the right offset changes with conditions. On a mild, cloudy day, a cooler main floor may only add main-floor runtime. On a 95°F sunny afternoon, keeping it 2°F cooler may save the upstairs far more than it costs downstairs. So the offset is something the app <em>learns</em>, separately for different outdoor temperatures, amounts of sun and times of day. Try the <a href="#app" data-jump="t-coupling">Floor coupling</a> tab in the mockup to see the best offset move as the day gets hotter.</p>
+    </div>
+  </div>
+
+  <h3 style="margin:40px 0 14px">The rules the controller runs</h3>
+  <div class="grid-2">
+    <div class="card"><h4>Linked floors</h4><p>When the main floor is empty but someone is upstairs, the main floor doesn't float. Its target is tied to the upstairs target plus a learned offset. The starting offset is 1°F cooler than upstairs.</p><p style="margin-top:8px"><span class="pill accent">Learns: offset by temperature, sun and hour</span></p></div>
+    <div class="card"><h4>Setback and recovery move together</h4><p>When the whole house is empty, both floors set back and keep the offset, as in your example: main 80°F, upstairs 82°F. On recovery the main floor starts first, so the upstairs cools down with less heat coming from below. Your rule (upstairs 82→78 means main goes to 77) is the starting point.</p><p style="margin-top:8px"><span class="pill accent">Learns: recovery lead, 0–45 min</span></p></div>
+    <div class="card"><h4>Pre-cool with the forecast</h4><p>On hot, sunny days the upstairs is cooled 1–2°F below target before noon. The outdoor air is cooler then and the AC removes heat more efficiently. The upstairs then coasts through the solar peak. On mild days the app skips it, because there it only adds runtime.</p><p style="margin-top:8px"><span class="pill accent">Learns: depth, start time, the forecast threshold</span></p></div>
+    <div class="card"><h4>The right sensors at the right time</h4><p>ecobee comfort settings decide which sensors count. Upstairs uses the Toy Room by day and the Girls' Room at night. Main floor uses the Living Room, Kitchen and School Room. The wing uses the Office 9–5 and the Bedroom at night. The app writes these into each ecobee program and turns Follow Me off so ecobee doesn't override them.</p></div>
+    <div class="card"><h4>Bed / Office runs on its own</h4><p>Unless the data shows the main floor affecting the wing, it stays independent. Its savings come from its schedule, with the office empty in the evening and the bedroom only at night, and from sensor sets. If coupling shows up in the data, the wing joins the linked rules.</p></div>
+    <div class="card"><h4>Protect the equipment and the air</h4><p>Minimum run and off times prevent short cycling, and cycles per hour are tracked as a health signal. Indoor humidity has to stay under about 58%: a strategy that saves runtime by raising humidity loses. If someone adjusts a thermostat by hand, the app backs off and records it as feedback.</p></div>
+  </div>
+
+  <div class="grid-2" style="margin-top:28px">
+    <div>
+      <h3 style="margin-bottom:12px">What "best" means, written down</h3>
+      <div class="eq">minimize    Σ over units   w<sub>u</sub> · runtime<sub>u</sub>
+            (w<sub>u</sub> = the unit's power draw; 1.0 each until measured)
+
+subject to  occupied rooms inside their comfort band ≥ 97% of minutes
+            every setpoint inside your hard limits
+            ≤ 1 change per unit per 30 min, ≤ 2°F per change
+            indoor humidity ≤ 58%
+            no unit short-cycling (runs &lt; 5 min)</div>
+      <p class="small muted" style="margin-top:10px">Runtime is a fair start. Units differ in size, though, so a minute of a 3-ton main unit costs more than a minute of a 2-ton upstairs unit. A whole-home power monitor (Emporia Vue, Sense) with a clamp on each condenser lets the app optimize energy instead of minutes.</p>
+    </div>
+    <div>
+      <h3 style="margin-bottom:12px">Your example, scored by the house model</h3>
+      <div class="table-wrap"><table class="t" id="scoreTable" style="min-width:480px"></table></div>
+      <p class="small muted" style="margin-top:10px">Simulated 12-hour afternoon at 95°F with the upstairs held at 77°F. Illustrative numbers from the example model. Your house's real numbers come from its own data.</p>
+    </div>
+  </div>
+
+  <h3 style="margin:40px 0 14px">A cooling day, start to finish</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th style="width:110px">Time</th><th>What happens</th><th>Who decides</th></tr></thead>
+      <tbody>
+        <tr><td class="num">3:30 AM</td><td>Yesterday's 5-minute ecobee data is final (ecobee runs about an hour behind). Models refit, and Claude reviews the day and writes the morning digest.</td><td>Model jobs + Claude</td></tr>
+        <tr><td class="num">6:00 AM</td><td>Forecast pulled. The model simulates today's options: pre-cool or not, which offset, recovery lead. It picks the plan that meets comfort with the least runtime.</td><td>Controller</td></tr>
+        <tr><td class="num">7–11 AM</td><td>On a hot day, the upstairs pre-cools 1–2°F below target while the outdoor air is still mild.</td><td>Controller</td></tr>
+        <tr><td class="num">Midday</td><td>The main floor empties out. The linked rule keeps it tied to the upstairs instead of floating to 80°F.</td><td>Controller</td></tr>
+        <tr><td class="num">3–6 PM</td><td>Solar peak. Every 3 minutes the app watches upstairs duty and room temperatures. If the upstairs is about to max out, it lowers the main-floor target within your limits.</td><td>Controller, alerts to you</td></tr>
+        <tr><td class="num">5:30 PM</td><td>Recovery for the evening. The main floor leads the upstairs by the learned lead time.</td><td>Controller</td></tr>
+        <tr><td class="num">10 PM</td><td>Night sensor sets: Girls' Room upstairs, Bedroom in the wing. The main floor becomes a buffer. Quiet hours begin.</td><td>ecobee program, written by the app</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin:40px 0 14px">Reporting you'll get</h3>
+  <div class="grid-3">
+    <div class="card"><h4>Live, always</h4><p>Each zone's temperature and target, every room sensor and its occupancy, which units are running, duty over the last hour, and runtime today against what the weather predicts.</p></div>
+    <div class="card"><h4>Daily digest</h4><p>A phone notification each morning: yesterday's runtime per unit and in total, vs. weather-expected; comfort; anything odd (a sensor offline, a slow cooling rate, a unit maxed out).</p></div>
+    <div class="card"><h4>Weekly report from Claude</h4><p>What changed and why, with the weather separated out. Which experiment finished and what it showed. What to try next. Anything that looks like a maintenance issue.</p></div>
+  </div>
+</section>
+
+<!-- ================= LEARNING ================= -->
+<section class="block" id="learning" aria-labelledby="h-learn">
+  <div class="sec-head">
+    <p class="eyebrow">Machine learning</p>
+    <h2 id="h-learn">How it learns, adjusts, and dials in</h2>
+    <p>The loop below repeats for as long as the app runs. Each pass narrows down what works in your house, and each change is tested in the real house before it's adopted.</p>
+  </div>
+
+  <div class="grid-2" style="align-items:start">
+    <div class="steps">
+      <div class="step"><span class="n">1</span><h4>Backfill, then watch</h4><p>On day one, pull the 5-minute history ecobee still holds (roughly 12–18 months) and the matching hourly weather from Open-Meteo's archive. You start with last summer as a baseline instead of waiting weeks. Nothing changes in the house yet.</p><div class="meta"><span class="pill">week 1</span></div></div>
+      <div class="step"><span class="n">2</span><h4>Fit the weather baseline</h4><p>For each unit, find the outdoor temperature where cooling starts (its balance point), then fit runtime against degree-days, sun and humidity. The model must predict held-out days well (CV(RMSE) ≤ 20%) before any savings number is shown.</p><div class="meta"><span class="pill">weeks 1–3</span></div></div>
+      <div class="step"><span class="n">3</span><h4>Fit the house's thermal model</h4><p>A small physics model with learned numbers: how fast each zone gains heat from outside, how strongly the zones are coupled, what the sun adds, and how much heat each unit removes per minute. It is refit every night from the 5-minute data.</p><div class="meta"><span class="pill">weeks 3–6</span></div></div>
+      <div class="step"><span class="n">4</span><h4>Simulate tomorrow</h4><p>Each night, simulate candidate plans (offsets, pre-cool, recovery lead) against tomorrow's forecast and keep the cheapest plan that meets comfort. This is model predictive control in its simplest form.</p><div class="meta"><span class="pill">nightly</span></div></div>
+      <div class="step"><span class="n">5</span><h4>Test it in the real house</h4><p>The simulation's favorite becomes a challenger. Days are randomly assigned to the current champion or the challenger, and the comparison is weather-normalized. The test ends when the 90% interval excludes zero, or after a set number of days.</p><div class="meta"><span class="pill">1–3 weeks per test</span></div></div>
+      <div class="step"><span class="n">6</span><h4>Adopt, then keep tuning</h4><p>The winner becomes the champion. Settings become condition-specific (one offset on 95°F sunny days, another on 82°F cloudy ones), and Bayesian optimization picks the next values to try. When a model drifts, the app looks for a cause: season, a dirty filter, low refrigerant.</p><div class="meta"><span class="pill">continuous</span></div></div>
+    </div>
+    <div style="display:grid;gap:16px;grid-template-columns:minmax(0,1fr)">
+      <div>
+        <p class="code-cap">THE HOUSE MODEL · one equation per zone, fitted to your data</p>
+        <div class="eq">C<sub>up</sub>·dT<sub>up</sub>/dt   = (T<sub>out</sub>−T<sub>up</sub>)/R<sub>up</sub> + (T<sub>main</sub>−T<sub>up</sub>)/R<sub>mu</sub>
+                + k<sub>s</sub>·max(0, T<sub>main</sub>−T<sub>up</sub>) + a<sub>up</sub>·Sun − Q<sub>up</sub>·on<sub>up</sub>(t) + g<sub>up</sub>
+
+C<sub>main</sub>·dT<sub>main</sub>/dt = (T<sub>out</sub>−T<sub>main</sub>)/R<sub>m</sub> + (T<sub>up</sub>−T<sub>main</sub>)/R<sub>mu</sub>
+                + (T<sub>bed</sub>−T<sub>main</sub>)/R<sub>mb</sub> + a<sub>m</sub>·Sun − Q<sub>main</sub>·on<sub>main</sub>(t) + g<sub>main</sub>
+
+C<sub>bed</sub>·dT<sub>bed</sub>/dt  = (T<sub>out</sub>−T<sub>bed</sub>)/R<sub>b</sub> + (T<sub>main</sub>−T<sub>bed</sub>)/R<sub>mb</sub>
+                + a<sub>b</sub>·Sun − Q<sub>bed</sub>·on<sub>bed</sub>(t) + g<sub>bed</sub></div>
+      </div>
+      <div class="card">
+        <h4>Reading the model</h4>
+        <ul>
+          <li><b>C</b>: how much heat a zone can soak up (furniture, drywall, air).</li>
+          <li><b>R</b>: resistance to heat flow. A small <b>R<sub>mu</sub></b> means a strong main-to-upstairs link; a large <b>R<sub>mb</sub></b> confirms the wing is independent.</li>
+          <li><b>k<sub>s</sub></b>: the one-way stairwell term. Warm air moves up more easily than down.</li>
+          <li><b>a·Sun</b>: solar gain, using sun aimed at your roof and windows.</li>
+          <li><b>Q·on(t)</b>: heat removed while a unit runs, taken from ecobee's runtime seconds.</li>
+          <li><b>g</b>: people, cooking and electronics, partly predicted from occupancy.</li>
+        </ul>
+        <p style="margin-top:10px">This is a standard grey-box RC model of the kind used in building research, and it can be fitted from thermostat and room-sensor data. A Kalman filter keeps it current between refits.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:28px">
+    <div class="card">
+      <h4>What the math does</h4>
+      <ul>
+        <li>Fits baselines and the house model (statsmodels, scipy)</li>
+        <li>Runs the 3-minute control loop and enforces your limits</li>
+        <li>Simulates plans against the forecast</li>
+        <li>Computes savings, intervals and experiment results</li>
+      </ul>
+      <p style="margin-top:10px">Deterministic, testable and fast. It never needs a language model to keep the house comfortable.</p>
+    </div>
+    <div class="card">
+      <h4>What Claude does</h4>
+      <ul>
+        <li>Reads the results each night and spots what's unusual</li>
+        <li>Explains it in plain English, with the weather separated out</li>
+        <li>Proposes the next experiment and argues for it</li>
+        <li>Answers your questions with real queries, not guesses</li>
+      </ul>
+      <p style="margin-top:10px">Claude works on a slower cycle (nightly, weekly, or when something unusual happens). It never sits in the real-time loop, and everything it proposes goes through the same limits as the controller.</p>
+    </div>
+  </div>
+  <div class="callout info" style="margin-top:20px">
+    <div class="ic" aria-hidden="true">i</div>
+    <div><h4>When is it "dialed in"?</h4><p>Large effects, like stopping the main floor from floating to 80°F, show up within days. Fine-tuning (1° vs 2°, a 10-minute change in lead time) needs 2–3 week switchbacks, because those effects are small next to day-to-day noise. The practical definition of dialed in: experiments stop finding differences larger than their own uncertainty. Then the app shifts from testing to watching for drift. Heating season starts a new round, because heat rising from the main floor then helps the upstairs instead of hurting it.</p></div>
+  </div>
+</section>
+
+<!-- ================= WEATHER & ANALYTICS ================= -->
+<section class="block" id="weather" aria-labelledby="h-wx">
+  <div class="sec-head">
+    <p class="eyebrow">Weather &amp; analytics</p>
+    <h2 id="h-wx">Free weather data, and analytics that can't be fooled by a cool week</h2>
+    <p>You named the core problem: a mild week makes any change look like a success. Every number in the app is compared against what the weather alone would have produced.</p>
+  </div>
+
+  <h3 style="margin-bottom:14px">Weather sources (all free)</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>Source</th><th>Role</th><th>What we use</th><th>Terms</th></tr></thead>
+      <tbody>
+        <tr><td><b>Open-Meteo forecast</b></td><td>Primary</td><td>Hourly and 15-minute temperature, humidity, dew point, cloud, wind, and sun (shortwave, direct, diffuse, and tilted to your roof and windows). Forecast out to 16 days; 15-minute data is native in North America.</td><td>Free, no API key, for non-commercial use, which includes personal home automation. 10,000 calls/day. CC BY 4.0: show "Weather data by Open-Meteo.com" next to the data.</td></tr>
+        <tr><td><b>Open-Meteo archive</b></td><td>Backfill and baselines</td><td>The same variables hourly back to 1940. ERA5 lags about 5 days; the 9 km IFS series has no delay.</td><td>Same as above</td></tr>
+        <tr><td><b>Open-Meteo previous runs</b></td><td>Judging forecast-based decisions</td><td>What the forecast said at decision time, so a pre-cool decision is judged on what was known then</td><td>Same as above</td></tr>
+        <tr><td><b>NWS api.weather.gov</b></td><td>Cross-check</td><td>Hourly observations from the nearest airport station and the official gridded forecast</td><td>Free, no key; requires a User-Agent header with a contact email</td></tr>
+        <tr><td><b>ecobee outdoor columns</b></td><td>Cross-check</td><td>outdoorTemp and outdoorHumidity in every 5-minute runtime report</td><td>Comes with the ecobee data</td></tr>
+        <tr><td><b>Your own weather station</b> <span class="muted">(optional)</span></td><td>Hyperlocal upgrade</td><td>A Tempest or Ambient station on your roof measures your actual sun and temperature</td><td>Free API for station owners</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="code-cap" style="margin-top:18px">ONE REQUEST · forecast + 2 past days, hourly, with sun on a west-facing wall</p>
+  <pre class="code"><span class="c"># your coordinates stay on your server</span>
+https://api.open-meteo.com/v1/forecast?latitude=<span class="k">LAT</span>&amp;longitude=<span class="k">LON</span>
+  &amp;hourly=temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,
+         shortwave_radiation,direct_radiation,diffuse_radiation,global_tilted_irradiance,
+         cloud_cover,wind_speed_10m,wind_direction_10m,is_day
+  &amp;tilt=<span class="k">90</span>&amp;azimuth=<span class="k">90</span>          <span class="c"># vertical wall facing west (0 = south, 90 = west)</span>
+  &amp;temperature_unit=fahrenheit&amp;timezone=auto&amp;past_days=<span class="k">2</span>&amp;forecast_days=<span class="k">3</span></pre>
+
+  <h3 style="margin:36px 0 14px">How weather gets separated from strategy</h3>
+  <div class="grid-2">
+    <div class="card"><h4>An expected runtime for every day</h4><p>A baseline model per unit predicts runtime from that day's weather. The balance point is searched from 30–90°F (the CalTRACK method), and degree-days are computed from hourly temperatures, not the daily average, because the relationship isn't linear.</p></div>
+    <div class="card"><h4>Savings = expected − actual</h4><p>Run the baseline with this period's weather and subtract what the units actually ran. This is the IPMVP "avoided energy" method. Each unit's runtime is metered separately, which makes the estimate tighter than a whole-house electric meter would.</p></div>
+    <div class="card"><h4>A waterfall every week</h4><p>The change from last week to this week is split into weather, sun, the strategy, and noise. That's the "What changed the total" chart in the mockup's <a href="#app" data-jump="t-analytics">Did it work?</a> tab.</p></div>
+    <div class="card"><h4>Randomized switchbacks for small effects</h4><p>Before/after comparisons are fine for big changes. For tuning, days are randomly assigned to one strategy or the other, so weather averages out across both. LBNL's randomized M&amp;V field study found this more accurate and faster than pre/post comparisons. The first few hours after each switch are dropped to account for thermal mass.</p></div>
+  </div>
+
+  <h3 style="margin:36px 0 14px">Metrics the app tracks</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>Metric</th><th>Definition</th><th>Why it matters here</th></tr></thead>
+      <tbody>
+        <tr><td><b>Runtime</b></td><td>Compressor seconds per 5-minute interval, summed (compCool1/2, compHeat, auxHeat)</td><td>The thing we're minimizing, per unit and for the house</td></tr>
+        <tr><td><b>Weather-expected runtime</b></td><td>The baseline model's prediction for that day's actual weather</td><td>The yardstick for every claim</td></tr>
+        <tr><td><b>Duty cycle</b></td><td>Share of an hour the compressor runs</td><td>100% means the unit can't keep up: the upstairs symptom</td></tr>
+        <tr><td><b>Maxed-out minutes</b></td><td>Minutes at 100% duty while the zone is above target</td><td>The clearest sign of floors fighting</td></tr>
+        <tr><td><b>Comfort score</b></td><td>Share of occupied-room minutes inside your band</td><td>The constraint. Savings don't count if this drops.</td></tr>
+        <tr><td><b>Coupling coefficient</b></td><td>Upstairs heat gain (°F/hr) per °F the main floor sits above it</td><td>Puts a number on "the main floor affects the upstairs"</td></tr>
+        <tr><td><b>Cooling rate</b></td><td>°F removed per run-minute, adjusted for outdoor temperature</td><td>Drops when a filter clogs or refrigerant runs low</td></tr>
+        <tr><td><b>Cycles per hour</b></td><td>Compressor starts per hour</td><td>Short cycling wears equipment and hurts dehumidification</td></tr>
+        <tr><td><b>Indoor humidity</b></td><td>Thermostat humidity per zone</td><td>A strategy that raises humidity doesn't win</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout good" style="margin-top:20px"><div class="ic" aria-hidden="true">✓</div><div><h4>Checks that keep the numbers honest</h4><p>No savings figure is shown until the baseline passes its accuracy check. Every claim comes with a 90% interval. Unusual days (guests, vacation, a sensor offline, the oven running all afternoon) are flagged and can be excluded. After a strategy is adopted, an occasional control day keeps checking that it still wins.</p></div></div>
+</section>
+
+<!-- ================= CLAUDE ================= -->
+<section class="block" id="claude" aria-labelledby="h-claude">
+  <div class="sec-head">
+    <p class="eyebrow">Claude Agent SDK</p>
+    <h2 id="h-claude">Claude Opus 5.5, running on your account</h2>
+    <p>The Claude Agent SDK runs Claude as an agent inside your own Python service, using tools you write. Here those tools are your house data, the weather, the simulator and a proposal queue.</p>
+  </div>
+
+  <h3 style="margin-bottom:14px">Two ways to connect your account</h3>
+  <div class="grid-2">
+    <div class="card">
+      <h4>Your Claude Pro or Max subscription</h4>
+      <p>Run <code>claude setup-token</code> once on any machine. It produces a one-year token tied to your subscription. Put it in the agent service as <code>CLAUDE_CODE_OAUTH_TOKEN</code>. Anthropic documents this for scripts and pipelines where browser login isn't possible.</p>
+      <ul>
+        <li>No per-token bill. Usage counts against your plan's limits, the same pool as your own Claude use.</li>
+        <li>For personal use only. Anthropic's Agent SDK docs don't allow offering claude.ai login in products for other people. If you ever share this app, switch to an API key.</li>
+        <li>Renew the token yearly.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>An API key from the Claude Console</h4>
+      <p>Create a key at platform.claude.com and set <code>ANTHROPIC_API_KEY</code>. Billing is per token: Opus 5.5 costs $4 per million input tokens and $20 per million output tokens.</p>
+      <ul>
+        <li>Rough estimate: a nightly review plus a weekly report comes to about $10–20 a month. Real usage depends on how much data each run reads.</li>
+        <li><code>max_budget_usd</code> caps each run, so a runaway loop can't cost much.</li>
+        <li>Separate from your chat usage, and the right choice if anyone else will use the app.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 style="margin:36px 0 14px">When Claude runs</h3>
+  <div class="grid-2">
+    <div class="card"><h4>Nightly review · 3:30 AM</h4><p>After ecobee's data for the day is final. Claude reads yesterday's results against the weather, checks running experiments, flags anomalies and writes your morning digest.</p></div>
+    <div class="card"><h4>Weekly report · Sunday</h4><p>The deeper look: attribution, experiment conclusions, what to test next, and maintenance warnings. Runs at higher effort.</p></div>
+    <div class="card"><h4>When something looks wrong</h4><p>Triggered by a detector: upstairs maxed out for 45+ minutes, the cooling rate dropping, humidity above the limit, a sensor offline. Claude investigates and explains what it found.</p></div>
+    <div class="card"><h4>When you ask</h4><p>In the app's Ask Claude tab, or from Claude Code and Claude Desktop on your laptop through the app's MCP server. There it uses your normal Claude login with the same tools.</p></div>
+  </div>
+
+  <h3 style="margin:36px 0 14px">The tools Claude gets</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>Tool</th><th>Type</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td class="num">get_house_status</td><td><span class="pill">read</span></td><td>Current temperatures, targets, occupancy, equipment state for all 3 units and 7 sensors</td></tr>
+        <tr><td class="num">query_runtime</td><td><span class="pill">read</span></td><td>Runtime by unit for any range, at 5-minute, hourly or daily resolution, with weather joined</td></tr>
+        <tr><td class="num">query_sensors</td><td><span class="pill">read</span></td><td>Room-level temperature and occupancy history</td></tr>
+        <tr><td class="num">get_weather</td><td><span class="pill">read</span></td><td>Observed and forecast weather for a range</td></tr>
+        <tr><td class="num">baseline_report</td><td><span class="pill">read</span></td><td>Expected vs actual runtime, savings and intervals for any period</td></tr>
+        <tr><td class="num">coupling_report</td><td><span class="pill">read</span></td><td>Current house-model parameters and how they've changed</td></tr>
+        <tr><td class="num">simulate_plan</td><td><span class="pill">read</span></td><td>Run a candidate policy through the house model against a forecast</td></tr>
+        <tr><td class="num">experiment_results</td><td><span class="pill">read</span></td><td>Status and statistics of running and finished experiments</td></tr>
+        <tr><td class="num">propose_policy_change</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Puts a change in the proposal queue. It's validated against your limits, then applied according to the autonomy mode.</td></tr>
+        <tr><td class="num">propose_experiment</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Queues a switchback test for your approval</td></tr>
+        <tr><td class="num">publish_report</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Saves the digest or weekly report and sends the notification</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted" style="margin-top:8px">Claude has no tool that talks to the thermostats. Only the controller writes to ecobee, and it enforces the limits itself.</p>
+
+  <p class="code-cap" style="margin-top:22px">agent/nightly.py · the nightly review (Python, claude-agent-sdk)</p>
+  <pre class="code"><span class="k">from</span> claude_agent_sdk <span class="k">import</span> query, ClaudeAgentOptions, ResultMessage, tool, create_sdk_mcp_server
+<span class="k">from</span> climate <span class="k">import</span> store, model, guardrails
+
+<span class="k">@tool</span>(<span class="s">"query_runtime"</span>, <span class="s">"Runtime by unit with weather joined"</span>,
+      {<span class="s">"start"</span>: str, <span class="s">"end"</span>: str, <span class="s">"resolution"</span>: str})
+<span class="k">async def</span> query_runtime(args):
+    rows = <span class="k">await</span> store.runtime(args[<span class="s">"start"</span>], args[<span class="s">"end"</span>], args[<span class="s">"resolution"</span>])
+    <span class="k">return</span> {<span class="s">"content"</span>: [{<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: rows.to_csv()}]}
+
+<span class="k">@tool</span>(<span class="s">"propose_policy_change"</span>, <span class="s">"Queue a policy change for the controller"</span>,
+      {<span class="s">"param"</span>: str, <span class="s">"value"</span>: float, <span class="s">"rationale"</span>: str})
+<span class="k">async def</span> propose_policy_change(args):
+    problem = guardrails.check(args[<span class="s">"param"</span>], args[<span class="s">"value"</span>])      <span class="c"># hard limits live in code</span>
+    <span class="k">if</span> problem:
+        <span class="k">return</span> {<span class="s">"content"</span>: [{<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">f"Rejected: {problem}"</span>}], <span class="s">"is_error"</span>: <span class="k">True</span>}
+    pid = <span class="k">await</span> store.queue_proposal(**args, source=<span class="s">"claude-nightly"</span>)
+    <span class="k">return</span> {<span class="s">"content"</span>: [{<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">f"Queued proposal {pid}"</span>}]}
+
+house = create_sdk_mcp_server(name=<span class="s">"house"</span>, tools=[query_runtime, propose_policy_change])  <span class="c"># + the other tools</span>
+
+options = ClaudeAgentOptions(
+    model=<span class="s">"claude-opus-5-5"</span>,
+    system_prompt=open(<span class="s">"agent/prompts/nightly.md"</span>).read(),
+    mcp_servers={<span class="s">"house"</span>: house},
+    allowed_tools=[<span class="s">"mcp__house__query_runtime"</span>, <span class="s">"mcp__house__propose_policy_change"</span>],
+    disallowed_tools=[<span class="s">"Bash"</span>, <span class="s">"Write"</span>, <span class="s">"Edit"</span>, <span class="s">"WebFetch"</span>, <span class="s">"WebSearch"</span>],
+    permission_mode=<span class="s">"dontAsk"</span>,      <span class="c"># unattended: anything not allowed above is denied</span>
+    max_turns=<span class="k">40</span>,
+    max_budget_usd=<span class="k">1.00</span>,
+)
+
+<span class="k">async def</span> nightly():
+    <span class="k">async for</span> msg <span class="k">in</span> query(prompt=<span class="s">"Review yesterday. Separate weather from strategy. "</span>
+                                 <span class="s">"Propose at most one change. Write the morning digest."</span>, options=options):
+        <span class="k">if</span> isinstance(msg, ResultMessage):
+            <span class="k">await</span> store.save_run(msg.result, msg.total_cost_usd, msg.session_id)</pre>
+  <p class="code-cap" style="margin-top:18px">ASK FROM YOUR LAPTOP · the same tools in Claude Code</p>
+  <pre class="code">claude mcp add --transport http climate http://homeserver.local:8750/mcp
+<span class="c"># then: "compare upstairs runtime this week to weather-expected, and explain Tuesday"</span></pre>
+</section>
+
+<!-- ================= ARCHITECTURE ================= -->
+<section class="block" id="build" aria-labelledby="h-build">
+  <div class="sec-head">
+    <p class="eyebrow">Architecture</p>
+    <h2 id="h-build">What runs where</h2>
+    <p>Everything runs on one small home server with Docker Compose: a mini PC, a NAS, or a Raspberry Pi 5. The stack is the one you already use at work, FastAPI with SQLAlchemy and Vue 3 with TypeScript, so nothing here is new to you.</p>
+  </div>
+
+  <div class="arch">
+    <div class="lane"><h4>Sources</h4>
+      <div class="svc"><b>ecobee cloud</b><span>3 thermostats, 4 sensors, runtime reports, writes</span></div>
+      <div class="svc"><b>HomeKit, local</b><span>Optional second-by-second live state, as a backup path</span></div>
+      <div class="svc"><b>Open-Meteo + NWS</b><span>Forecast, observations, archive</span></div>
+      <div class="svc"><b>Power monitor</b><span>Optional: kW per condenser</span></div>
+    </div>
+    <div class="lane"><h4>Ingest</h4>
+      <div class="svc"><b>collector</b><span>Polls ecobee every 3 min, fetches details when something changes, pulls runtime reports hourly</span></div>
+      <div class="svc"><b>weather</b><span>Hourly forecast and observations; nightly archive fill</span></div>
+      <div class="svc"><b>backfill</b><span>One-time pull of 12–18 months of history, in 31-day chunks</span></div>
+    </div>
+    <div class="lane"><h4>Store &amp; brains</h4>
+      <div class="svc"><b>Postgres + TimescaleDB</b><span>5-minute readings, hourly and daily rollups</span></div>
+      <div class="svc"><b>models</b><span>Baselines, the house model, simulation (nightly)</span></div>
+      <div class="svc"><b>experiments</b><span>Randomized schedules and analysis</span></div>
+      <div class="svc"><b>controller</b><span>The 3-minute loop. Applies policy, enforces limits, logs every write.</span></div>
+    </div>
+    <div class="lane"><h4>You &amp; Claude</h4>
+      <div class="svc"><b>api</b><span>FastAPI REST + WebSocket for live updates</span></div>
+      <div class="svc"><b>web</b><span>Vue 3 PWA on your phone, reached over Tailscale</span></div>
+      <div class="svc"><b>agent</b><span>Claude Agent SDK runs: nightly, weekly, triggered, chat</span></div>
+      <div class="svc"><b>mcp</b><span>The same tools for Claude Code and Claude Desktop</span></div>
+      <div class="svc"><b>notify</b><span>Push to your phone (ntfy or Pushover)</span></div>
+    </div>
+  </div>
+
+  <h3 id="build-access" style="margin:40px 0 14px">Getting data out of ecobee</h3>
+  <div class="grid-3">
+    <div class="card"><span class="pill good" style="margin-bottom:8px">Recommended</span><h4>Sign in with your ecobee account</h4><p>The <code>python-ecobee-api</code> library (0.4.x) signs in with your ecobee username, password and MFA code, just like the ecobee web app. It keeps a refresh token and calls the regular ecobee API. Home Assistant's ecobee integration has worked this way since 2026.3.</p><p style="margin-top:8px"><b>Risk:</b> it borrows ecobee's own web-app login rather than an approved developer key, so an ecobee login change could break it. The app hides it behind one adapter so it can be swapped quickly.</p></div>
+    <div class="card"><span class="pill" style="margin-bottom:8px">If you have one</span><h4>An ecobee developer key from before March 2024</h4><p>Existing keys still work and use the official PIN-and-token flow, the most stable option. New keys haven't been issued since March 28, 2024, and ecobee hasn't said when that will change.</p></div>
+    <div class="card"><span class="pill" style="margin-bottom:8px">Backup / real-time</span><h4>HomeKit, locally</h4><p>Through Home Assistant's HomeKit Controller you get pushed updates in seconds: temperatures, room sensors and occupancy, targets, cooling or idle. It has no runtime history and no sensor-set control. A thermostat pairs with only one HomeKit controller, so it would leave Apple Home.</p></div>
+  </div>
+
+  <div class="table-wrap" style="margin-top:18px">
+    <table class="t">
+      <thead><tr><th>Need</th><th>ecobee call</th><th>How often</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>What changed?</td><td class="num">GET /thermostatSummary</td><td>Every 3 min</td><td>ecobee asks clients not to poll faster than this. Revision strings say what changed; <code>includeEquipmentStatus</code> says which units are running.</td></tr>
+        <tr><td>Live detail</td><td class="num">GET /thermostat</td><td>When a revision changes</td><td>Runtime, sensors, settings, program, events. Up to 25 thermostats per request, so all three fit in one call.</td></tr>
+        <tr><td>5-minute truth</td><td class="num">GET /runtimeReport</td><td>Hourly, plus a nightly re-pull</td><td>Seconds of compressor run time per 5-minute interval, plus per-sensor temperature and occupancy. Lags up to about an hour. At most 31 days per request.</td></tr>
+        <tr><td>Change a target</td><td class="num">setHold / resumeProgram</td><td>Controller decisions only</td><td>Temperatures in tenths of °F (77°F = 770). The app uses timed holds so nothing gets stuck.</td></tr>
+        <tr><td>Change sensor sets</td><td class="num">POST program</td><td>Rarely</td><td>Rewrites the whole program, so the app reads it, edits it and writes it back.</td></tr>
+        <tr><td>Stop ecobee fighting</td><td class="num">settings.autoAway, followMeComfort</td><td>Once, then verified daily</td><td>Smart Home/Away and Follow Me off. Demand-response events show up in <code>dmOffset</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid-2" style="margin-top:28px;align-items:start">
+    <div>
+      <h3 style="margin-bottom:12px">Core tables</h3>
+      <div class="table-wrap"><table class="t" style="min-width:420px">
+        <thead><tr><th>Table</th><th>Holds</th></tr></thead>
+        <tbody>
+          <tr><td class="num">units, sensors</td><td>3 thermostats, 7 temperature points, room names, which floor</td></tr>
+          <tr><td class="num">readings_5m</td><td>Per sensor: temp, occupancy. Per unit: humidity, targets, mode, comfort setting, equipment</td></tr>
+          <tr><td class="num">runtime_5m</td><td>Per unit: compCool1/2, compHeat, auxHeat, fan seconds</td></tr>
+          <tr><td class="num">weather_hourly</td><td>Source, observed or forecast, all variables above</td></tr>
+          <tr><td class="num">policies, policy_versions</td><td>Champion and challengers with their parameters</td></tr>
+          <tr><td class="num">experiments, experiment_days</td><td>Random assignment, exclusions, results</td></tr>
+          <tr><td class="num">control_actions</td><td>Every write to ecobee: who, why, before and after</td></tr>
+          <tr><td class="num">model_fits, agent_runs, reports</td><td>Model versions and accuracy; Claude runs, cost, output</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div>
+      <h3 style="margin-bottom:12px">Repo layout</h3>
+<div class="tree"><b>climate-ai/</b>
+├── <b>api/</b>                 FastAPI app, WebSocket, auth
+│   └── climate/
+│       ├── sources/      ecobee.py · homekit.py · openmeteo.py · nws.py
+│       ├── collector/    poller, runtime reports, backfill
+│       ├── models/       baseline.py · thermal_rc.py · simulate.py
+│       ├── control/      policy.py · guardrails.py · controller.py
+│       ├── experiments/  switchback.py · analysis.py
+│       ├── analytics/    attribution.py · metrics.py
+│       └── store/        SQLAlchemy models, Timescale views
+├── <b>agent/</b>               Claude Agent SDK runners + prompts
+│   ├── tools.py          the house tools (shared with mcp/)
+│   ├── nightly.py · weekly.py · triggered.py · chat.py
+│   └── prompts/
+├── <b>mcp/</b>                 MCP server for Claude Code / Desktop
+├── <b>web/</b>                 Vue 3 + TypeScript PWA
+├── <b>db/migrations/</b>
+├── docker-compose.yml
+└── <b>docs/</b>                this blueprint</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ROADMAP ================= -->
+<section class="block" id="roadmap" aria-labelledby="h-road">
+  <div class="sec-head">
+    <p class="eyebrow">Roadmap</p>
+    <h2 id="h-road">Build order</h2>
+    <p>Each phase ends in something you can use. Nothing touches a thermostat until phase 4. It's October, so the backfill hands you last summer's cooling data right away. Heating season gets its own learning pass, and that's when heat rising from the main floor starts working in your favor.</p>
+  </div>
+  <div>
+    <div class="phase"><div class="when"><b>Phase 0</b>this week</div><div><h4>Access and foundations</h4><ul><li>ecobee sign-in with MFA; confirm all 3 thermostats and 4 sensors come through</li><li>Docker Compose skeleton, database schema, Open-Meteo for your coordinates</li></ul><p class="exit"><b>Done when</b>all 7 sensors are stored every 3 minutes</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 1</b>weeks 1–2</div><div><h4>History and the live dashboard</h4><ul><li>Backfill 12–18 months of 5-minute data and matching weather</li><li>Live and Runtime screens; daily digest to your phone</li></ul><p class="exit"><b>Done when</b>daily runtime per unit matches ecobee's own reports within 1%</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 2</b>weeks 2–4</div><div><h4>Baselines and honest analytics</h4><ul><li>Balance points, weather-expected runtime per unit, attribution waterfall</li><li>First coupling estimate from last summer's data</li></ul><p class="exit"><b>Done when</b>each unit's baseline predicts held-out days within 20% CV(RMSE)</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 3</b>weeks 3–5</div><div><h4>Claude as analyst (read-only)</h4><ul><li>House tools, nightly review, weekly report, Ask Claude tab</li><li>MCP server so you can ask from Claude Code or Desktop</li></ul><p class="exit"><b>Done when</b>the weekly report tells you something you didn't know</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 4</b>weeks 5–7</div><div><h4>Controller, Suggest mode, Linked floors</h4><ul><li>Guardrails, audit log, ecobee feature settings, sensor sets per time block</li><li>Linked floors as the first policy, measured weather-normalized</li></ul><p class="exit"><b>Done when</b>upstairs maxed-out minutes are near zero and the savings have a 90% interval</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 5</b>week 7 on</div><div><h4>Thermal model, experiments, Auto mode</h4><ul><li>House model, switchback engine, forecast pre-cooling, condition-specific settings</li><li>Heating-season mode, equipment health alerts</li></ul><p class="exit"><b>Done when</b>experiments stop finding gains larger than their uncertainty</p></div></div>
+  </div>
+
+  <h3 style="margin:40px 0 14px">What I need from you to start</h3>
+  <div class="qlist">
+    <div class="q"><b>Equipment.</b> AC with a gas furnace, or heat pumps? Tonnage per unit, from the outdoor unit's nameplate.</div>
+    <div class="q"><b>Upstairs ducts.</b> Do they run through the attic?</div>
+    <div class="q"><b>Stairwell.</b> Open, or is there a door you could close?</div>
+    <div class="q"><b>ecobee key.</b> Do you have a developer API key from before March 2024?</div>
+    <div class="q"><b>Server.</b> What will run this? Is Home Assistant already running?</div>
+    <div class="q"><b>Location.</b> Address or ZIP for the weather point. It stays on your server.</div>
+    <div class="q"><b>Rate plan.</b> Flat or time-of-use? Time-of-use changes what "best" means.</div>
+    <div class="q"><b>Current ecobee settings.</b> Are Smart Home/Away, Follow Me or eco+ features on today?</div>
+    <div class="q"><b>Comfort.</b> Your preferred band per floor and time of day, and when the main floor is usually empty.</div>
+    <div class="q"><b>Claude.</b> Use your Pro/Max subscription token, or a Console API key?</div>
+  </div>
+</section>
+
+</div>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <p><b>Sources checked for this plan</b></p>
+    <p style="margin-top:6px;line-height:1.9">
+      <a href="https://www.ecobee.com/en-us/developers/" target="_blank" rel="noopener">ecobee developer program status</a> ·
+      <a href="https://www.ecobee.com/home/developer/api/documentation/v1/operations/get-runtime-report.shtml" target="_blank" rel="noopener">ecobee runtime report</a> ·
+      <a href="https://developer.ecobee.com/home/developer/api/documentation/v1/operations/get-thermostat-summary.shtml" target="_blank" rel="noopener">ecobee thermostat summary</a> ·
+      <a href="https://github.com/home-assistant/home-assistant.io/blob/current/source/_integrations/ecobee.markdown" target="_blank" rel="noopener">Home Assistant ecobee integration</a> ·
+      <a href="https://github.com/nkgilley/python-ecobee-api" target="_blank" rel="noopener">python-ecobee-api</a> ·
+      <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo docs</a> ·
+      <a href="https://open-meteo.com/en/terms" target="_blank" rel="noopener">Open-Meteo terms</a> ·
+      <a href="https://www.weather.gov/documentation/services-web-api" target="_blank" rel="noopener">NWS API</a> ·
+      <a href="https://caltrack-technical-documentation.readthedocs.io/en/latest/" target="_blank" rel="noopener">CalTRACK methods</a> ·
+      <a href="https://escholarship.org/uc/item/9ns4168n" target="_blank" rel="noopener">LBNL randomized M&amp;V</a> ·
+      <a href="https://orbit.dtu.dk/en/publications/identifying-suitable-models-for-the-heat-dynamics-of-buildings/" target="_blank" rel="noopener">Bacher &amp; Madsen, RC grey-box models</a> ·
+      <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a> ·
+      <a href="https://code.claude.com/docs/en/authentication" target="_blank" rel="noopener">Claude Code authentication</a>
+    </p>
+    <p style="margin-top:14px">Every number in the app mockup and the scored example is generated example data. None of it is a reading from your house.</p>
+  </div>
+</footer>
+<script>
+/* ---------- example data (seeded, deterministic) ---------- */
+function mulberry(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const RND=mulberry(20261003);
+function gauss(){let u=0,v=0;while(!u)u=RND();while(!v)v=RND();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtDay(d){return MON[d.getUTCMonth()]+" "+d.getUTCDate();}
+
+/* 56 days: Aug 8 – Oct 2. Policy "linked floors" starts Sep 19 (last 14 days). Late September is cooler,
+   which is exactly the trap: raw runtime falls for two reasons at once. */
+const DAYS=(function(){
+  const out=[];const start=Date.UTC(2026,7,8);const N=56;const policyStart=42;
+  for(let i=0;i<N;i++){
+    const d=new Date(start+i*864e5);
+    const seasonal=86.5-0.17*i;                       // cooling season fading
+    const wave=2.6*Math.sin(i/4.3)+1.4*Math.sin(i/1.7);
+    const mean=seasonal+wave+1.3*gauss();             // daily mean outdoor °F
+    const high=mean+9.5+1.2*gauss();
+    const cloud=Math.min(0.9,Math.max(0.02,0.28+0.18*gauss()));
+    const solar=+(7.4*(1-0.75*cloud)-0.012*i).toFixed(2); // kWh/m²/day on a horizontal surface
+    const cdd=Math.max(0,mean-65);
+    const policy=i>=policyStart?"linked":"default";
+    let main=0.33*cdd+0.10*solar+0.95*gauss();
+    let up=0.36*cdd+0.62*solar+1.25*gauss()+0.6;
+    let bed=0.22*cdd+0.08*solar+0.6*gauss();
+    if(policy==="linked"){ main=main*1.06+0.15; up=up*0.80; }
+    const clamp=v=>Math.max(0.2,Math.min(23.5,v));
+    out.push({i,date:fmtDay(d),mean:+mean.toFixed(1),high:+high.toFixed(1),cloud,solar,cdd:+cdd.toFixed(1),policy,
+      main:+clamp(main).toFixed(2),up:+clamp(up).toFixed(2),bed:+clamp(bed).toFixed(2)});
+  }
+  out.forEach(d=>d.total=+(d.main+d.up+d.bed).toFixed(2));
+  return out;
+})();
+
+/* ordinary least squares: total ~ b0 + b1*CDD + b2*solar, fitted on the baseline days only */
+function ols(rows,ys){
+  const k=rows[0].length;const XtX=Array.from({length:k},()=>Array(k).fill(0));const Xty=Array(k).fill(0);
+  rows.forEach((r,n)=>{for(let a=0;a<k;a++){Xty[a]+=r[a]*ys[n];for(let b=0;b<k;b++)XtX[a][b]+=r[a]*r[b];}});
+  // gaussian elimination
+  const M=XtX.map((r,i)=>r.concat([Xty[i]]));
+  for(let c=0;c<k;c++){let p=c;for(let r=c+1;r<k;r++)if(Math.abs(M[r][c])>Math.abs(M[p][c]))p=r;[M[c],M[p]]=[M[p],M[c]];
+    for(let r=0;r<k;r++){if(r===c)continue;const f=M[r][c]/M[c][c];for(let j=c;j<=k;j++)M[r][j]-=f*M[c][j];}}
+  return M.map((r,i)=>r[k]/r[i]);
+}
+const MODEL=(function(){
+  const base=DAYS.filter(d=>d.policy==="default"), post=DAYS.filter(d=>d.policy==="linked");
+  const beta=ols(base.map(d=>[1,d.cdd,d.solar]),base.map(d=>d.total));
+  const pred=d=>beta[0]+beta[1]*d.cdd+beta[2]*d.solar;
+  const res=base.map(d=>d.total-pred(d));
+  const n=base.length, p=3;
+  const sd=Math.sqrt(res.reduce((s,r)=>s+r*r,0)/(n-p));
+  const meanY=base.reduce((s,d)=>s+d.total,0)/n;
+  const ssTot=base.reduce((s,d)=>s+(d.total-meanY)**2,0);
+  const r2=1-res.reduce((s,r)=>s+r*r,0)/ssTot;
+  const cvrmse=sd/meanY;
+  // comparison windows: the 14 policy days vs the 14 days right before them
+  const prev=base.slice(-14);
+  const sum=(a,f)=>a.reduce((s,d)=>s+f(d),0);
+  const prevActual=sum(prev,d=>d.total), postActual=sum(post,d=>d.total), postExpected=sum(post,pred);
+  const avg=(a,f)=>sum(a,f)/a.length;
+  const weatherCdd=beta[1]*(avg(post,d=>d.cdd)-avg(prev,d=>d.cdd))*post.length;
+  const weatherSun=beta[2]*(avg(post,d=>d.solar)-avg(prev,d=>d.solar))*post.length;
+  // what the model says the previous window "should" have used vs. what it used (noise in that window)
+  const prevNoise=prevActual-sum(prev,pred);
+  const policy=postActual-postExpected;
+  const se=sd*Math.sqrt(post.length)*Math.sqrt(1+post.length/n); // daily noise + baseline-fit uncertainty, rough
+  return {beta,pred,sd,r2,cvrmse,n,prevActual,postActual,postExpected,weatherCdd,weatherSun,prevNoise,policy,se,
+    rawPct:(postActual-prevActual)/prevActual,normPct:policy/postExpected,ciPct:1.645*se/postExpected};
+})();
+
+/* upstairs hourly duty (%) for the last 21 days — afternoon peak scales with CDD and sun */
+const DUTY=(function(){
+  const rows=DAYS.slice(-21).map(d=>{
+    const vals=[];for(let h=0;h<24;h++){
+      const solarShape=Math.max(0,Math.sin(Math.PI*(h-7)/13));          // 7am–8pm sun, lagged into the attic
+      const lag=Math.max(0,Math.sin(Math.PI*(h-10)/12));
+      const night=h<7||h>21?0.18:0;
+      let v=(0.012*d.cdd+0.05)*(0.35+1.25*lag)+0.045*d.solar*solarShape+night*0.25*(d.cdd/15)+0.05*gauss();
+      if(d.policy==="linked"&&h>=11&&h<=20)v*=0.74;
+      vals.push(Math.round(Math.max(0,Math.min(1,v))*100));
+    }return {date:d.date,policy:d.policy,vals};});
+  return rows;
+})();
+
+/* buffer-zone model for the coupling explorer: 12-hour afternoon window, upstairs target 77°F.
+   off = main target − upstairs target (°F). +3 = what Smart Away does today (main 80, up 77). */
+function coupling(off,tout){
+  const d=-off;                                    // main cooler by d
+  const c=0.95+0.05*(tout-85);                      // heat carried up per °F of main-floor warmth (grows on hot, sunny days)
+  const main=Math.max(0,0.30*(tout-71)+0.85*d+0.11*d*d);
+  const upNeed=Math.max(0,0.30*(tout-67)-c*d+0.04*d*d);
+  const up=Math.min(12,upNeed);
+  return {main,up,upNeed,total:main+up,short:upNeed>12};
+}
+
+/* ---------- tiny SVG chart kit (theme tokens only, textContent for labels) ---------- */
+const NS="http://www.w3.org/2000/svg";
+function S(tag,attrs,parent){const e=document.createElementNS(NS,tag);if(attrs)for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+function H(tag,cls,text,parent){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;if(parent)parent.appendChild(e);return e;}
+function txt(parent,x,y,s,attrs){const t=S("text",Object.assign({x,y},attrs||{}),parent);t.textContent=s;return t;}
+function niceTicks(max,count){const raw=max/count;const mag=Math.pow(10,Math.floor(Math.log10(raw)));const step=[1,2,2.5,5,10].map(m=>m*mag).find(s=>s>=raw);const out=[];for(let v=0;v<=max+1e-9;v+=step)out.push(+v.toFixed(6));return out;}
+function topRoundRect(x,y,w,h,r){r=Math.min(r,h,w/2);if(h<=0)return "";return `M${x},${y+h}V${y+r}Q${x},${y} ${x+r},${y}H${x+w-r}Q${x+w},${y} ${x+w},${y+r}V${y+h}Z`;}
+function makeTip(host){const t=H("div","tip",null,host);t.setAttribute("role","status");return t;}
+function showTip(tip,host,px,py,title,rows){
+  tip.replaceChildren();H("div","tt",title,tip);
+  rows.forEach(r=>{const row=H("div","tr",null,tip);const i=H("i",null,null,row);if(r.color)i.style.background=r.color;H("b",null,r.value,row);H("span",null,r.label,row);});
+  tip.classList.add("on");
+  const hw=host.clientWidth;const tw=tip.offsetWidth;let x=px+14;if(x+tw>hw)x=px-tw-14;if(x<0)x=0;tip.style.left=x+"px";tip.style.top=Math.max(0,py-10)+"px";
+}
+function hideTip(tip){tip.classList.remove("on");}
+function legend(host,items){const l=H("div","chart-legend",null,host);items.forEach(it=>{const k=H("span","key",null,l);const sw=H("span",it.shape||"sq",null,k);sw.style.background=it.color;H("span",null,it.label,k);});return l;}
+const C=v=>`var(${v})`;
+function cw(host,d){const w=host.clientWidth;return w>0?Math.max(300,Math.round(w)):d;}
+function hoursFmt(h){const hh=Math.floor(h),mm=Math.round((h-hh)*60);return mm===60?`${hh+1}h 00m`:`${hh}h ${String(mm).padStart(2,"0")}m`;}
+
+/* 1 · daily runtime stacked by unit, with a CDD panel underneath (same x, small multiples) */
+function runtimeChart(host,days,markerIdx){
+  host.replaceChildren();
+  legend(host,[{label:"Main floor",color:C("--s-main")},{label:"Upstairs",color:C("--s-up")},{label:"Bed / Office",color:C("--s-bed")},{label:"Cooling degree-days",color:C("--s-out")}]);
+  const wrap=H("div","chart",null,host);
+  const W=cw(host,760),H1=210,H2=86,gap=30,M={l:40,r:10,t:16,b:24};const Ht=M.t+H1+gap+H2+M.b;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${Ht}`,role:"img","aria-label":"Daily runtime per unit, stacked, with cooling degree-days below"},wrap);
+  const pw=W-M.l-M.r;const band=pw/days.length;const bw=Math.min(18,band*.64);
+  const yMax=Math.ceil(Math.max(...days.map(d=>d.total))/5)*5;const y1=v=>M.t+H1-(v/yMax)*H1;
+  const cMax=Math.ceil(Math.max(...days.map(d=>d.cdd))/5)*5;const top2=M.t+H1+gap;const y2=v=>top2+H2-(v/cMax)*H2;
+  niceTicks(yMax,5).forEach(v=>{S("line",{x1:M.l,x2:W-M.r,y1:y1(v),y2:y1(v),stroke:C("--grid"),"stroke-width":1},svg);txt(svg,M.l-6,y1(v)+4,v+"h",{"text-anchor":"end"});});
+  niceTicks(cMax,2).forEach(v=>{S("line",{x1:M.l,x2:W-M.r,y1:y2(v),y2:y2(v),stroke:C("--grid"),"stroke-width":1},svg);txt(svg,M.l-6,y2(v)+4,String(v),{"text-anchor":"end"});});
+  txt(svg,M.l,M.t-4,"Runtime per day (hours)",{class:"lbl-strong"});
+  txt(svg,M.l,top2-8,"Cooling degree-days (base 65°F)",{class:"lbl-strong"});
+  S("line",{x1:M.l,x2:W-M.r,y1:y1(0),y2:y1(0),stroke:C("--axis")},svg);S("line",{x1:M.l,x2:W-M.r,y1:y2(0),y2:y2(0),stroke:C("--axis")},svg);
+  if(markerIdx!=null){const mx=M.l+band*markerIdx;S("line",{x1:mx,x2:mx,y1:M.t-2,y2:y2(0),stroke:C("--accent"),"stroke-width":1.5},svg);
+    txt(svg,mx+6,M.t+10,"Linked floors on",{fill:C("--accent"),"font-weight":"600"});}
+  const keys=[["main","--s-main"],["up","--s-up"],["bed","--s-bed"]];
+  const cols=[];
+  days.forEach((d,i)=>{const cx=M.l+band*i+band/2;let acc=0;
+    keys.forEach(([k,c],j)=>{const v=d[k];const yb=y1(acc),yt=y1(acc+v);acc+=v;const isTop=j===keys.length-1;const h=Math.max(0,yb-yt-(j>0?2:0));const yTop=yt;
+      if(isTop)S("path",{d:topRoundRect(cx-bw/2,yTop,bw,h,4),fill:C(c)},svg);else S("rect",{x:cx-bw/2,y:yTop,width:bw,height:h,fill:C(c)},svg);});
+    S("path",{d:topRoundRect(cx-bw/2,y2(d.cdd),bw,y2(0)-y2(d.cdd),4),fill:C("--s-out"),opacity:.75},svg);
+    const every=Math.max(1,Math.ceil(days.length/Math.max(3,Math.floor(pw/80))));if(i%every===0)txt(svg,cx,Ht-6,d.date,{"text-anchor":"middle"});
+    cols.push(cx);});
+  const tip=makeTip(wrap);const hl=S("rect",{x:0,y:M.t,width:band,height:y2(0)-M.t,fill:C("--ink"),opacity:0,rx:4},svg);svg.insertBefore(hl,svg.firstChild);
+  const hit=S("rect",{x:M.l,y:0,width:pw,height:Ht,fill:"transparent",tabindex:0},svg);
+  function at(i,px,py){const d=days[i];hl.setAttribute("x",M.l+band*i);hl.setAttribute("opacity",.06);
+    showTip(tip,wrap,px,py,`${d.date} · ${d.policy==="linked"?"Linked floors":"ecobee default"}`,[
+      {color:C("--s-main"),value:hoursFmt(d.main),label:"Main floor"},{color:C("--s-up"),value:hoursFmt(d.up),label:"Upstairs"},
+      {color:C("--s-bed"),value:hoursFmt(d.bed),label:"Bed / Office"},{value:hoursFmt(d.total),label:"House total"},
+      {color:C("--s-out"),value:d.cdd.toFixed(1),label:`CDD · mean ${d.mean}°F`}]);}
+  hit.addEventListener("pointermove",e=>{const r=svg.getBoundingClientRect();const sx=(e.clientX-r.left)*W/r.width;const i=Math.max(0,Math.min(days.length-1,Math.floor((sx-M.l)/band)));at(i,e.clientX-wrap.getBoundingClientRect().left,e.clientY-wrap.getBoundingClientRect().top);});
+  hit.addEventListener("pointerleave",()=>{hideTip(tip);hl.setAttribute("opacity",0);});
+  let kb=days.length-1;hit.addEventListener("keydown",e=>{if(e.key==="ArrowLeft")kb=Math.max(0,kb-1);else if(e.key==="ArrowRight")kb=Math.min(days.length-1,kb+1);else return;e.preventDefault();at(kb,wrap.clientWidth*(cols[kb]/W),20);});
+  hit.addEventListener("focus",()=>at(kb,wrap.clientWidth*(cols[kb]/W),20));hit.addEventListener("blur",()=>{hideTip(tip);hl.setAttribute("opacity",0);});
+}
+
+/* 2 · runtime vs CDD scatter with the baseline model line (at average sun) */
+function scatterChart(host,days,model){
+  host.replaceChildren();
+  legend(host,[{label:"ecobee default days (baseline)",color:C("--s-a"),shape:"dt"},{label:"Linked floors days",color:C("--s-b"),shape:"dt"},{label:"Expected runtime, no change",color:C("--s-a"),shape:"ln"}]);
+  const wrap=H("div","chart",null,host);const W=cw(host,560),Ht=320,M={l:44,r:16,t:14,b:40};
+  const svg=S("svg",{viewBox:`0 0 ${W} ${Ht}`,role:"img","aria-label":"Daily house runtime versus cooling degree-days"},wrap);
+  const xMax=Math.ceil(Math.max(...days.map(d=>d.cdd))/5)*5,yMax=Math.ceil(Math.max(...days.map(d=>d.total))/5)*5;
+  const x=v=>M.l+(v/xMax)*(W-M.l-M.r),y=v=>M.t+(Ht-M.t-M.b)*(1-v/yMax);
+  niceTicks(yMax,5).forEach(v=>{S("line",{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),stroke:C("--grid")},svg);txt(svg,M.l-6,y(v)+4,v+"h",{"text-anchor":"end"});});
+  niceTicks(xMax,5).forEach(v=>{txt(svg,x(v),Ht-M.b+16,String(v),{"text-anchor":"middle"});});
+  txt(svg,(M.l+W-M.r)/2,Ht-6,"Cooling degree-days that day",{"text-anchor":"middle"});
+  S("line",{x1:M.l,x2:W-M.r,y1:y(0),y2:y(0),stroke:C("--axis")},svg);
+  const sMean=days.reduce((s,d)=>s+d.solar,0)/days.length;const f=v=>model.beta[0]+model.beta[1]*v+model.beta[2]*sMean;
+  const x0=Math.min(...days.map(d=>d.cdd))-1,x1=Math.max(...days.map(d=>d.cdd))+1;
+  S("line",{x1:x(x0),y1:y(f(x0)),x2:x(x1),y2:y(f(x1)),stroke:C("--s-a"),"stroke-width":2,"stroke-linecap":"round"},svg);
+  txt(svg,x(x1)-4,y(f(x1))-8,"expected",{"text-anchor":"end",class:"lbl-strong"});
+  const pts=days.map(d=>({d,px:x(d.cdd),py:y(d.total)}));
+  pts.forEach(p=>S("circle",{cx:p.px,cy:p.py,r:4.5,fill:C(p.d.policy==="linked"?"--s-b":"--s-a"),stroke:C("--surface"),"stroke-width":2},svg));
+  const tip=makeTip(wrap);const ring=S("circle",{r:8,fill:"none",stroke:C("--ink"),"stroke-width":1.5,opacity:0},svg);
+  svg.addEventListener("pointermove",e=>{const r=svg.getBoundingClientRect();const sx=(e.clientX-r.left)*W/r.width,sy=(e.clientY-r.top)*Ht/r.height;
+    let best=null,bd=1e9;pts.forEach(p=>{const dd=(p.px-sx)**2+(p.py-sy)**2;if(dd<bd){bd=dd;best=p;}});
+    if(!best||bd>900){hideTip(tip);ring.setAttribute("opacity",0);return;}
+    ring.setAttribute("cx",best.px);ring.setAttribute("cy",best.py);ring.setAttribute("opacity",1);const d=best.d;const exp=model.pred(d);
+    const wr=wrap.getBoundingClientRect();showTip(tip,wrap,e.clientX-wr.left,e.clientY-wr.top,`${d.date} · ${d.policy==="linked"?"Linked floors":"ecobee default"}`,[
+      {color:C(d.policy==="linked"?"--s-b":"--s-a"),value:hoursFmt(d.total),label:"Actual"},{color:C("--s-a"),value:hoursFmt(exp),label:"Expected for this weather"},
+      {value:((d.total-exp)/exp*100).toFixed(0)+"%",label:"vs expected"},{value:d.cdd.toFixed(1),label:`CDD · sun ${d.solar} kWh/m²`}]);});
+  svg.addEventListener("pointerleave",()=>{hideTip(tip);ring.setAttribute("opacity",0);});
+}
+
+/* 3 · attribution waterfall: prior 14 days → this 14 days */
+function waterfallChart(host,m){
+  host.replaceChildren();
+  legend(host,[{label:"Less runtime",color:C("--div-neg")},{label:"More runtime",color:C("--div-pos")},{label:"Period total",color:C("--s-out")}]);
+  const wrap=H("div","chart",null,host);const W=cw(host,560),Ht=300,M={l:44,r:10,t:22,b:48};
+  const svg=S("svg",{viewBox:`0 0 ${W} ${Ht}`,role:"img","aria-label":"What changed runtime between the two periods"},wrap);
+  const steps=[{label:"Prior 14 days",v:m.prevActual,total:true},{label:"Cooler weather",v:m.weatherCdd},{label:"Sunshine",v:m.weatherSun},
+    {label:"Noise",v:-m.prevNoise},{label:"Linked floors",v:m.policy},{label:"Last 14 days",v:m.postActual,total:true}];
+  const yMax=Math.ceil(m.prevActual*1.12/50)*50;const y=v=>M.t+(Ht-M.t-M.b)*(1-v/yMax);
+  niceTicks(yMax,5).forEach(v=>{S("line",{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),stroke:C("--grid")},svg);txt(svg,M.l-6,y(v)+4,v+"h",{"text-anchor":"end"});});
+  S("line",{x1:M.l,x2:W-M.r,y1:y(0),y2:y(0),stroke:C("--axis")},svg);
+  const band=(W-M.l-M.r)/steps.length,bw=Math.min(40,band*.55);let run=0;let prevTopX=null,prevLevel=null;
+  steps.forEach((s,i)=>{const cx=M.l+band*i+band/2;let a,b,fill;
+    if(s.total){a=0;b=s.v;run=s.v;fill="--s-out";}else{a=run;b=run+s.v;run=b;fill=s.v<0?"--div-neg":"--div-pos";}
+    const lo=Math.min(a,b),hi=Math.max(a,b);const h=Math.max(2,y(lo)-y(hi));
+    if(s.total)S("path",{d:topRoundRect(cx-bw/2,y(hi),bw,h,4),fill:C(fill)},svg);else S("rect",{x:cx-bw/2,y:y(hi),width:bw,height:h,rx:3,fill:C(fill)},svg);
+    if(prevTopX!=null)S("line",{x1:prevTopX,x2:cx-bw/2,y1:y(prevLevel),y2:y(prevLevel),stroke:C("--axis"),"stroke-width":1},svg);
+    prevTopX=cx+bw/2;prevLevel=run;
+    const lab=s.total?Math.round(s.v)+"h":(s.v>0?"+":"−")+Math.abs(s.v).toFixed(1)+"h";
+    txt(svg,cx,y(hi)-6,lab,{"text-anchor":"middle",class:"lbl-strong"});
+    const words=s.label.split(" ");txt(svg,cx,Ht-M.b+16,words[0],{"text-anchor":"middle"});if(words[1])txt(svg,cx,Ht-M.b+30,words.slice(1).join(" "),{"text-anchor":"middle"});});
+}
+
+/* 4 · upstairs duty heatmap (day × hour) */
+function heatmapChart(host,rows,markerDate){
+  host.replaceChildren();
+  const wrap=H("div","chart",null,host);const W=cw(host,760),M={l:52,r:10,t:22,b:30};const cell=(W-M.l-M.r)/24;const ch=12;const Ht=M.t+rows.length*ch+M.b;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${Ht}`,role:"img","aria-label":"Upstairs compressor duty by hour of day"},wrap);
+  const ramp=["--h0","--h1","--h2","--h3","--h4","--h5","--h6","--h7"];const col=v=>C(ramp[Math.min(7,Math.floor(v/12.5))]);
+  rows.forEach((r,ri)=>{r.vals.forEach((v,h)=>S("rect",{x:M.l+h*cell+1,y:M.t+ri*ch+1,width:cell-2,height:ch-2,rx:2,fill:col(v)},svg));
+    if(ri%3===0||ri===rows.length-1)txt(svg,M.l-6,M.t+ri*ch+ch-3,r.date,{"text-anchor":"end"});
+    if(r.date===markerDate){S("line",{x1:M.l-4,x2:W-M.r,y1:M.t+ri*ch,y2:M.t+ri*ch,stroke:C("--accent"),"stroke-width":1.5},svg);txt(svg,W-M.r,M.t+ri*ch-3,"Linked floors on",{"text-anchor":"end",fill:C("--accent"),"font-weight":"600"});}});
+  [0,3,6,9,12,15,18,21].forEach(h=>txt(svg,M.l+h*cell+cell/2,Ht-M.b+14,h===0?"12a":h<12?h+"a":h===12?"12p":(h-12)+"p",{"text-anchor":"middle"}));
+  txt(svg,M.l,M.t-8,"Upstairs compressor duty, % of each hour",{class:"lbl-strong"});
+  // ramp key
+  const key=H("div","chart-legend",null,host);H("span",null,"0%",key);const strip=H("span",null,null,key);strip.style.cssText="display:inline-flex;gap:2px";ramp.forEach(r=>{const s=H("span","sq",null,strip);s.style.background=C(r);s.style.width="16px";});H("span",null,"100%",key);
+  const tip=makeTip(wrap);const hl=S("rect",{width:cell,height:ch,fill:"none",stroke:C("--ink"),"stroke-width":1.5,rx:2,opacity:0},svg);
+  svg.addEventListener("pointermove",e=>{const r=svg.getBoundingClientRect();const sx=(e.clientX-r.left)*W/r.width,sy=(e.clientY-r.top)*Ht/r.height;
+    const h=Math.floor((sx-M.l)/cell),ri=Math.floor((sy-M.t)/ch);if(h<0||h>23||ri<0||ri>=rows.length){hideTip(tip);hl.setAttribute("opacity",0);return;}
+    hl.setAttribute("x",M.l+h*cell);hl.setAttribute("y",M.t+ri*ch);hl.setAttribute("opacity",1);const wr=wrap.getBoundingClientRect();
+    const lab=(h%12===0?12:h%12)+(h<12?" AM":" PM");showTip(tip,wrap,e.clientX-wr.left,e.clientY-wr.top,`${rows[ri].date} · ${lab}`,[{color:col(rows[ri].vals[h]),value:rows[ri].vals[h]+"%",label:"of the hour cooling"}]);});
+  svg.addEventListener("pointerleave",()=>{hideTip(tip);hl.setAttribute("opacity",0);});
+}
+
+/* 5 · coupling explorer: runtime vs main-floor target relative to upstairs */
+function couplingChart(host,tout,onBest){
+  host.replaceChildren();
+  legend(host,[{label:"Main floor unit",color:C("--s-main"),shape:"ln"},{label:"Upstairs unit",color:C("--s-up"),shape:"ln"},{label:"Both units (total)",color:C("--s-total"),shape:"ln"}]);
+  const wrap=H("div","chart",null,host);const W=cw(host,620),Ht=280,M={l:40,r:16,t:16,b:40};
+  const svg=S("svg",{viewBox:`0 0 ${W} ${Ht}`,role:"img","aria-label":"Simulated afternoon runtime against the main floor target"},wrap);
+  const offs=[];for(let o=3;o>=-4.001;o-=0.25)offs.push(+o.toFixed(2));
+  const x=o=>M.l+(3-o)/7*(W-M.l-M.r);const yMax=24;const y=v=>M.t+(Ht-M.t-M.b)*(1-v/yMax);
+  const data=offs.map(o=>({o,...coupling(o,tout)}));
+  // region where upstairs can't hold its target
+  const shortOffs=data.filter(d=>d.short).map(d=>d.o);
+  if(shortOffs.length){const a=Math.max(...shortOffs);const b=Math.min(...shortOffs);S("rect",{x:x(a),y:M.t,width:Math.max(4,x(b)-x(a)+(W-M.l-M.r)/28),height:Ht-M.t-M.b,fill:C("--crit-soft")},svg);
+    txt(svg,x(a)+6,M.t+14,"Upstairs can't hold 77°F",{fill:C("--crit"),"font-weight":"600"});}
+  niceTicks(yMax,4).forEach(v=>{S("line",{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),stroke:C("--grid")},svg);txt(svg,M.l-6,y(v)+4,v+"h",{"text-anchor":"end"});});
+  S("line",{x1:M.l,x2:W-M.r,y1:y(0),y2:y(0),stroke:C("--axis")},svg);
+  [3,2,1,0,-1,-2,-3,-4].forEach(o=>{txt(svg,x(o),Ht-M.b+16,(o>0?"+":o<0?"−":"")+Math.abs(o)+"°",{"text-anchor":"middle"});
+    txt(svg,x(o),Ht-M.b+30,(77+o)+"/77",{"text-anchor":"middle",opacity:.75});});
+  const line=(k,c,w)=>S("polyline",{points:data.map(d=>x(d.o)+","+y(d[k])).join(" "),fill:"none",stroke:C(c),"stroke-width":w,"stroke-linejoin":"round","stroke-linecap":"round"},svg);
+  line("main","--s-main",2);line("up","--s-up",2);line("total","--s-total",2.5);
+  const ok=data.filter(d=>!d.short&&Number.isInteger(d.o));const best=ok.reduce((a,b)=>b.total<a.total?b:a);const today=data[0];
+  S("circle",{cx:x(best.o),cy:y(best.total),r:5,fill:C("--s-total"),stroke:C("--surface"),"stroke-width":2},svg);
+  txt(svg,x(best.o),y(best.total)-12,"lowest total "+best.total.toFixed(1)+"h",{"text-anchor":"middle",class:"lbl-strong"});
+  S("circle",{cx:x(today.o),cy:y(today.total),r:5,fill:C("--s-total"),stroke:C("--surface"),"stroke-width":2},svg);
+  txt(svg,x(today.o)+8,y(today.total)-10,"Smart Away today",{class:"lbl-strong"});
+  const tip=makeTip(wrap);const cross=S("line",{y1:M.t,y2:Ht-M.b,stroke:C("--ink-2"),"stroke-width":1,opacity:0},svg);
+  svg.addEventListener("pointermove",e=>{const r=svg.getBoundingClientRect();const sx=(e.clientX-r.left)*W/r.width;
+    let bi=0,bd=1e9;data.forEach((d,i)=>{const dd=Math.abs(x(d.o)-sx);if(dd<bd){bd=dd;bi=i;}});const d=data[bi];
+    cross.setAttribute("x1",x(d.o));cross.setAttribute("x2",x(d.o));cross.setAttribute("opacity",.6);const wr=wrap.getBoundingClientRect();
+    showTip(tip,wrap,e.clientX-wr.left,e.clientY-wr.top,`Main ${(77+d.o).toFixed(d.o%1?1:0)}°F · Upstairs 77°F`,[
+      {color:C("--s-total"),value:hoursFmt(d.total),label:"Both units"},{color:C("--s-main"),value:hoursFmt(d.main),label:"Main floor"},
+      {color:C("--s-up"),value:d.short?"12h 00m+":hoursFmt(d.up),label:d.short?"Upstairs (maxed out)":"Upstairs"}]);});
+  svg.addEventListener("pointerleave",()=>{hideTip(tip);cross.setAttribute("opacity",0);});
+  if(onBest)onBest(best,today);
+}
+
+/* 6 · indoor temperature, last 6 hours (5-minute points) */
+function tempsChart(host,series){
+  host.replaceChildren();
+  legend(host,series.map(s=>({label:s.label,color:C(s.color),shape:"ln"})));
+  const wrap=H("div","chart",null,host);const W=cw(host,560),Ht=200,M={l:36,r:44,t:10,b:24};
+  const svg=S("svg",{viewBox:`0 0 ${W} ${Ht}`,role:"img","aria-label":"Zone temperatures, last six hours"},wrap);
+  const all=series.flatMap(s=>s.values);const lo=Math.floor(Math.min(...all)-.3),hi=Math.ceil(Math.max(...all)+.3);const n=series[0].values.length;
+  const x=i=>M.l+i/(n-1)*(W-M.l-M.r),y=v=>M.t+(Ht-M.t-M.b)*(1-(v-lo)/(hi-lo));
+  for(let v=lo;v<=hi;v++){S("line",{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),stroke:C("--grid")},svg);txt(svg,M.l-6,y(v)+4,v+"°",{"text-anchor":"end"});}
+  ["−6h","−4h","−2h","now"].forEach((s,k)=>txt(svg,M.l+(k/3)*(W-M.l-M.r),Ht-6,s,{"text-anchor":"middle"}));
+  series.forEach(s=>{S("polyline",{points:s.values.map((v,i)=>x(i)+","+y(v)).join(" "),fill:"none",stroke:C(s.color),"stroke-width":2,"stroke-linejoin":"round"},svg);
+    const lv=s.values[n-1];S("circle",{cx:x(n-1),cy:y(lv),r:4,fill:C(s.color),stroke:C("--surface"),"stroke-width":2},svg);txt(svg,x(n-1)+8,y(lv)+4,lv.toFixed(1)+"°",{class:"lbl-strong"});});
+  const tip=makeTip(wrap);const cross=S("line",{y1:M.t,y2:Ht-M.b,stroke:C("--ink-2"),opacity:0},svg);
+  svg.addEventListener("pointermove",e=>{const r=svg.getBoundingClientRect();const sx=(e.clientX-r.left)*W/r.width;const i=Math.max(0,Math.min(n-1,Math.round((sx-M.l)/(W-M.l-M.r)*(n-1))));
+    cross.setAttribute("x1",x(i));cross.setAttribute("x2",x(i));cross.setAttribute("opacity",.5);const mins=(n-1-i)*5;const wr=wrap.getBoundingClientRect();
+    showTip(tip,wrap,e.clientX-wr.left,e.clientY-wr.top,mins===0?"Now":`${Math.floor(mins/60)}h ${mins%60}m ago`,series.map(s=>({color:C(s.color),value:s.values[i].toFixed(1)+"°F",label:s.label})));});
+  svg.addEventListener("pointerleave",()=>{hideTip(tip);cross.setAttribute("opacity",0);});
+}
+/* ---------- wiring ---------- */
+(function(){
+const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll(s));
+const pct=v=>(v<0?"−":"+")+Math.abs(v*100).toFixed(0)+"%";
+const h1=v=>v.toFixed(1)+" h";
+const M=MODEL;
+const prev=DAYS.slice(28,42), post=DAYS.slice(42);
+const avg=(a,f)=>a.reduce((s,d)=>s+f(d),0)/a.length;
+
+/* per-unit baselines (same method as the house model) */
+const base=DAYS.filter(d=>d.policy==="default");
+const fitUnit=k=>{const b=ols(base.map(d=>[1,d.cdd,d.solar]),base.map(d=>d[k]));return d=>b[0]+b[1]*d.cdd+b[2]*d.solar;};
+const predUp=fitUnit("up"), predMain=fitUnit("main");
+const upExp=post.reduce((s,d)=>s+predUp(d),0), upAct=post.reduce((s,d)=>s+d.up,0);
+const mainExp=post.reduce((s,d)=>s+predMain(d),0), mainAct=post.reduce((s,d)=>s+d.main,0);
+const lo=M.normPct-M.ciPct, hi=M.normPct+M.ciPct;
+
+/* ---- tabs ---- */
+const tabs=$$(".app-tabs [role=tab]");
+function select(id,focus){tabs.forEach(t=>{const on=t.id===id;t.setAttribute("aria-selected",on);t.tabIndex=on?0:-1;$("#"+t.getAttribute("aria-controls")).hidden=!on;if(on&&focus)t.focus();});
+  try{localStorage.setItem("cai-tab",id);}catch(e){}
+  document.dispatchEvent(new CustomEvent("cai:tab",{detail:id}));}
+tabs.forEach((t,i)=>{t.addEventListener("click",()=>select(t.id));t.addEventListener("keydown",e=>{let j=null;if(e.key==="ArrowRight")j=(i+1)%tabs.length;else if(e.key==="ArrowLeft")j=(i-1+tabs.length)%tabs.length;else if(e.key==="Home")j=0;else if(e.key==="End")j=tabs.length-1;if(j!=null){e.preventDefault();select(tabs[j].id,true);}});});
+$$("[data-jump]").forEach(a=>a.addEventListener("click",()=>select(a.dataset.jump)));
+try{const saved=localStorage.getItem("cai-tab");if(saved&&$("#"+saved))select(saved);}catch(e){}
+
+/* ---- live ---- */
+function wave(start,end,amp,period,phase){const v=[];for(let i=0;i<72;i++){const t=i/71;const saw=((i+phase)%period)/period;v.push(start+(end-start)*t+amp*(0.5-saw)+0.05*gauss());}
+  v[71]=end;return v;}
+const TEMPS=[
+  {label:"Main floor",color:"--s-main",values:wave(77.0,77.4,0.6,9,3)},
+  {label:"Upstairs",color:"--s-up",values:wave(76.2,78.4,0.45,12,5)},
+  {label:"Bed / Office",color:"--s-bed",values:wave(75.8,75.9,0.5,14,1)}];
+let ago=8;setInterval(()=>{ago=ago>=179?2:ago+1;$("#liveAgo").textContent=`Live · updated ${ago} s ago`;},1000);
+const sg=$("#suggest");
+$("#sgApply").addEventListener("click",()=>{sg.replaceChildren();const w=H("span","who","Applied",sg);H("p",null,"Main floor set to 78°F until 6 PM. The controller will undo it early if the upstairs duty passes 85%.",sg);
+  const ev=H("div","ev");H("time",null,"3:44 PM",ev);const d=H("div",null,null,ev);H("b",null,"Main floor 77° → 78° until 6 PM",d);H("div","who","You approved Claude's suggestion",d);$("#feed").prepend(ev);});
+$("#sgSkip").addEventListener("click",()=>{sg.replaceChildren();H("span","who","Dismissed",sg);H("p",null,"Got it. Claude records the dismissal as a preference signal and won't suggest this again today.",sg);});
+
+/* ---- runtime ---- */
+let range=28;
+function renderRuntime(){const days=DAYS.slice(-range);const mi=days.findIndex(d=>d.policy==="linked");runtimeChart($("#ch-runtime"),days,mi>0?mi:null);
+  const t=$("#rtTable");t.replaceChildren();const th=H("thead",null,null,t);const tr=H("tr",null,null,th);["Day","Schedule","Main","Upstairs","Bed/Office","House","CDD"].forEach(s=>H("th",null,s,tr));
+  const tb=H("tbody",null,null,t);days.slice().reverse().forEach(d=>{const r=H("tr",null,null,tb);H("td",null,d.date,r);H("td",null,d.policy==="linked"?"Linked floors":"ecobee default",r);
+    [d.main,d.up,d.bed,d.total].forEach(v=>H("td","num",hoursFmt(v),r));H("td","num",d.cdd.toFixed(1),r);});}
+$$("#rangeSeg button").forEach(b=>b.addEventListener("click",()=>{$$("#rangeSeg button").forEach(x=>x.setAttribute("aria-pressed",x===b));range=+b.dataset.n;renderRuntime();}));
+
+
+/* ---- analytics ---- */
+(function(){const v=$("#verdict");const weatherPts=(M.weatherCdd+M.weatherSun)/M.prevActual;
+  const tile=(cls,lbl,val,note)=>{const d=H("div",cls,null,v);H("span","lbl",lbl,d);H("span","val",val,d);H("span","note",note,d);};
+  tile("","Raw change, last 14 days vs the 14 before",pct(M.rawPct),`${Math.round(M.prevActual)} h → ${Math.round(M.postActual)} h. Looks great, but it was cooler.`);
+  tile("","How much of that was weather",`${Math.abs(weatherPts*100).toFixed(0)} of ${Math.abs(M.rawPct*100).toFixed(0)} pts`,`${avg(prev,d=>d.cdd).toFixed(1)} → ${avg(post,d=>d.cdd).toFixed(1)} cooling degree-days per day`);
+  tile("hl","Linked floors, vs weather-expected",pct(M.normPct),`${Math.round(-M.policy)} h saved in 14 days · 90% interval ${pct(hi)} to ${pct(lo)}`);
+  const mc=$("#modelCard");H("b",null,"Baseline model, house total: ",mc);
+  mc.append(`runtime per day = ${M.beta[0].toFixed(2)} h + ${M.beta[1].toFixed(2)} h × CDD + ${M.beta[2].toFixed(2)} h × sun (kWh/m²). Fitted on ${M.n} days of the ecobee default schedule (Aug 8 – Sep 18). R² ${M.r2.toFixed(2)} · CV(RMSE) ${(M.cvrmse*100).toFixed(1)}%, under the 20% bar this plan takes from ASHRAE Guideline 14. Per unit: upstairs ran ${pct(upAct/upExp-1)} vs expected, main floor ${pct(mainAct/mainExp-1)}. The upstairs savings outweigh the extra main-floor runtime.`);
+  $("#finishedLine").textContent=`Adopted Sep 19 · ${pct(M.normPct)} house runtime vs weather-expected (90% interval ${pct(hi)} to ${pct(lo)})`;
+})();
+
+/* ---- coupling ---- */
+function renderCoupling(){const t=+$("#toutR").value;$("#toutO").textContent=t+"°F";
+  couplingChart($("#ch-coupling"),t,(best,today)=>{const r=$("#couplingRead");r.replaceChildren();
+    const where=best.o===0?"level with the upstairs (77/77)":best.o<0?`${Math.abs(best.o)}° cooler than the upstairs (${(77+best.o).toFixed(best.o%1?1:0)}/77)`:`${best.o}° warmer than the upstairs`;
+    r.append(`At ${t}°F the lowest combined runtime comes with the main floor ${where}: `);H("b",null,hoursFmt(best.total),r);
+    r.append(` for both units. Smart Away (80/77) costs `);H("b",null,hoursFmt(today.total),r);
+    r.append(today.short?`, and the upstairs still can't hold 77°F. `:". ");
+    r.append(`That's ${Math.round((today.total/best.total-1)*100)}% more runtime for a worse result upstairs.`);});}
+$("#toutR").addEventListener("input",renderCoupling);
+
+const renders={"t-live":()=>tempsChart($("#ch-temps"),TEMPS),
+  "t-runtime":()=>{renderRuntime();heatmapChart($("#ch-heat"),DUTY,"Sep 19");},
+  "t-analytics":()=>{scatterChart($("#ch-scatter"),DAYS,M);waterfallChart($("#ch-water"),M);},
+  "t-coupling":renderCoupling};
+function renderTab(id){if(renders[id])renders[id]();}
+let curTab=(tabs.find(t=>t.getAttribute("aria-selected")==="true")||tabs[0]).id;renderTab(curTab);
+document.addEventListener("cai:tab",e=>{curTab=e.detail;renderTab(curTab);});
+let lastW=window.innerWidth,rt=null;window.addEventListener("resize",()=>{if(window.innerWidth===lastW)return;lastW=window.innerWidth;clearTimeout(rt);rt=setTimeout(()=>renderTab(curTab),150);});
+
+/* scored example in the write-up */
+(function(){const t=$("#scoreTable");const th=H("thead",null,null,t);const tr=H("tr",null,null,th);["Strategy","Main","Upstairs","Both","Upstairs holds 77°?"].forEach(s=>H("th",null,s,tr));
+  const tb=H("tbody",null,null,t);const rows=[["Smart Away today (80 / 77)",3],["Both at 77",0],["Linked, main 1° cooler (76 / 77)",-1],["Linked, main 2° cooler (75 / 77)",-2]];
+  const res=rows.map(([n,o])=>({n,o,...coupling(o,95)}));const best=res.filter(r=>!r.short).reduce((a,b)=>b.total<a.total?b:a);
+  res.forEach(r=>{const row=H("tr",null,null,tb);const c=H("td",null,null,row);H("b",null,r.n,c);if(r===best){c.append(" ");H("span","pill good","lowest",c);}
+    H("td","num",hoursFmt(r.main),row);H("td","num",r.short?"12h 00m (maxed)":hoursFmt(r.up),row);H("td","num",hoursFmt(r.total),row);
+    const ok=H("td",null,null,row);H("span",r.short?"pill crit":"pill good",r.short?"No, maxed out":"Yes",ok);});})();
+
+/* ---- experiments: 14-day randomized switchback starting Sep 24 ---- */
+(function(){const cal=$("#cal");const arms=["B","B","B","A","B","B","A","A","A","A","B","A","A","B"];const start=Date.UTC(2026,8,24);
+  arms.forEach((a,k)=>{const d=new Date(start+k*864e5);const lbl=MON[d.getUTCMonth()]+" "+d.getUTCDate();const day=DAYS.find(x=>x.date===lbl);
+    const cell=H("div","d "+a,null,cal);H("span",null,lbl,cell);H("b",null,a,cell);
+    if(day){H("span",null,"done",cell);cell.title=`${lbl}: ${a==="A"?"main 1° cooler":"main 2° cooler"}, complete`;}
+    else if(k===9){cell.classList.add("today");H("span",null,"today",cell);}else{cell.classList.add("future");H("span",null,"—",cell);}});
+})();
+
+/* ---- Ask Claude ---- */
+const answers=[
+  ()=>({tools:['query_runtime(start="Aug 8", end="Oct 2", resolution="day")','get_weather(start="Aug 8", end="Oct 2")','baseline_report(period="Sep 19–Oct 2")'],
+    paras:[`Both, but mostly weather. House runtime fell ${pct(M.rawPct).replace("+","")} in the 14 days since Linked floors started (${Math.round(M.prevActual)} h → ${Math.round(M.postActual)} h). Those days averaged ${avg(post,d=>d.cdd).toFixed(1)} cooling degree-days against ${avg(prev,d=>d.cdd).toFixed(1)} before, so a large drop was coming either way.`,
+      `With the new period's weather, the baseline expects ${Math.round(M.postExpected)} h. The house used ${Math.round(M.postActual)} h, which is ${pct(M.normPct)} against expected, with a 90% interval of ${pct(hi)} to ${pct(lo)}. That part is Linked floors.`,
+      `By unit: the upstairs ran ${pct(upAct/upExp-1)} against its own expected, and the main floor ran ${pct(mainAct/mainExp-1)}. That's the trade the house model predicted: the main floor works a little more so the upstairs works a lot less. Comfort improved too, since the upstairs stopped maxing out.`]}),
+  ()=>{const y=DAYS[DAYS.length-1];const exp=M.pred(y);const before=DAYS.slice(0,-1).reverse().find(d=>d.total>=y.total);const prior=DAYS.slice(-14,-1);
+    return {tools:['get_house_status()','query_runtime(start="Oct 2", end="Oct 2", resolution="hour")','get_weather(start="Sep 19", end="Oct 2")','baseline_report(period="Oct 2")'],
+    paras:[`Yesterday (${y.date}) the house ran ${hoursFmt(y.total)}${before?`, the most since ${before.date}`:""}. It was also the hottest day in two weeks: a mean of ${y.mean}°F and ${y.cdd} cooling degree-days, against ${avg(prior,d=>d.cdd).toFixed(1)} on average over the 13 days before.`,
+      `For that weather the baseline expects ${hoursFmt(exp)}. Actual was ${pct(y.total/exp-1)} against that, so yesterday was a normal day for its weather. Nothing broke and nothing needs changing.`,
+      `By unit: main floor ${hoursFmt(y.main)}, upstairs ${hoursFmt(y.up)}, bed wing ${hoursFmt(y.bed)}. The main floor held the linked offset all afternoon because the Toy Room was occupied from 1 to 6 PM. The upstairs peaked at 78% duty around 4 PM and never maxed out.`]};},
+  ()=>({tools:['coupling_report(units=["main","bed"])','query_sensors(units=["main","bed"], start="Aug 8", end="Oct 2")'],
+    paras:["Barely, if at all. Across 56 days of 5-minute data, the bedroom wing's heat gain doesn't change measurably when the main floor runs warm. The fitted link is 0.03°F/hr per °F (90% interval −0.02 to 0.08). For comparison, main floor to upstairs is 0.41.",
+      "The wing's runtime follows outdoor temperature and afternoon sun on its own walls. My recommendation is to keep it on its own schedule.",
+      "If you want to be certain, I can propose a one-week test: the main floor alternates between 76°F and 79°F on random days while the wing holds 76°F. If the wing's runtime doesn't move between the two, that settles it."]})
+];
+function ask(i){$$("#qchips .qchip").forEach(b=>b.setAttribute("aria-pressed",+b.dataset.q===i));const log=$("#chatLog");log.replaceChildren();
+  const q=$$("#qchips .qchip")[i].textContent;H("div","msg user",q,log);const a=answers[i]();const m=H("div","msg ai",null,log);
+  const tl=H("div","tools",null,m);a.tools.forEach(t=>H("span","toolcall",t,tl));a.paras.forEach(p=>H("p",null,p,m));}
+$$("#qchips .qchip").forEach(b=>b.addEventListener("click",()=>ask(+b.dataset.q)));ask(0);
+$("#composer").addEventListener("submit",e=>e.preventDefault());
+
+/* ---- guardrails ---- */
+const desc={"Observe only":"Collects data and reports. Never changes a thermostat.",
+  "Suggest mode":"Proposes changes in the app and on your phone. Nothing changes until you tap Apply.",
+  "Auto within limits":"Applies changes inside your limits without asking, tells you, and lets you undo any change for 24 hours. New experiments still need your approval."};
+function setMode(m){$$("#autoSeg button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.m===m));$("#autoDesc").textContent=desc[m];$("#modeChip").textContent=m;}
+$$("#autoSeg button").forEach(b=>b.addEventListener("click",()=>setMode(b.dataset.m)));setMode("Suggest mode");
+
+/* ---- page TOC scrollspy ---- */
+const links=$$(".toc a");const map=new Map(links.map(a=>[a.getAttribute("href").slice(1),a]));
+if("IntersectionObserver" in window){const io=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){links.forEach(l=>l.classList.remove("on"));const l=map.get(e.target.id);if(l){l.classList.add("on");}}});},{rootMargin:"-45% 0px -50% 0px"});
+  map.forEach((_,id)=>{const s=document.getElementById(id);if(s)io.observe(s);});}
+})();
+</script>
+
+</body>
+</html>
