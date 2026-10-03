@@ -1,9 +1,10 @@
 # Climate AI blueprint
 
 A whole-house optimizer for three ecobee thermostats. It monitors every sensor, separates weather
-from strategy in every number, learns how the floors push heat into each other, and adjusts
-schedules to minimize total runtime while occupied rooms stay comfortable. Claude Opus 5.5
-(through the Claude Agent SDK) is the analyst. A deterministic controller does the controlling.
+from strategy in every number, learns how the floors push heat into each other, keeps occupied
+rooms comfortable first, and adjusts schedules to minimize total runtime. Statistical models do
+the learning. Claude Opus 5.5 (through the Claude Agent SDK) is the analyst that steers them. A
+deterministic controller does the controlling.
 
 The interactive version of this document, including a working mockup of the app, is
 [`blueprint.html`](./blueprint.html). Open it in a browser.
@@ -14,21 +15,21 @@ The interactive version of this document, including a working mockup of the app,
 
 | Unit | Thermostat | Remote sensors | Notes |
 |---|---|---|---|
-| **Main floor** | ecobee in the Hallway | School Room, Living Room, Kitchen | Its heat rises into the upstairs through the floor and the open stairwell |
-| **Upstairs** | ecobee Smart Thermostat Essential in the Toy Room | Girls' Room | Under the roof. Loaded by the sun and by heat from the main floor |
-| **Bed / Office** | ecobee in the Bedroom (confirm) | Office | Opposite side of the house. No link to the upstairs; a weak link to the main floor at most |
+| **Main floor** | ecobee in the Hallway (model to confirm) | School Room, Living Room, Kitchen | Its heat rises into the upstairs through the floor and the open stairwell |
+| **Upstairs** | ecobee Smart Thermostat Essential in the Toy Room (`attisRetail`, **no occupancy sensor**) | Girls' Room | Under the roof. Loaded by the sun and by heat from the main floor |
+| **Bed / Office** | ecobee in the Bedroom (model to confirm) | Office | Opposite side of the house. No link to the upstairs; a weak link to the main floor at most |
 
-That's seven temperature points, each with motion-based occupancy. Humidity is measured at the three
-thermostats only; SmartSensors report temperature and occupancy. A sensor reads "occupied" for
-30 minutes after it last saw motion.
+There are seven temperature points. The four SmartSensors report motion-based occupancy. The
+Essential has no occupancy sensor, and the Hallway and Bedroom thermostats have one unless they are
+ecobee3 lite models. Humidity comes from the thermostats only.
 
-**Observed problem.** When the main floor is empty, ecobee Smart Away lets it float to about 80°F. If
-someone is upstairs holding 77°F, heat from the warmer main floor rises, the upstairs unit hits
-100% duty and runs all afternoon, and the house spends more than the main floor saved. Each ecobee
-reports only itself, so its reports can't show this.
-
-**What to measure first:** how strongly each floor is coupled to the others, each unit's cooling
-rate, sensitivity to sun, and balance points.
+**Observed problem.** When the main floor is empty, ecobee Smart Away lets it float warm (about
+80°F). If someone is upstairs holding 77°F, heat from the warmer main floor rises. That extra load is
+the likely reason the upstairs unit hits 100% duty and runs all afternoon, so the house spends more
+than the main floor saved. The history study measures how much is the floor and how much is sun. Each
+ecobee reports only itself, so its reports can't show this. Two variants exist: classic Smart Away
+switches to the Away comfort setting, while eco+ "Eco Away" applies a relative 1–4°F setback. The
+backfill's calendar events show which one fired.
 
 ---
 
@@ -36,21 +37,20 @@ rate, sensitivity to sun, and balance points.
 
 ### Controller rules
 
-1. **Linked floors (buffer zone).** When the main floor is empty but the upstairs is occupied, the
-   main floor's target is tied to the upstairs target plus a learned offset. The starting offset
-   is 1°F cooler than upstairs. It never floats to 80°F.
-2. **Setback and recovery move together.** When the whole house is empty, both floors set back and
-   keep the offset (for example main 80°F, upstairs 82°F). On recovery the main floor leads by a
-   learned interval (0–45 min), so the upstairs recovers with less heat coming up from below.
-3. **Pre-cool with the forecast.** On hot, sunny days, cool the upstairs 1–2°F below target before
-   noon while the outdoor air is mild, then coast through the solar peak. Skip it on mild days.
-4. **Sensor sets by time of day.** Upstairs uses the Toy Room by day and the Girls' Room at night.
-   The main floor uses the Living Room, Kitchen and School Room. The wing uses the Office 9–5 and
-   the Bedroom at night. These are written into the ecobee comfort settings, and Follow Me is
-   turned off.
+1. **Linked floors (buffer zone).** When the main floor is empty but anyone is upstairs (including
+   asleep), the main floor's target is tied to the upstairs target plus a learned offset, starting
+   at 1°F cooler. It never floats to its Away setting.
+2. **Setback and recovery move together.** When the whole house is empty, both floors set back
+   together with the main floor still the cooler one (for example main 80°F, upstairs 82°F). The
+   setback gap is learned separately from the 1°F occupied offset. On recovery the main floor leads by a
+   learned interval (0–45 min).
+3. **Pre-cool with the forecast** on hot, sunny days; skip it on mild days.
+4. **Sensor sets by time of day**, written into the ecobee comfort settings. Temperature holds use
+   the **Home** comfort setting's sensors, so the current block's set goes into Home too.
+   Follow Me is off.
 5. **Bed / Office stays independent** unless the data shows coupling to the main floor.
-6. **Protect the equipment and the air.** Minimum run and off times; cycles per hour tracked;
-   indoor humidity ≤ 58%; a manual change at a thermostat makes the app back off.
+6. **Protect the equipment and the air:** minimum run and off times, cycles per hour tracked,
+   indoor humidity ≤ 58%, and back-off when someone changes a thermostat by hand.
 
 ### Objective
 
@@ -63,187 +63,277 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
             no short cycling (runs < 5 min)
 ```
 
-The right offset depends on outdoor temperature, sun and time of day, so it is learned per
-condition rather than fixed. Example from the illustrative house model: on a 95°F afternoon with
-the upstairs at 77°F, Smart Away (80/77) maxes out the upstairs. Keeping the main floor 2°F cooler
-gives the lowest combined runtime, and the upstairs holds its target.
+---
 
-### A cooling day
+## 3. Occupancy
 
-| Time | What happens | Who decides |
+Occupied rooms come first. An occupied room's comfort is never traded for runtime.
+
+**Why ecobee's flag isn't enough.** The API reports occupancy as "motion in the past 30 minutes",
+updated about every 3 minutes in the cloud. PIR motion sensors miss people sitting still or
+sleeping. The Toy Room has no occupancy sensing at all.
+
+**Signals the app uses.**
+- Live motion from each SmartSensor over local HomeKit (pushed in seconds), plus polled "seconds
+  since last motion".
+- Learned per-room patterns from the 5-minute sensor history (school days, weekends, holidays
+  separately). The Toy Room has no history until its presence sensor is installed.
+- Sleep windows for the Girls' Room and Bedroom: they count as occupied all night.
+- Add-on presence sensors (mmWave) where people sit still: Toy Room first, then Office and Living
+  Room. Door contacts on bedrooms (closed after motion means someone is probably inside).
+- Phones only for whole-house "adults away"; the kids carry no phones.
+
+**States.** Start with three; add Arriving once predictions prove out.
+
+| State | When | Effect |
 |---|---|---|
-| 3:30 AM | Yesterday's ecobee data is final (it runs about an hour behind). Models refit; Claude reviews and writes the digest | Model jobs + Claude |
-| 6:00 AM | Forecast pulled; candidate plans simulated; cheapest plan that meets comfort chosen | Controller |
-| 7–11 AM | Pre-cool upstairs on hot days | Controller |
-| Midday | Main floor empties; the linked rule holds it | Controller |
-| 3–6 PM | Duty and room temperatures watched every 3 min; main floor lowered within limits if the upstairs is about to max out | Controller |
-| 5:30 PM | Evening recovery, main floor leading | Controller |
-| 10 PM | Night sensor sets; quiet hours | ecobee program, written by the app |
+| Occupied | Recent motion/presence, closed-door signal, or uncertainty | Must stay in band; ≤ 1°F over for ≤ 15 min |
+| Asleep | Girls' Room / Bedroom inside sleep windows | ≤ 0.5°F over for ≤ 10 min; priority all night |
+| Empty | No signal for the room's learned window | Drops out of the comfort targets, subject to linked floors |
+| Arriving (later) | Learned pattern says the room is likely in use soon | Recovery starts early, timed by the house model |
+
+A missed arrival costs comfort, while a false "occupied" only costs runtime, so uncertain means
+occupied. The house counts as empty only when adults' phones are away, there has been no motion
+anywhere for 45 minutes, and it's outside the sleep windows.
+
+**Control.** ecobee averages the participating sensors equally, with no weights. Slow loop: the
+sensor set per time block is written into the comfort settings (including Home). Every 3 minutes:
+the app learns each room's typical offset from the thermostat's average and picks the setpoint
+that keeps every occupied room in band. Conflicts on the same thermostat are resolved by priority:
+upstairs, the Girls' Room at night and the Toy Room by day; in the wing, the Bedroom at night and the
+Office in work hours; on the main floor, the School Room on school days and the Living Room in the
+evening.
+
+**Expectations.** Within one floor, occupancy mostly buys comfort. Runtime savings come from empty
+floors and the linked-floors rule. Studies of multi-zone buildings (residence halls, zone-level
+tests in larger buildings) find setbacks save less than predicted, because an empty zone pulls heat
+from its neighbors, so savings are always measured on the whole house.
 
 ---
 
-## 3. Learning loop
+## 4. Machine learning and Claude
 
-1. **Backfill, then watch.** Pull the 5-minute history ecobee still holds (roughly 12–18 months,
-   in 31-day chunks) and the matching hourly weather from the Open-Meteo archive. No changes yet.
-2. **Fit the weather baseline.** Per unit: grid-search the balance point (30–90°F, CalTRACK
-   style), compute degree-days from hourly temperatures, and regress runtime on degree-days,
-   sun and humidity. Gate: CV(RMSE) ≤ 20% on held-out days.
-3. **Fit the thermal model.** A grey-box RC model per zone, refit nightly, with a Kalman filter
-   between refits:
+### Who decides what
 
-   ```
-   C_up·dT_up/dt     = (T_out−T_up)/R_up + (T_main−T_up)/R_mu + k_s·max(0, T_main−T_up)
-                       + a_up·Sun − Q_up·on_up(t) + g_up
-   C_main·dT_main/dt = (T_out−T_main)/R_m + (T_up−T_main)/R_mu + (T_bed−T_main)/R_mb
-                       + a_m·Sun − Q_main·on_main(t) + g_main
-   C_bed·dT_bed/dt   = (T_out−T_bed)/R_b + (T_main−T_bed)/R_mb + a_b·Sun − Q_bed·on_bed(t) + g_bed
-   ```
+| Layer | Cadence | Does | Can change |
+|---|---|---|---|
+| **Claude Opus 5.5** (judgment) | nightly, weekly, minutes after an anomaly, on request | diagnose, design and audit experiments, explain, propose model improvements | proposes features, model settings, plan parameters inside a pre-approved range, and experiments (you approve); can veto the optimizer's next pick; all gated |
+| **Models & optimizer** (skill) | refit nightly; replan 6 AM, noon, 3 PM and on forecast shifts | baselines, house model, daily plan, experiment statistics, next-test choice | today's plan within policy and limits |
+| **Controller** (reflexes) | every 3 min; seconds on local occupancy changes | runs the plan; writes 1–2 h timed holds renewed only while healthy | never waits on Claude |
 
-   A small `R_mu` means a strong main-to-upstairs link. `k_s` is the one-way stairwell term.
-   A large `R_mb` confirms the wing is independent.
-4. **Simulate tomorrow.** Run candidate plans (offset, pre-cool, recovery lead) against the forecast
-   and keep the cheapest plan that meets comfort (simple model predictive control).
-5. **Test in the real house.** Randomized switchback: days are randomly assigned to champion or
-   challenger, the first few hours after each switch are dropped (thermal mass), and results are
-   weather-normalized. A test stops when the 90% interval excludes zero or it hits its maximum length.
-6. **Adopt, then keep tuning.** Settings become condition-specific, Bayesian optimization picks the
-   next values to try, and drift detection flags season changes or equipment problems.
+Gates for every change: backtest → simulation → 3–7 shadow days (logs only) → trial window
+(acts for a limited window, such as afternoons) → your limits.
 
-**Division of labor.** The math (statsmodels/scipy) fits models, runs the 3-minute control loop,
-enforces limits and computes statistics. Claude reads results, explains them, spots anomalies,
-proposes experiments and answers questions. Claude is never in the real-time loop and never
-writes to a thermostat directly.
+### Why not Claude in the 3-minute loop
 
-**Dialed in** means experiments stop finding differences larger than their own uncertainty. Heating
-season needs a new learning pass, because heat rising from the main floor then helps the upstairs.
+About 480 calls a day would cost roughly $300–1,300 a month on the API. An always-running Agent SDK
+service should use an API key, not a subscription. House temperatures respond over tens of minutes
+to hours, so 480 quick decisions add no control. Opus 5.5 answers aren't guaranteed repeatable. The
+house would have no driver during outages. And a 2026 review of 66 studies found no language-model
+HVAC controller ready for real operation, recommending advisory roles. The layered design costs
+roughly $35–70 a month.
+
+### How Claude speeds up the learning
+
+1. **Mine the history.** Treat past warm-main-floor afternoons as natural experiments, with checks
+   against being fooled: the bed wing should show no effect, and fake event times on similar days
+   should show none. Sun, weaker AC on hot afternoons and Smart Away all peak together, so a naive
+   comparison overstates coupling.
+2. **Kill bad ideas in simulation.** Only candidates that beat the model's own uncertainty get a
+   real day.
+3. **Size every test first.** A single house can usually confirm a 10–15% change within a season
+   (roughly 1–7 weeks of test days per option, 2–14 weeks in all). A 5% change can take 50–200 days
+   per option, so small refinements are judged mainly in the simulator.
+4. **Fix the success measure and checkpoints in advance.** Total-house runtime, 2–3 pre-planned
+   checkpoints, with stricter (wider) intervals at the early ones (alpha spending) so the looks
+   together keep about a 10% false-win rate. Daily peeking manufactures false wins.
+5. **Audit the next-test choice.** The optimizer's math picks the next setting to try; Claude
+   explains it and can veto it with a reason.
+6. **Fix the model.** Claude proposes features when errors show a pattern; the gates decide.
+
+### Robustness, honestly
+
+A public set of about 60,000 house models fitted to ecobee data has a median indoor-temperature
+error of about 0.6°F one hour ahead and about 2.5°F a day ahead, and roughly 1 in 10 fit poorly.
+Three coupled zones measured through runtime alone will do somewhat worse. That is good enough for
+coarse decisions (offset band, pre-cool yes or no, recovery lead), not for trusting minute-by-minute
+trajectories. Without a power monitor, heat flows are learned in runtime minutes, not watts.
+
+**Build order:** weather baselines, the history study and the linked-floors rule (checked against
+the weather baseline, then tuned with one planned switchback) come first. The full house model and automatic tuning join only if they beat that rule
+in backtests.
+
+### The house model (when it earns its place)
+
+```
+C_up·dT_up/dt     = (T_out−T_up)/R_up + (T_main−T_up)/R_mu + k_s·max(0, T_main−T_up)
+                    + a_up·Sun − Q_up·on_up(t) + g_up
+C_main·dT_main/dt = (T_out−T_main)/R_m + (T_up−T_main)/R_mu + (T_bed−T_main)/R_mb
+                    + a_m·Sun − Q_main·on_main(t) + g_main
+C_bed·dT_bed/dt   = (T_out−T_bed)/R_b + (T_main−T_bed)/R_mb + a_b·Sun − Q_bed·on_bed(t) + g_bed
+```
+
+Fitted from weeks 3–6 but run in shadow; its plans drive the house only once it beats the
+linked-floors rule in backtests. Start simple; keep extra states (attic, envelope) only if they
+predict better on held-out data.
+Separate cooling and heating parameter sets. Publish nightly which parameters the data can't pin
+down.
+
+### Checks
+
+Clean data; walk-forward backtests by season; both scatter (CV(RMSE) ≤ 20%) and bias; physical
+sanity; shadow days; canary windows; drift watch that triggers a Claude investigation.
+
+### Fallbacks
+
+Failed model → last good model. No good model → linked-floors rules. Server down → holds expire
+within 2 hours, and each ecobee runs its own schedule (Smart Away stays off in settings). Cloud
+down → HomeKit live readings and basic timed holds.
+
+### Claude and model code
+
+Settings change through tools with automatic checks. Code changes come only as pull requests from
+Claude Code. The scoring harness and recent holdout weeks stay read-only and out of the agent's
+reach (a 2026 study found AI coding agents tampering with unlocked evaluations in about half of
+runs). CI runs the backtest, a person merges, and a merged model starts in shadow mode.
 
 ---
 
-## 4. Weather and analytics
-
-### Sources (all free)
+## 5. Weather and analytics
 
 | Source | Role | Notes |
 |---|---|---|
-| Open-Meteo forecast | Primary | No API key. Free for non-commercial use, which includes personal home automation. 10,000 calls/day. 16-day forecast; 15-minute data native in North America. CC BY 4.0: show "Weather data by Open-Meteo.com" next to displayed data |
+| Open-Meteo forecast | Primary | No API key; non-commercial (includes personal home automation); 10,000 calls/day; 16-day forecast; 15-minute data native in North America; CC BY 4.0, so show "Weather data by Open-Meteo.com" |
 | Open-Meteo archive | Backfill | Hourly back to 1940. ERA5 lags about 5 days; IFS 9 km has no delay |
 | Open-Meteo previous runs | Judging forecast-based decisions | What the forecast said at decision time |
-| NWS api.weather.gov | Cross-check | No key. Requires a User-Agent with a contact email. Hourly station observations |
-| ecobee runtime report | Cross-check | `outdoorTemp`, `outdoorHumidity` every 5 minutes |
-| Personal weather station | Optional | Tempest or Ambient for on-site sun and temperature |
+| NWS api.weather.gov | Cross-check | No key; User-Agent identifying the app (contact email recommended) |
+| ecobee runtime report | Cross-check | `outdoorTemp`, `outdoorHumidity` |
 
-Hourly variables: `temperature_2m, relative_humidity_2m, dew_point_2m, apparent_temperature,
-shortwave_radiation, direct_radiation, diffuse_radiation, global_tilted_irradiance (tilt/azimuth
-set to the roof and west windows), cloud_cover, wind_speed_10m, wind_direction_10m, is_day`.
+Separating weather from strategy: expected runtime per day from per-unit baselines (balance point
+searched over 30–90°F, CalTRACK-style); savings = expected − actual (IPMVP avoided energy); a weekly
+attribution waterfall; randomized switchbacks on total-house runtime; a 90% interval on every claim.
 
-### Separating weather from strategy
-
-- **Expected runtime for every day** from the per-unit baseline.
-- **Savings = expected − actual** (IPMVP avoided energy). Runtime is metered per unit.
-- **Weekly attribution waterfall**: weather, sun, strategy, noise.
-- **Randomized switchbacks** for small effects (LBNL's randomized M&V work found them more accurate
-  and faster than pre/post comparisons).
-- Every savings claim carries a 90% interval. Unusual days are flagged. Adopted strategies get
-  occasional control days.
-
-### Metrics
-
-Runtime, weather-expected runtime, duty cycle, maxed-out minutes (100% duty while above target),
-comfort score (share of occupied-room minutes in band), coupling coefficient (°F/hr of upstairs
-gain per °F the main floor sits above it), cooling rate (°F per run-minute, weather-adjusted;
-falls when a filter clogs or refrigerant runs low), cycles per hour, indoor humidity.
+Runtime metric: `compCool1` when cooling; `compHeat1` for a heat pump, or `auxHeat1` for a furnace or
+backup heat. Stage-1 columns already include stage-2 time, so stage-2 columns are stored but never
+added on top.
 
 ---
 
-## 5. Claude (Agent SDK, Opus 5.5)
+## 6. Claude setup
 
-### Authentication
+- **Always-on agent: API key** (`ANTHROPIC_API_KEY` from platform.claude.com). Anthropic's terms say
+  Agent SDK services should use API key authentication. About $0.80–1.60 per nightly run; with the
+  weekly report, triggered investigations and Ask Claude questions, roughly $35–70 a month.
+- **You asking questions: your Pro/Max subscription** in Claude Code or Claude Desktop, connected to
+  the app's MCP server. That's ordinary use of Anthropic's own apps. The `claude setup-token` OAuth
+  token is meant for scripts and CI and isn't used for the unattended agent.
 
-- **Pro/Max subscription:** run `claude setup-token` to get a one-year token and set
-  `CLAUDE_CODE_OAUTH_TOKEN` in the agent service. Anthropic documents this for scripts and CI.
-  Usage counts against the plan's limits. Personal use only: Anthropic's Agent SDK docs don't
-  allow offering claude.ai login in products for other people.
-- **API key:** `ANTHROPIC_API_KEY` from platform.claude.com, billed per token (Opus 5.5: $4 / $20
-  per million input/output tokens). Use `max_budget_usd` to cap each run.
-
-### When Claude runs
-
-Nightly review (3:30 AM), weekly report (Sunday), triggered investigations (upstairs maxed out
-45+ min, cooling-rate drop, humidity high, sensor offline), and chat: in the app, and from Claude
-Code or Claude Desktop through the app's MCP server.
-
-### Tools
-
-| Tool | Type |
-|---|---|
-| `get_house_status`, `query_runtime`, `query_sensors`, `get_weather`, `baseline_report`, `coupling_report`, `simulate_plan`, `experiment_results` | read |
-| `propose_policy_change`, `propose_experiment`, `publish_report` | gated: validated against hard limits in code, then queued per the autonomy mode |
-
-Claude has no tool that writes to a thermostat. Only the controller writes to ecobee, and it
-enforces the limits itself.
+Tools: read (`get_house_status`, `query_runtime`, `query_sensors`, `get_weather`, `baseline_report`,
+`coupling_report`, `drift_report`, `natural_experiment_report`, `explain_action`), compute
+(`refit_model`, `run_backtest`, `simulate_plan`, `estimate_power`), gated (`propose_policy_change`,
+`propose_experiment`, `publish_report`). No tool talks to a thermostat.
 
 ```python
 options = ClaudeAgentOptions(
     model="claude-opus-5-5",
+    effort="medium",                       # "high" for the weekly report
     system_prompt=open("agent/prompts/nightly.md").read(),
-    mcp_servers={"house": house},              # create_sdk_mcp_server(name="house", tools=[...])
+    mcp_servers={"house": house},
     allowed_tools=["mcp__house__query_runtime", "mcp__house__propose_policy_change"],
-    disallowed_tools=["Bash", "Write", "Edit", "WebFetch", "WebSearch"],
+    # dontAsk still runs tools that never prompt (file reads, Agent), so remove built-ins outright
+    disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Agent",
+                      "NotebookEdit", "WebFetch", "WebSearch"],
     permission_mode="dontAsk",
+    cwd="/srv/climate/agent-empty",        # empty directory: no secrets within reach
     max_turns=40,
-    max_budget_usd=1.00,
+    max_budget_usd=3.00,                   # client-side estimate; last request can overshoot
 )
+# Check ResultMessage.terminal_reason == "completed" before trusting a digest: an API failure on
+# the final request can still report subtype "success". query() then raises ResultError after the
+# error result (turn cap, budget cap, API error), so wrap the loop in try/except ResultError.
 ```
 
 ---
 
-## 6. Architecture
+## 7. ecobee connection
+
+**Link 1, required: the ecobee cloud API, signed in with the ecobee account.** Use
+`python-ecobee-api` 0.4.x (the library behind Home Assistant's ecobee integration, which added
+account sign-in in 2026.3) for sign-in, MFA and refresh only. Make
+every data call yourself:
+
+| Need | Call | Cadence |
+|---|---|---|
+| Change detection | `GET /1/thermostatSummary` (`includeEquipmentStatus`) | every 3 min |
+| Live detail | `GET /1/thermostat` (sensors, events, program, settings, extended runtime) | on revision change |
+| 5-minute record | `GET /1/runtimeReport` (`includeSensors`) | hourly + nightly re-pull; lags up to ~1 h |
+| Holds | `setHold` with `holdType: holdHours` (1–2 h), `resumeProgram` | controller only |
+| Sensor sets | program update (read-modify-write) | a few times a day |
+| Stop ecobee fighting | `settings.autoAway=false`, `settings.followMeComfort=false` | once, verified daily |
+
+That's about 30,000 requests a month, well under the 85,000 ecobee set for developer-key apps.
+Nothing is published for the account sign-in route, so the app stays inside that budget anyway.
+
+**Link 2, strongly recommended: HomeKit, locally, with the server as controller** via
+`aiohomekit` ≥ 4.0. Pushed: each SmartSensor's temperature, motion and occupancy; thermostat
+temperature, humidity and heating/cooling state. Polled: seconds since last motion; equipment
+running. Pair directly, not through Home Assistant: HA hides the ecobee vendor fields, and its mode
+select creates permanent holds. One HomeKit controller per thermostat, so the ecobees leave Apple
+Home.
+
+**Not possible or not advised:** no local LAN API; no Matter support found (October 2026);
+SmartSensors use a proprietary 915 MHz radio that pairs only with ecobee devices and has no public
+decoder; firmware access only via a 2021 ecobee3 lite serial exploit. Replacing the ecobees with
+ESP32 relays is possible but means building an uncertified thermostat. If cloud-free control
+becomes a hard requirement, use a listed thermostat with a local API (Venstar ColorTouch, Honeywell
+T6 Pro Z-Wave).
+
+**Hardware to add (read-only), in priority order:** Toy Room presence sensor; stairwell top/bottom
+temperature sensors; per-unit power monitoring (Emporia Vue 3 or Shelly EM Gen3); mmWave in Office,
+Living Room and School Room; bedroom/Office door contacts; wired attic probe; 24V call monitor with
+supply/return probes.
+
+**Adapter rules.**
+- Read back every write; the library swallows HTTP errors.
+- Program edits start from a fresh GET and a revision check.
+- HomeKit holds: write the end time first, then the hold, then verify. Never write the
+  Home/Sleep/Away setpoint fields, which permanently edit the schedule.
+- Round temperatures before converting to tenths of °F.
+- Use TOTP or SMS MFA (push and email are unsupported).
+- Store only the newest refresh token, encrypted, and never the password.
+- Make the web client ID configurable.
+- Keep the library's debug logging off (it logs tokens).
+- A circuit breaker falls back to HomeKit when the cloud fails.
+
+**Phase 0 tests:**
+1. Compressor columns from `runtimeReport` with the account-login token.
+2. History depth.
+3. Model numbers.
+4. Which sensors a night-time hold uses.
+5. The Essential's HomeKit sensor exposure.
+6. The Smart Away variant in the backfill.
+
+---
+
+## 8. Architecture
 
 Docker Compose on one home server.
 
-- **Sources:** ecobee cloud; HomeKit local (optional backup and real-time path); Open-Meteo + NWS;
+- **Sources:** ecobee cloud, HomeKit (local), add-on sensors (Zigbee/ESPHome), Open-Meteo + NWS,
   optional power monitor.
-- **Ingest:** `collector` (3-min summary poll; detail fetch on revision change; hourly runtime
-  reports), `weather`, one-time `backfill`.
-- **Store & brains:** Postgres + TimescaleDB; `models` (baselines, RC model, simulation);
-  `experiments`; `controller` (3-min loop, guardrails, audit log).
-- **Surfaces:** FastAPI (REST + WebSocket); Vue 3 + TypeScript PWA over Tailscale; `agent` (Claude
-  Agent SDK); `mcp` (the same tools for Claude Code and Desktop); push notifications (ntfy or
-  Pushover).
+- **Ingest:** `collector`, `homekit`, `weather`, `backfill`.
+- **Store & brains:** Postgres + TimescaleDB, `occupancy`, `models`, `experiments`, `controller`.
+- **Surfaces:** FastAPI (REST + WebSocket), Vue 3 PWA over Tailscale, `agent` (Agent SDK), `mcp`,
+  push notifications.
 
-### ecobee access
-
-ecobee stopped issuing new developer API keys on 2024-03-28. Existing keys still work.
-
-| Path | Status |
-|---|---|
-| **ecobee account sign-in** via `python-ecobee-api` 0.4.x (username, password, MFA; refresh token; regular `api.ecobee.com/1` endpoints) | **Recommended.** Home Assistant's ecobee integration has worked this way since 2026.3. It borrows ecobee's web-app login rather than an approved developer key, so it can break if ecobee changes its login. Keep it behind one adapter |
-| Developer key from before March 2024 | Most stable, if you have one |
-| HomeKit via Home Assistant HomeKit Controller | Backup and real-time: pushed temperatures, sensors, occupancy, cooling/idle state, targets. No runtime history and no sensor-set control. A thermostat pairs with only one HomeKit controller |
-
-| Need | Call | Cadence | Notes |
-|---|---|---|---|
-| Change detection | `GET /thermostatSummary` (`includeEquipmentStatus`) | every 3 min | ecobee asks clients not to poll faster |
-| Live detail | `GET /thermostat` (runtime, sensors, settings, program, events) | on revision change | up to 25 thermostats per call |
-| 5-minute truth | `GET /runtimeReport` (`includeSensors`) | hourly + nightly re-pull | compressor seconds per 5-min interval; lags up to ~1 h; ≤ 31 days per request |
-| Change a target | `setHold` / `resumeProgram` | controller decisions | tenths of °F (77°F = 770); timed holds |
-| Sensor sets | program update | rarely | replaces the whole program, so read, edit, write back |
-| Stop ecobee fighting | `settings.autoAway`, `settings.followMeComfort` | once, verified daily | demand-response shows up in `dmOffset` |
-
-Access tokens last about an hour; refresh tokens rotate, so always store the newest one.
-
-### Core tables
-
-`units`, `sensors`, `readings_5m`, `runtime_5m`, `weather_hourly`, `policies`, `policy_versions`,
-`experiments`, `experiment_days`, `control_actions` (every ecobee write: who, why, before, after),
-`model_fits`, `agent_runs`, `reports`.
-
-### Repo layout
+Core tables: `units`, `sensors`, `readings_5m`, `runtime_5m`, `occupancy_events`, `room_state_1m`,
+`weather_hourly`, `policies`, `policy_versions`, `experiments`, `experiment_days`,
+`control_actions` (who, why, channel, before, after, read-back), `model_fits`, `agent_runs`,
+`reports`. `runtime_5m` stores compCool1/2, compHeat1/2, auxHeat1/2 and fan seconds.
 
 ```
 climate-ai/
-├── api/climate/{sources,collector,models,control,experiments,analytics,store}/
+├── api/climate/{sources,occupancy,collector,models,control,experiments,analytics,store}/
 ├── agent/            Claude Agent SDK runners + prompts (tools shared with mcp/)
 ├── mcp/              MCP server for Claude Code / Desktop
 ├── web/              Vue 3 + TypeScript PWA
@@ -254,26 +344,29 @@ climate-ai/
 
 ---
 
-## 7. Roadmap
+## 9. Roadmap
+
+Apart from Phase 0's HomeKit pairing and a one-night test hold, nothing writes to a thermostat until
+Phase 4.
 
 | Phase | When | Deliverable | Done when |
 |---|---|---|---|
-| 0 | this week | ecobee sign-in, Compose skeleton, schema, Open-Meteo | all 7 sensors stored every 3 min |
-| 1 | weeks 1–2 | backfill, Live + Runtime screens, daily digest | runtime per unit matches ecobee's reports within 1% |
-| 2 | weeks 2–4 | baselines, weather-expected runtime, attribution, first coupling estimate | baselines within 20% CV(RMSE) on held-out days |
-| 3 | weeks 3–5 | Claude analyst (read-only), weekly report, MCP server | the weekly report says something new |
-| 4 | weeks 5–7 | controller in Suggest mode, guardrails, Linked floors | upstairs maxed-out minutes near zero; savings with a 90% interval |
-| 5 | week 7 on | RC model, switchbacks, pre-cooling, Auto mode, heating season | experiments stop finding gains larger than their uncertainty |
+| 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, order Toy Room + stairwell sensors | all 7 points stream live; tests answered |
+| 1 | weeks 1–2 | backfill, Live/Rooms/Runtime screens, daily digest | runtime per unit matches ecobee within 1% |
+| 2 | weeks 2–4 | baselines, attribution, history study, occupancy v1 (3 states) | baselines pass checks; a week of room states spot-checked |
+| 3 | weeks 3–5 | Claude analyst (read-only, API key), weekly report, MCP server | the weekly report says something new |
+| 4 | weeks 5–8 | controller in Suggest mode, timed holds with read-back, Linked floors checked against the weather baseline then its offset tuned with one pre-planned switchback | upstairs maxed-out minutes near zero; total-house savings with a 90% interval |
+| 5 | week 8 on | house model, pre-cooling, automatic tuning (only if they beat the rule), predicted arrivals, heating season | experiments stop finding gains larger than their uncertainty |
 
 ### Open questions
 
 1. AC + furnace or heat pumps? Tonnage per unit?
-2. Do the upstairs ducts run through the attic?
-3. Is the stairwell open, or is there a door?
-4. Is there an ecobee developer key from before March 2024?
-5. What server runs this? Is Home Assistant already running?
-6. Weather point (address or ZIP), kept on the server.
-7. Flat or time-of-use electricity rate?
-8. Are Smart Home/Away, Follow Me or eco+ features on today?
-9. Comfort bands per floor and time; when is the main floor usually empty?
-10. Claude via subscription token or Console API key?
+2. Hallway and Bedroom thermostat models?
+3. Are the ecobees in Apple Home, and does the family use Siri for them?
+4. ecobee MFA: on, and which kind?
+5. Do the upstairs ducts run through the attic?
+6. Is the stairwell open, or is there a door?
+7. What server runs this? Is Home Assistant already running?
+8. Weather point (ZIP), and flat or time-of-use electricity rate?
+9. Bedtimes, school hours, office hours.
+10. Comfort bands per floor and time.

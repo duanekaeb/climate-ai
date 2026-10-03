@@ -113,6 +113,14 @@ section.block:first-of-type{border-top:0}
 .hero h1{font-size:var(--step-4);font-weight:800;letter-spacing:-.02em;font-stretch:118%;max-width:18ch}
 .hero .lede{font-size:clamp(1.1rem,2vw,1.3rem);color:var(--ink-2);max-width:62ch;margin-top:18px;line-height:1.55}
 .hero-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:40px;align-items:end}
+.hero-main{max-width:780px}
+.answers-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:36px;align-items:start}
+.answer{background:var(--surface);border:1px solid var(--line);border-top:3px solid var(--accent);border-radius:var(--radius);padding:18px 18px 16px;display:grid;gap:8px;align-content:start}
+.answer .k{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-strong);font-weight:600}
+.answer h4{font-size:1.08rem}
+.answer p{font-size:.93rem;color:var(--ink-2);line-height:1.55}
+.answer p b{color:var(--ink)}
+.answer a{font-size:.88rem;font-weight:600}
 .pillars{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-top:40px}
 .pillar{background:var(--surface);padding:18px 18px 20px;display:grid;gap:6px;align-content:start}
 .pillar .k{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
@@ -125,6 +133,8 @@ section.block:first-of-type{border-top:0}
 .callout.good .ic{background:var(--good-soft);color:var(--good-ink)}
 .callout h4{font-size:1rem;margin-bottom:4px}
 .callout p{color:var(--ink-2);font-size:.95rem}
+.callout.answers p+p{margin-top:8px}
+.callout.answers b{color:var(--ink)}
 
 /* ------- generic grids & cards ------- */
 .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
@@ -204,6 +214,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
 
 @media (max-width: 960px){
   .hero-grid{grid-template-columns:minmax(0,1fr)}
+  .answers-grid{grid-template-columns:minmax(0,1fr)}
   .pillars{grid-template-columns:repeat(2,minmax(0,1fr))}
   .arch{grid-template-columns:repeat(2,minmax(0,1fr))}
   .grid-3{grid-template-columns:minmax(0,1fr)}
@@ -396,6 +407,19 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
 .band-table th{font-family:var(--font-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .band-table td.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 
+
+/* layers (who decides what) */
+.layers{display:grid;gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.layer{display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr);gap:20px;padding:18px 20px}
+.layer-k{display:grid;gap:4px;align-content:start}
+.layer-k b{font-family:var(--font-display);font-stretch:110%;font-size:1.15rem}
+.layer-k .cad{font-size:.82rem;color:var(--muted)}
+.layer-b{display:grid;gap:8px;color:var(--ink-2);font-size:.95rem}
+.layer-b .can{font-size:.88rem;color:var(--ink)}
+.layer:nth-child(1){background:color-mix(in srgb,var(--accent) 7%,var(--surface))}
+.gate{display:flex;align-items:center;gap:10px;padding:6px 20px;background:var(--surface-2);border-block:1px solid var(--line);font-family:var(--font-mono);font-size:.74rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.gate::before{content:"";width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid var(--accent)}
+@media (max-width:680px){.layer{grid-template-columns:minmax(0,1fr);gap:8px}}
 @media (max-width: 960px){
   .zones{grid-template-columns:minmax(0,1fr)}
   .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -420,9 +444,12 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
       <a href="#house">Your house</a>
       <a href="#app">App mockup</a>
       <a href="#playbook">Running 3 units</a>
+      <a href="#occupancy">Occupancy</a>
       <a href="#learning">Learning loop</a>
+      <a href="#brain">Models + Claude</a>
       <a href="#weather">Weather &amp; analytics</a>
-      <a href="#claude">Claude</a>
+      <a href="#claude">Claude setup</a>
+      <a href="#ecobee">ecobee link</a>
       <a href="#build">Architecture</a>
       <a href="#roadmap">Roadmap</a>
     </nav>
@@ -434,24 +461,35 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
 
 <!-- ================= HERO ================= -->
 <section class="hero" aria-labelledby="h-hero">
-  <div class="hero-grid">
-    <div>
-      <p class="eyebrow">duanekaeb/climate-ai · project blueprint · October 2026</p>
-      <h1 id="h-hero">One brain for three ecobees</h1>
-      <p class="lede">Your ecobees each see one floor and report one floor at a time. Climate AI treats the house as one connected system. It watches all seven sensors, learns how the floors push heat into each other, and checks every change against the weather. Then it adjusts the schedules to cut total runtime without letting a room you're using get uncomfortable.</p>
+  <div class="hero-main">
+    <p class="eyebrow">duanekaeb/climate-ai · project blueprint · October 2026</p>
+    <h1 id="h-hero">One brain for three ecobees</h1>
+    <p class="lede">Your ecobees each see one floor and report one floor at a time. Climate AI treats the house as one connected system. It watches all seven sensors, learns how the floors push heat into each other, and checks every change against the weather. Then it adjusts the schedules to cut total runtime without letting a room you're using get uncomfortable.</p>
+  </div>
+  <div class="answers-grid" aria-label="Short answers to your three questions">
+    <div class="answer">
+      <span class="k">Your question 1</span>
+      <h4>Machine learning, or Claude tweaking in real time?</h4>
+      <p><b>Both, in layers.</b> Models learn how your house behaves, a plain controller makes the minute-to-minute changes, and Claude reviews results (nightly, weekly, and when something looks off) and proposes what to try next. Claude stays out of the real-time loop, where it would cost far more and control no better. The models are good enough for daily decisions, not minute-by-minute prediction.</p>
+      <a href="#brain">How the layers work</a>
     </div>
-    <div class="callout warn" role="note">
-      <div class="ic" aria-hidden="true">!</div>
-      <div>
-        <h4>First thing to know: ecobee API access</h4>
-        <p>ecobee stopped issuing new developer API keys in March 2024. Home Assistant has worked around it since release 2026.3 by signing in with your normal ecobee account, and this plan does the same. That route isn't an official ecobee developer program, so the app keeps a local HomeKit backup. <a href="#build-access">Details and options</a>.</p>
-      </div>
+    <div class="answer">
+      <span class="k">Your question 2</span>
+      <h4>Does it put occupied rooms first?</h4>
+      <p><b>Yes.</b> The app keeps its own estimate for each room (live motion, sleep windows, learned habits) and never trades an occupied room's comfort for runtime. Most runtime savings come from empty floors, timing and the linked-floors rule.</p>
+      <a href="#occupancy">How occupancy works</a>
+    </div>
+    <div class="answer">
+      <span class="k">Your question 3</span>
+      <h4>How does it connect to the ecobees? Can we go direct?</h4>
+      <p><b>Two links from your own server:</b> your ecobee account sign-in for history and settings (ecobee stopped issuing developer keys in 2024), and HomeKit on your Wi-Fi for live readings within seconds. There's no deeper way in: no local API, the room sensors use a closed radio, and bypassing the thermostats means replacing them.</p>
+      <a href="#ecobee">How the connection works</a>
     </div>
   </div>
   <div class="pillars">
-    <div class="pillar"><span class="k">Monitor</span><h4>Every sensor, one view</h4><p>All three thermostats and four room sensors, plus equipment state, every 3 minutes. Each unit's runtime in 5-minute detail.</p></div>
+    <div class="pillar"><span class="k">Monitor</span><h4>Every sensor, one view</h4><p>All three thermostats and four room sensors live over your local network, plus each unit's runtime in 5-minute detail from ecobee.</p></div>
     <div class="pillar"><span class="k">Normalize</span><h4>Weather is the control</h4><p>Every runtime number is compared with what this weather should have cost. A cooler week never gets credited as a win.</p></div>
-    <div class="pillar"><span class="k">Learn</span><h4>A thermal model of your house</h4><p>Learns how fast each floor gains heat, how much the main floor pushes upstairs, and what the sun adds. It improves every night.</p></div>
+    <div class="pillar"><span class="k">Learn</span><h4>A thermal model of your house</h4><p>Learns how fast each floor gains heat, how much the main floor pushes upstairs, and what the sun adds. It's refit every night and kept only if it passes its accuracy checks.</p></div>
     <div class="pillar"><span class="k">Act</span><h4>Small, bounded, measured changes</h4><p>A deterministic controller moves setpoints inside your limits. Claude reviews results, explains them, and proposes the next experiment.</p></div>
   </div>
 </section>
@@ -564,12 +602,12 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
       <thead><tr><th>Unit</th><th>Thermostat</th><th>Room sensors</th><th>What it fights</th><th>What the app will measure</th></tr></thead>
       <tbody>
         <tr><td><span class="swatch" style="background:var(--s-main)"></span><b>Main floor</b></td><td>ecobee in the Hallway</td><td>School Room, Living Room, Kitchen</td><td>Outdoor heat, kitchen loads, sun on its windows</td><td>How much of its heat ends up upstairs. Its own cooling rate.</td></tr>
-        <tr><td><span class="swatch" style="background:var(--s-up)"></span><b>Upstairs</b></td><td>ecobee Smart Thermostat Essential in the Toy Room</td><td>Girls' Room</td><td>Roof and attic heat, plus heat rising from the main floor</td><td>Its load as a function of the main-floor temperature, outdoor temperature and sun</td></tr>
+        <tr><td><span class="swatch" style="background:var(--s-up)"></span><b>Upstairs</b></td><td>ecobee Smart Thermostat Essential in the Toy Room <span class="muted">(no occupancy sensor)</span></td><td>Girls' Room</td><td>Roof and attic heat, plus heat rising from the main floor</td><td>Its load as a function of the main-floor temperature, outdoor temperature and sun</td></tr>
         <tr><td><span class="swatch" style="background:var(--s-bed)"></span><b>Bed / Office</b></td><td>ecobee in the Bedroom <span class="muted">(confirm)</span></td><td>Office</td><td>Outdoor heat on the far side of the house</td><td>Whether the main floor affects it at all. If not, it gets its own schedule.</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="small muted" style="margin-top:10px">Seven temperature points in total, each with motion-based occupancy. Humidity comes from the three thermostats only; ecobee SmartSensors report temperature and occupancy. A sensor reads "occupied" for 30 minutes after it last saw motion.</p>
+  <p class="small muted" style="margin-top:10px">Seven temperature points in total. The four SmartSensors report motion-based occupancy. The Essential in the Toy Room has no occupancy sensor, and the Hallway and Bedroom thermostats have one unless they're ecobee3 lite models. Humidity comes from the thermostats only. ecobee reports a sensor as occupied for 30 minutes after it last saw motion; the app reads motion live instead (see <a href="#occupancy">Occupancy</a>).</p>
 </section>
 
 <!-- ================= APP MOCKUP ================= -->
@@ -589,10 +627,12 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
     </div>
     <div class="app-tabs" role="tablist" aria-label="App screens">
       <button role="tab" id="t-live" aria-controls="v-live" aria-selected="true">Live</button>
+      <button role="tab" id="t-rooms" aria-controls="v-rooms" aria-selected="false" tabindex="-1">Rooms</button>
       <button role="tab" id="t-runtime" aria-controls="v-runtime" aria-selected="false" tabindex="-1">Runtime</button>
       <button role="tab" id="t-analytics" aria-controls="v-analytics" aria-selected="false" tabindex="-1">Did it work?</button>
       <button role="tab" id="t-coupling" aria-controls="v-coupling" aria-selected="false" tabindex="-1">Floor coupling</button>
       <button role="tab" id="t-exp" aria-controls="v-exp" aria-selected="false" tabindex="-1">Experiments</button>
+      <button role="tab" id="t-model" aria-controls="v-model" aria-selected="false" tabindex="-1">Model</button>
       <button role="tab" id="t-claude" aria-controls="v-claude" aria-selected="false" tabindex="-1">Ask Claude</button>
       <button role="tab" id="t-rules" aria-controls="v-rules" aria-selected="false" tabindex="-1">Guardrails</button>
     </div>
@@ -600,7 +640,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
 
       <!-- LIVE -->
       <div class="view" id="v-live" role="tabpanel" aria-labelledby="t-live">
-        <div class="view-note"><span class="pill">Example data</span>A hot afternoon. The Linked floors policy is active and Claude is in Suggest mode.</div>
+        <div class="view-note"><span class="pill">Example data</span>A hot afternoon. The Linked floors policy is active and the app is in Suggest mode.</div>
         <div class="wx">
           <div class="item"><small>Outdoor</small><span class="big">93°F</span></div>
           <div class="item"><small>Feels like</small><b>97°F</b></div>
@@ -615,10 +655,10 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
           <article class="zone" aria-label="Main floor">
             <div class="zone-h"><span class="bar" style="background:var(--s-main)"></span><b>Main floor</b><span class="pill cool"><span class="dot"></span>Cooling</span></div>
             <div class="zone-sub">Hallway ecobee · Home comfort setting</div>
-            <div class="zone-main"><span class="t" data-live="main">77.4<sup>°F</sup></span><span class="sp">Target <b>77°</b><span>1° below upstairs (linked)</span></span></div>
+            <div class="zone-main"><span class="t" data-live="main">77.7<sup>°F</sup></span><span class="sp">Target <b>77°</b><span>1° below upstairs (linked)</span></span></div>
             <div class="rooms">
               <div class="room"><span class="nm"><i class="occ"></i><span>Hallway</span></span><span class="tag">ecobee</span><span class="v">77.4°</span></div>
-              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Living Room</span></span><span class="tag">sensor</span><span class="v">77.9°</span></div>
+              <div class="room"><span class="nm"><i class="occ"></i><span>Living Room</span></span><span class="tag">sensor</span><span class="v">77.9°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>Kitchen</span></span><span class="tag">sensor</span><span class="v">78.3°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>School Room</span></span><span class="tag">sensor</span><span class="v">76.8°</span></div>
             </div>
@@ -627,9 +667,9 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
           <article class="zone" aria-label="Upstairs">
             <div class="zone-h"><span class="bar" style="background:var(--s-up)"></span><b>Upstairs</b><span class="pill cool"><span class="dot"></span>Cooling</span></div>
             <div class="zone-sub">Toy Room ecobee Essential · Home</div>
-            <div class="zone-main"><span class="t" data-live="up">78.4<sup>°F</sup></span><span class="sp">Target <b>78°</b><span>Toy Room + Girls' Room</span></span></div>
+            <div class="zone-main"><span class="t" data-live="up">78.6<sup>°F</sup></span><span class="sp">Target <b>78°</b><span>Toy Room (day set)</span></span></div>
             <div class="rooms">
-              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Toy Room</span></span><span class="tag">ecobee</span><span class="v">78.6°</span></div>
+              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Toy Room</span></span><span class="tag">radar add-on</span><span class="v">78.6°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>Girls' Room</span></span><span class="tag">sensor</span><span class="v">78.1°</span></div>
             </div>
             <div class="zone-f"><div class="duty"><small>Duty, last hour · 71%</small><div class="meter"><i style="width:71%;background:var(--s-up)"></i></div></div><div class="rt">5h 40m<small>today</small></div></div>
@@ -637,9 +677,9 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
           <article class="zone" aria-label="Bed and Office">
             <div class="zone-h"><span class="bar" style="background:var(--s-bed)"></span><b>Bed / Office</b><span class="pill"><span class="dot"></span>Idle</span></div>
             <div class="zone-sub">Bedroom ecobee · Office in use, daytime sensor set</div>
-            <div class="zone-main"><span class="t" data-live="bed">75.9<sup>°F</sup></span><span class="sp">Target <b>76°</b><span>Office only (9–5)</span></span></div>
+            <div class="zone-main"><span class="t" data-live="bed">75.8<sup>°F</sup></span><span class="sp">Target <b>76°</b><span>Office only (9–5)</span></span></div>
             <div class="rooms">
-              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Office</span></span><span class="tag">sensor</span><span class="v">75.8°</span></div>
+              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Office</span></span><span class="tag">sensor + radar</span><span class="v">75.8°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>Bedroom</span></span><span class="tag">ecobee</span><span class="v">76.4°</span></div>
             </div>
             <div class="zone-f"><div class="duty"><small>Duty, last hour · 33%</small><div class="meter"><i style="width:33%;background:var(--s-bed)"></i></div></div><div class="rt">2h 05m<small>today</small></div></div>
@@ -648,25 +688,53 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
         <div class="tiles">
           <div class="tile"><span class="lbl">House runtime today</span><span class="val">11h 57m</span><span class="delta good">13% under weather-expected</span></div>
           <div class="tile"><span class="lbl">Comfort, occupied rooms</span><span class="val">97<small>%</small></span><span class="delta">of minutes within your band</span></div>
-          <div class="tile"><span class="lbl">Upstairs maxed out</span><span class="val">0<small> min</small></span><span class="delta good">Was 142 min/day under Smart Away</span></div>
+          <div class="tile"><span class="lbl">Upstairs maxed out</span><span class="val">0<small> min</small></span><span class="delta good">Was 142 min/day in August, under Smart Away</span></div>
           <div class="tile"><span class="lbl">Short cycles today</span><span class="val">0</span><span class="delta">Runs under 5 min</span></div>
         </div>
         <div class="row c21">
           <div class="panel"><div class="panel-h"><h5>Zone temperatures, last 6 hours</h5><span class="sub">average of each zone's active sensors</span></div><div id="ch-temps"></div></div>
           <div class="row" style="align-content:start">
             <div class="suggest" id="suggest">
-              <span class="who">Claude · suggestion</span>
-              <p>No motion in the Kitchen or Living Room for 2 hours. The main floor can go to <b>78°F</b>, level with the upstairs instead of 1° below it. The house model expects 12 minutes less total runtime by 6 PM, and the upstairs stays below 85% duty.</p>
+              <span class="who">Optimizer · suggestion (3 PM replan)</span>
+              <p>The Office is still in use (the radar sees someone at the desk), but the wing's daytime sensor set ends at 5 PM. Keep the Office as the wing's sensor until <b>6 PM</b> today, so the wing doesn't start following the empty Bedroom while someone is working.</p>
               <div class="acts"><button class="btn primary" type="button" id="sgApply">Apply until 6 PM</button><button class="btn" type="button" id="sgSkip">Not now</button></div>
             </div>
             <div class="panel"><div class="panel-h"><h5>Activity</h5><span class="sub">every write is logged</span></div>
               <div class="feed" id="feed">
                 <div class="ev"><time>3:42 PM</time><div><b>Upstairs started cooling</b><div class="who">Toy Room 78.6° above 78.5° trigger</div></div></div>
                 <div class="ev"><time>3:30 PM</time><div><b>Kept main floor at 77°</b><div class="who">Controller · upstairs occupied, setback capped by the linked rule</div></div></div>
-                <div class="ev"><time>2:58 PM</time><div><b>Ignored ecobee Away on main floor</b><div class="who">Controller · Smart Away is off; the linked rule decides</div></div></div>
-                <div class="ev"><time>1:15 PM</time><div><b>Pre-cool finished</b><div class="who">Controller · upstairs 76° → 78° as the sun peaked</div></div></div>
+                <div class="ev"><time>2:58 PM</time><div><b>Renewed main-floor hold, 77° for 2 h</b><div class="who">Controller · timed hold, read back OK</div></div></div>
+                <div class="ev"><time>6:00 AM</time><div><b>Offset test: today is A</b><div class="who">Optimizer · main floor 1° below upstairs, assigned at random before the test began</div></div></div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROOMS -->
+      <div class="view" id="v-rooms" role="tabpanel" aria-labelledby="t-rooms" hidden>
+        <div class="view-note"><span class="pill">Example data</span>How the app reads each room right now, and which rooms each thermostat is averaging.</div>
+        <div class="panel">
+          <div class="panel-h"><h5>Rooms right now</h5><span class="sub">in set = the rooms this thermostat is averaging right now</span></div>
+          <div class="table-wrap" style="border:0">
+            <table class="band-table" id="roomsTable" style="min-width:720px">
+              <thead><tr><th>Room</th><th>Zone</th><th>In use?</th><th>Why the app thinks so</th><th>Priority</th><th>In sensor set</th><th>Temp · band</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="row c21">
+          <div class="panel"><div class="panel-h"><h5>When each room is usually in use</h5><span class="sub">weekdays · learned from 12 months of sensor history (Toy Room: from its radar since install)</span></div><div id="ch-occ"></div>
+            <p class="small muted" style="margin-top:6px">Nights in the Girls' Room and the Bedroom come from the sleep schedule. Motion sensors can't see people sleeping.</p></div>
+          <div class="panel"><div class="panel-h"><h5>Rules for occupied rooms</h5></div>
+            <ul class="small" style="margin:0;padding-left:1.1em;color:var(--ink-2);display:grid;gap:6px">
+              <li><b>An occupied room's comfort is never traded for runtime.</b> Savings come from empty floors and timing. When unsure, a room counts as occupied.</li>
+              <li><b>Priority rooms win ties</b> on the same thermostat: upstairs, the Toy Room by day and the Girls' Room at night.</li>
+              <li><b>Each room has its own "empty" window</b>, short for the hallway, longer for the office. Back in use: it counts immediately.</li>
+              <li><b>Over the band:</b> at most 1°F for 15 min in an occupied room, 0.5°F for 10 min in a sleeping one.</li>
+              <li><b>Predicted use</b> starts recovery early: the School Room is cooled before 8 AM on school days.</li>
+              <li><b>An empty main floor is still a buffer</b> while anyone is upstairs (the linked-floors rule).</li>
+            </ul>
           </div>
         </div>
       </div>
@@ -716,10 +784,10 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
           <div class="chart-legend"><span class="key"><span class="sq" style="background:var(--s-a)"></span>A · 1° cooler</span><span class="key"><span class="sq" style="background:var(--s-b)"></span>B · 2° cooler</span><span class="key muted">outlined = today</span></div>
           <div class="cal" id="cal"></div>
           <div>
-            <div class="panel-h" style="margin:8px 0 0"><h5>Interim result: B vs A, weather-normalized house runtime</h5><span class="sub">90% interval</span></div>
-            <div class="ci" aria-label="B saves 4 percent, 90 percent interval from 9 percent saved to 1 percent more"><div class="axis"></div><div class="zero" style="left:60%"></div><div class="bar" style="left:36%;width:28%"></div><div class="pt" style="left:44%"></div></div>
+            <div class="panel-h" style="margin:8px 0 0"><h5>Checkpoint 2 of 3: B vs A, weather-normalized total-house runtime</h5><span class="sub">interval widened for an early look · checkpoints fixed before the test began</span></div>
+            <div class="ci" aria-label="B saves 4 percent, interval from 14 percent saved to 6 percent more"><div class="axis"></div><div class="zero" style="left:60%"></div><div class="bar" style="left:4%;width:80%"></div><div class="pt" style="left:44%"></div></div>
             <div class="ci-scale"><span>−15%</span><span>−10%</span><span>−5%</span><span>0</span><span>+5%</span><span>+10%</span></div>
-            <p class="readout" style="margin-top:10px">Not conclusive yet. B is ahead by <b>4%</b>, but the interval still crosses zero. Comfort is fine in both: upstairs out of band <b>22 min/day</b> on A and <b>9 min/day</b> on B. Four more days, then Claude writes it up.</p>
+            <p class="readout" style="margin-top:10px">Not decided. B is ahead by <b>4%</b>, but the interval still crosses zero, which is normal for a difference this small in one house. Comfort is fine in both: upstairs out of band <b>22 min/day</b> on A and <b>9 min/day</b> on B. At the final checkpoint in 4 days, Claude writes it up. If the test is still undecided, the app uses the simulation's weather-specific offsets: 1° on mild days, 2° above about 92°F.</p>
           </div>
         </div>
         <div class="row c2">
@@ -739,6 +807,34 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
         </div>
       </div>
 
+      <!-- MODEL -->
+      <div class="view" id="v-model" role="tabpanel" aria-labelledby="t-model" hidden>
+        <div class="view-note"><span class="pill">Example data</span>How Claude's analysis turns into model changes, and the gates every change passes.</div>
+        <div class="tiles">
+          <div class="tile"><span class="lbl">Current house model</span><span class="val">v14</span><span class="delta">Promoted Sep 30 after 5 shadow days</span></div>
+          <div class="tile"><span class="lbl">Next-day runtime error</span><span class="val">9.1<small>%</small></span><span class="delta good">CV(RMSE), walk-forward · gate ≤ 20%</span></div>
+          <div class="tile"><span class="lbl">2-hour upstairs forecast</span><span class="val">±0.8<small>°F</small></span><span class="delta">typical error, last 14 days</span></div>
+          <div class="tile"><span class="lbl">Drift watch</span><span class="val">1 open</span><span class="delta">Main-floor cooling rate −8% since August; filter check pending</span></div>
+        </div>
+        <div class="row c12">
+          <div class="panel"><div class="panel-h"><h5>Upstairs: forecast vs actual</h5><span class="sub">yesterday afternoon, forecast made at noon</span></div><div id="ch-fc"></div></div>
+          <div class="panel"><div class="panel-h"><h5>Change log</h5><span class="sub">who proposed it, and what the gates said</span></div>
+            <div class="table-wrap" style="border:0">
+              <table class="band-table" style="min-width:560px">
+                <thead><tr><th>Date</th><th>From</th><th>Change</th><th>Gate results</th><th>Outcome</th></tr></thead>
+                <tbody>
+                  <tr><td class="num">Sep 30</td><td>Claude</td><td>Add sun on the west wall (tilted irradiance, azimuth 90°) to the upstairs model</td><td>Backtest 2-hour error 0.95 → 0.80°F · 5 shadow days</td><td><span class="pill good">Promoted</span></td></tr>
+                  <tr><td class="num">Sep 27</td><td>Claude</td><td>Separate upstairs baselines for school days and weekends</td><td>Backtest worse: 9.4% → 9.8%</td><td><span class="pill crit">Rejected by gate</span></td></tr>
+                  <tr><td class="num">Sep 24</td><td>Optimizer</td><td>Switchback test: main floor 1° vs 2° cooler</td><td>Simulation: 2° ahead above about 92°F, 1° on milder days; too close to settle, so tested in real weather</td><td><span class="pill accent">Running</span></td></tr>
+                  <tr><td class="num">Sep 22</td><td>Drift watch</td><td>Main-floor cooling rate down 8% vs August, weather-adjusted</td><td>Claude: filter likely; asked you to check</td><td><span class="pill warn"><span class="dot"></span>Waiting on you</span></td></tr>
+                  <tr><td class="num">Sep 19</td><td>Claude</td><td>Linked floors, offset 1° (estimated from 41 natural-experiment days in history)</td><td>Simulation + 3 shadow days + 2 trial afternoons</td><td><span class="pill good">Adopted</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- CLAUDE -->
       <div class="view" id="v-claude" role="tabpanel" aria-labelledby="t-claude" hidden>
         <div class="row c21">
@@ -753,11 +849,11 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
             <form class="composer" id="composer"><input id="askIn" type="text" aria-label="Ask Claude about your house" placeholder="In the real app you type here. In this mockup, pick a question above." disabled><button class="btn primary" type="submit" disabled>Ask</button></form>
           </div>
           <div class="panel report">
-            <div class="panel-h"><h5>Weekly report</h5><span class="sub">Sun Sep 28 · written by Claude</span></div>
+            <div class="panel-h"><h5>Weekly report</h5><span class="sub">Sun Sep 27 · written by Claude</span></div>
             <h6>Headline</h6>
-            <p>House runtime ran <b>12% under</b> what this week's weather predicts. Raw runtime fell more than that, but most of the drop was the cooler weather.</p>
+            <p>House runtime ran <b>7% under</b> what this week's weather predicts. Raw runtime fell more than that, but most of the drop was the cooler weather.</p>
             <h6>What worked</h6>
-            <ul><li>Upstairs never hit 100% duty. Under Smart Away it averaged 142 min/day maxed out.</li><li>Morning pre-cool on the two 90°F days shifted 40 min of upstairs runtime before noon.</li></ul>
+            <ul><li>Upstairs never hit 100% duty. Under Smart Away in August it averaged 142 min/day maxed out.</li><li>The main floor held the linked offset every afternoon someone was upstairs, and nobody overrode a thermostat by hand.</li></ul>
             <h6>Watch</h6>
             <ul><li>Main floor cooling rate is 8% slower than August after adjusting for weather. Check the filter before blaming the model.</li></ul>
             <h6>Next</h6>
@@ -776,6 +872,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
             <div class="form-grid" style="margin-top:8px">
               <div class="f-row"><div>Never cool above, occupied rooms<small>Hard ceiling, enforced by the controller, not by Claude</small></div><input type="number" id="g1" value="79" aria-label="Maximum occupied cooling setpoint, °F"></div>
               <div class="f-row"><div>Never cool below<small>Protects comfort and keeps the coils from icing</small></div><input type="number" id="g2" value="70" aria-label="Minimum cooling setpoint, °F"></div>
+              <div class="f-row"><div>Occupied room over its band<small>At most this much, for at most 15 min (sleeping rooms: 0.5°F, 10 min)</small></div><select id="g6" aria-label="Allowed overshoot in occupied rooms"><option>0.5°F</option><option selected>1°F</option></select></div>
               <div class="f-row"><div>Largest single change<small>Per unit, per 30 minutes</small></div><select id="g3" aria-label="Largest single change"><option>1°F</option><option selected>2°F</option><option>3°F</option></select></div>
               <div class="f-row"><div>When someone changes a thermostat by hand<small>The app backs off and logs it as a signal</small></div><select id="g4" aria-label="Manual override backoff"><option>1 hour</option><option selected>3 hours</option><option>Until next schedule</option></select></div>
               <div class="f-row"><div>Quiet hours<small>Only comfort fixes overnight, no experiments</small></div><select id="g5" aria-label="Quiet hours"><option selected>10 PM – 6 AM</option><option>11 PM – 7 AM</option><option>Off</option></select></div>
@@ -812,14 +909,14 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
   <div class="sec-head">
     <p class="eyebrow">The write-up</p>
     <h2 id="h-play">How Climate AI runs your three units together</h2>
-    <p>Yes, this makes complete sense, and it's the most common way multi-zone houses waste runtime. Each thermostat optimizes its own floor, and the floors work against each other.</p>
+    <p>Yes, linking the floors makes sense. Letting each thermostat optimize only its own floor is a common way multi-zone houses waste runtime, because the floors end up working against each other.</p>
   </div>
 
   <div class="grid-2">
     <div class="prose">
       <h3 style="margin-bottom:12px">What happens today</h3>
-      <p>The main floor sees no motion, so ecobee's Smart Away lets the hallway float to 80°F. You're upstairs, and that ecobee is holding 77°F. The main floor is now 3°F warmer than the upstairs. Warm air rises through the open stairwell, and the ceiling between the floors carries heat up as well.</p>
-      <p>The upstairs unit was already the hardest-working one, under a hot roof and probably with ducts in the attic. That extra load pushes it to 100% duty. It runs all afternoon, the Girls' Room drifts, and the main floor's "savings" cost the house more than they saved.</p>
+      <p>The main floor sees no motion, so ecobee's Smart Away lets the hallway float warm, to around 80°F (Phase 0 checks which Smart Away variant fired). You're upstairs, and that ecobee is holding 77°F. The main floor is now 3°F warmer than the upstairs. Warm air rises through the open stairwell, and the ceiling between the floors carries heat up as well.</p>
+      <p>The upstairs unit was already the hardest-working one, under a hot roof and probably with ducts in the attic. That extra load is the likely reason it hits 100% duty; the history study measures how much of it is the floor and how much is sun and heat. It runs all afternoon, the Girls' Room drifts, and the main floor's "savings" cost the house more than they saved.</p>
       <p>ecobee can't see any of this. Each thermostat reports only itself, so its reports can't show one floor creating work for another.</p>
     </div>
     <div class="prose">
@@ -832,9 +929,9 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
   <h3 style="margin:40px 0 14px">The rules the controller runs</h3>
   <div class="grid-2">
     <div class="card"><h4>Linked floors</h4><p>When the main floor is empty but someone is upstairs, the main floor doesn't float. Its target is tied to the upstairs target plus a learned offset. The starting offset is 1°F cooler than upstairs.</p><p style="margin-top:8px"><span class="pill accent">Learns: offset by temperature, sun and hour</span></p></div>
-    <div class="card"><h4>Setback and recovery move together</h4><p>When the whole house is empty, both floors set back and keep the offset, as in your example: main 80°F, upstairs 82°F. On recovery the main floor starts first, so the upstairs cools down with less heat coming from below. Your rule (upstairs 82→78 means main goes to 77) is the starting point.</p><p style="margin-top:8px"><span class="pill accent">Learns: recovery lead, 0–45 min</span></p></div>
+    <div class="card"><h4>Setback and recovery move together</h4><p>When the whole house is empty, both floors set back together with the main floor still the cooler one, as in your example: main 80°F, upstairs 82°F. The setback gap is learned separately from the 1°F occupied offset. On recovery the main floor starts first, so the upstairs cools down with less heat coming from below. Your rule (upstairs 82→78 means main goes to 77) is the starting point.</p><p style="margin-top:8px"><span class="pill accent">Learns: recovery lead, 0–45 min</span></p></div>
     <div class="card"><h4>Pre-cool with the forecast</h4><p>On hot, sunny days the upstairs is cooled 1–2°F below target before noon. The outdoor air is cooler then and the AC removes heat more efficiently. The upstairs then coasts through the solar peak. On mild days the app skips it, because there it only adds runtime.</p><p style="margin-top:8px"><span class="pill accent">Learns: depth, start time, the forecast threshold</span></p></div>
-    <div class="card"><h4>The right sensors at the right time</h4><p>ecobee comfort settings decide which sensors count. Upstairs uses the Toy Room by day and the Girls' Room at night. Main floor uses the Living Room, Kitchen and School Room. The wing uses the Office 9–5 and the Bedroom at night. The app writes these into each ecobee program and turns Follow Me off so ecobee doesn't override them.</p></div>
+    <div class="card"><h4>The right sensors at the right time</h4><p>ecobee comfort settings decide which sensors count. Upstairs uses the Toy Room by day and the Girls' Room at night. Main floor uses the Living Room, Kitchen and School Room. The wing uses the Office 9–5 and the Bedroom at night. The app writes these into each ecobee program and turns Follow Me off so ecobee doesn't override them. ecobee temperature holds use the <em>Home</em> setting's sensors, so the current time block's set is written into Home too.</p></div>
     <div class="card"><h4>Bed / Office runs on its own</h4><p>Unless the data shows the main floor affecting the wing, it stays independent. Its savings come from its schedule, with the office empty in the evening and the bedroom only at night, and from sensor sets. If coupling shows up in the data, the wing joins the linked rules.</p></div>
     <div class="card"><h4>Protect the equipment and the air</h4><p>Minimum run and off times prevent short cycling, and cycles per hour are tracked as a health signal. Indoor humidity has to stay under about 58%: a strategy that saves runtime by raising humidity loses. If someone adjusts a thermostat by hand, the app backs off and records it as feedback.</p></div>
   </div>
@@ -850,7 +947,7 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
             ≤ 1 change per unit per 30 min, ≤ 2°F per change
             indoor humidity ≤ 58%
             no unit short-cycling (runs &lt; 5 min)</div>
-      <p class="small muted" style="margin-top:10px">Runtime is a fair start. Units differ in size, though, so a minute of a 3-ton main unit costs more than a minute of a 2-ton upstairs unit. A whole-home power monitor (Emporia Vue, Sense) with a clamp on each condenser lets the app optimize energy instead of minutes.</p>
+      <p class="small muted" style="margin-top:10px">Runtime is a fair start. Units differ in size, though, so a minute of a 3-ton main unit costs more than a minute of a 2-ton upstairs unit. A circuit-level power monitor (an Emporia Vue 3, or a Shelly EM Gen3 per unit) with a clamp on each condenser lets the app optimize energy instead of minutes.</p>
     </div>
     <div>
       <h3 style="margin-bottom:12px">Your example, scored by the house model</h3>
@@ -865,12 +962,12 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
       <thead><tr><th style="width:110px">Time</th><th>What happens</th><th>Who decides</th></tr></thead>
       <tbody>
         <tr><td class="num">3:30 AM</td><td>Yesterday's 5-minute ecobee data is final (ecobee runs about an hour behind). Models refit, and Claude reviews the day and writes the morning digest.</td><td>Model jobs + Claude</td></tr>
-        <tr><td class="num">6:00 AM</td><td>Forecast pulled. The model simulates today's options: pre-cool or not, which offset, recovery lead. It picks the plan that meets comfort with the least runtime.</td><td>Controller</td></tr>
+        <tr><td class="num">6:00 AM</td><td>Forecast pulled. The model simulates today's options: pre-cool or not, which offset, recovery lead. It picks the plan that meets comfort with the least runtime, and re-checks it at noon and 3 PM.</td><td>Models &amp; optimizer</td></tr>
         <tr><td class="num">7–11 AM</td><td>On a hot day, the upstairs pre-cools 1–2°F below target while the outdoor air is still mild.</td><td>Controller</td></tr>
         <tr><td class="num">Midday</td><td>The main floor empties out. The linked rule keeps it tied to the upstairs instead of floating to 80°F.</td><td>Controller</td></tr>
         <tr><td class="num">3–6 PM</td><td>Solar peak. Every 3 minutes the app watches upstairs duty and room temperatures. If the upstairs is about to max out, it lowers the main-floor target within your limits.</td><td>Controller, alerts to you</td></tr>
         <tr><td class="num">5:30 PM</td><td>Recovery for the evening. The main floor leads the upstairs by the learned lead time.</td><td>Controller</td></tr>
-        <tr><td class="num">10 PM</td><td>Night sensor sets: Girls' Room upstairs, Bedroom in the wing. The main floor becomes a buffer. Quiet hours begin.</td><td>ecobee program, written by the app</td></tr>
+        <tr><td class="num">9–10 PM</td><td>Night sensor sets: the Girls' Room upstairs at the 9 PM bedtime, the Bedroom in the wing at 10 PM. The main floor becomes a buffer. Quiet hours begin at 10 PM.</td><td>ecobee program, written by the app</td></tr>
       </tbody>
     </table>
   </div>
@@ -883,6 +980,75 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
   </div>
 </section>
 
+
+<!-- ================= OCCUPANCY ================= -->
+<section class="block" id="occupancy" aria-labelledby="h-occ">
+  <div class="sec-head">
+    <p class="eyebrow">Occupancy</p>
+    <h2 id="h-occ">Rooms in use come first</h2>
+    <p>Yes, the app is built around which rooms are in use. It keeps its own estimate for each room instead of trusting ecobee's flag. An occupied room's comfort is never traded for runtime. Expect room-by-room priority mostly to buy comfort; the runtime savings come from whole floors being empty, from timing, and from the linked-floors rule.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="prose">
+      <h3 style="margin-bottom:12px">Why ecobee's own occupancy isn't enough</h3>
+      <ul>
+        <li><b>It's a 30-minute flag, not motion.</b> ecobee's API reports a room as occupied if its sensor saw motion in the past 30 minutes, and the cloud copy updates about every 3 minutes. A room someone left 25 minutes ago still reads occupied.</li>
+        <li><b>Motion sensors miss still people.</b> SmartSensors use PIR, which sees movement, not presence. Someone reading, working at a desk or sleeping goes undetected. Field studies of motion-based home control report exactly this: misses are worst at night.</li>
+        <li><b>The Toy Room is blind today.</b> The upstairs Smart Thermostat Essential has no occupancy sensor of its own, so upstairs occupancy currently comes only from the Girls' Room sensor. The Hallway and Bedroom thermostats sense occupancy only if they aren't ecobee3 lite models.</li>
+        <li><b>A temperature hold switches sensor sets.</b> ecobee's documented behavior is that a temperature hold uses the <em>Home</em> comfort setting's sensors, whatever the schedule says. An app that sets holds at night could quietly stop listening to the Girls' Room. The controller handles this explicitly (below), and it's a Phase 0 test on your firmware.</li>
+      </ul>
+    </div>
+    <div class="prose">
+      <h3 style="margin-bottom:12px">What the app uses instead</h3>
+      <ul>
+        <li><b>Live motion in seconds</b> from each SmartSensor over the local HomeKit link, with a "seconds since last motion" reading. The app sets its own windows per room instead of ecobee's fixed 30 minutes.</li>
+        <li><b>Learned patterns per room</b>, from the per-sensor occupancy history ecobee keeps in its 5-minute reports. The app learns when the School Room and Office are usually in use, separately for school days, weekends and holidays. The Toy Room has no history (the Essential has no occupancy sensor), so its pattern starts once the presence sensor is installed.</li>
+        <li><b>Sleep windows</b> for the Girls' Room and Bedroom. They count as occupied all night without needing motion, because motion sensors can't see sleepers.</li>
+        <li><b>Optional presence sensors</b> (mmWave radar) where people sit still: one in the Toy Room is the top recommendation, then the Office and Living Room. Door contacts on bedrooms help too: a door that closed after motion means someone is probably still inside.</li>
+        <li><b>Phones</b> only for whole-house "adults away". The kids don't carry phones, so phones alone never declare the house empty.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 style="margin:36px 0 14px">How a room's state is decided</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>State</th><th>When</th><th>What it does to control</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill good">Occupied</span></td><td>Recent motion or presence, a closed-door signal, or an uncertain reading. When unsure, the app assumes someone is there.</td><td>The room must stay inside its comfort band. It can be over the band by at most 1°F, for at most 15 minutes.</td></tr>
+        <tr><td><span class="pill cool">Asleep</span></td><td>Girls' Room and Bedroom inside their sleep windows, with or without motion</td><td>The strictest limits: at most 0.5°F over the band, for at most 10 minutes. The room keeps priority all night.</td></tr>
+        <tr><td><span class="pill">Empty</span></td><td>No signal for the room's learned window (shorter for a hallway, longer for an office)</td><td>The room drops out of the comfort targets. It may drift within the floor's limits, subject to the linked-floors rule.</td></tr>
+        <tr><td><span class="pill accent">Arriving</span> <span class="muted small">(added later)</span></td><td>The learned pattern says the room is likely in use soon, such as the School Room before 8 AM</td><td>Recovery starts early, timed by the house model, so the room is comfortable when people arrive</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted" style="margin-top:8px">It starts with three states and adds "Arriving" once a few weeks of data show the predictions are right. A missed arrival costs comfort, while a false "occupied" only costs some runtime, so every tie goes to comfort.</p>
+
+  <div class="grid-2" style="margin-top:28px">
+    <div class="card">
+      <h4>How occupancy steers each thermostat</h4>
+      <p>An ecobee only averages whichever sensors are in the active comfort setting. It can't weight rooms. So the app works in two loops:</p>
+      <ul>
+        <li><b>Slow loop, a few times a day:</b> the sensor set for each time block (Toy Room by day, Girls' Room at night, and so on) is written into the comfort settings, including Home, because temperature holds use Home's sensors.</li>
+        <li><b>Every 3 minutes:</b> the app learns how far each room usually runs from the thermostat's average, and picks the setpoint that keeps every occupied room inside its band. When two occupied rooms on the same thermostat disagree, the priority room for that time wins: upstairs, the Girls' Room at night and the Toy Room by day; in the wing, the Bedroom at night and the Office during work hours; on the main floor, the School Room on school days and the Living Room in the evening.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Occupancy and the linked floors</h4>
+      <ul>
+        <li><b>Main floor empty, anyone upstairs (including sleeping):</b> the main floor becomes a buffer tied to the upstairs target. It never floats to its Away setting. On summer nights this is the normal state.</li>
+        <li><b>Whole house empty:</b> adults' phones away <em>and</em> no motion anywhere for 45 minutes <em>and</em> outside sleep windows. Both floors set back together, with the main floor still the cooler one.</li>
+        <li><b>Coming home:</b> recovery is timed from the learned arrival pattern, with the main floor leading.</li>
+        <li><b>Bed / Office wing:</b> sets back only when both rooms are empty.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout info" style="margin-top:20px">
+    <div class="ic" aria-hidden="true">i</div>
+    <div><h4>What to expect from occupancy</h4><p>Within one floor, shifting priority between rooms mostly buys comfort, such as not over-cooling an empty sunny room to fix a shaded one. The runtime savings come from whole floors being empty and from the linked-floors rule. Studies of multi-zone buildings (university residence halls, and zone-level control tests in larger buildings) find that setbacks save less than predicted, because an empty zone pulls heat from its neighbors. That's the same effect you see between your floors, and why savings are always measured on the whole house.</p></div>
+  </div>
+</section>
 <!-- ================= LEARNING ================= -->
 <section class="block" id="learning" aria-labelledby="h-learn">
   <div class="sec-head">
@@ -893,12 +1059,12 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
 
   <div class="grid-2" style="align-items:start">
     <div class="steps">
-      <div class="step"><span class="n">1</span><h4>Backfill, then watch</h4><p>On day one, pull the 5-minute history ecobee still holds (roughly 12–18 months) and the matching hourly weather from Open-Meteo's archive. You start with last summer as a baseline instead of waiting weeks. Nothing changes in the house yet.</p><div class="meta"><span class="pill">week 1</span></div></div>
-      <div class="step"><span class="n">2</span><h4>Fit the weather baseline</h4><p>For each unit, find the outdoor temperature where cooling starts (its balance point), then fit runtime against degree-days, sun and humidity. The model must predict held-out days well (CV(RMSE) ≤ 20%) before any savings number is shown.</p><div class="meta"><span class="pill">weeks 1–3</span></div></div>
-      <div class="step"><span class="n">3</span><h4>Fit the house's thermal model</h4><p>A small physics model with learned numbers: how fast each zone gains heat from outside, how strongly the zones are coupled, what the sun adds, and how much heat each unit removes per minute. It is refit every night from the 5-minute data.</p><div class="meta"><span class="pill">weeks 3–6</span></div></div>
-      <div class="step"><span class="n">4</span><h4>Simulate tomorrow</h4><p>Each night, simulate candidate plans (offsets, pre-cool, recovery lead) against tomorrow's forecast and keep the cheapest plan that meets comfort. This is model predictive control in its simplest form.</p><div class="meta"><span class="pill">nightly</span></div></div>
-      <div class="step"><span class="n">5</span><h4>Test it in the real house</h4><p>The simulation's favorite becomes a challenger. Days are randomly assigned to the current champion or the challenger, and the comparison is weather-normalized. The test ends when the 90% interval excludes zero, or after a set number of days.</p><div class="meta"><span class="pill">1–3 weeks per test</span></div></div>
-      <div class="step"><span class="n">6</span><h4>Adopt, then keep tuning</h4><p>The winner becomes the champion. Settings become condition-specific (one offset on 95°F sunny days, another on 82°F cloudy ones), and Bayesian optimization picks the next values to try. When a model drifts, the app looks for a cause: season, a dirty filter, low refrigerant.</p><div class="meta"><span class="pill">continuous</span></div></div>
+      <div class="step"><span class="n">1</span><h4>Backfill, then watch</h4><p>On day one, pull the 5-minute history ecobee still holds (about a year, possibly more; Phase 0 measures it) and the matching hourly weather from Open-Meteo's archive. Then study the afternoons your main floor already floated warm. You start with last summer as a baseline instead of waiting weeks. Nothing changes in the house yet.</p><div class="meta"><span class="pill">week 1</span></div></div>
+      <div class="step"><span class="n">2</span><h4>Fit the weather baseline</h4><p>For each unit, find the outdoor temperature where cooling starts (its balance point), then fit runtime against degree-days (how far, and for how long, the outdoor temperature sat above that balance point), sun and humidity. The model must predict held-out days well, with low scatter (CV(RMSE) ≤ 20%) and low bias, before any savings number is shown.</p><div class="meta"><span class="pill">weeks 1–3</span></div></div>
+      <div class="step"><span class="n">3</span><h4>Fit the house's thermal model</h4><p>A small physics model with learned numbers: how fast each zone gains heat from outside, how strongly the zones are coupled, what the sun adds, and how much heat each unit removes per minute. It's refit every night from the 5-minute data. It starts simple, and extra detail (an attic state, say) stays only if it predicts better. It runs in shadow, and its plans drive the house only once it beats the linked-floors rule in backtests (Phase 5).</p><div class="meta"><span class="pill">weeks 3–6, in shadow</span></div></div>
+      <div class="step"><span class="n">4</span><h4>Simulate tomorrow</h4><p>Each night, simulate candidate plans (offsets, pre-cool, recovery lead) against tomorrow's forecast, re-run them at 6 AM, noon and 3 PM or when the forecast shifts, and keep the cheapest plan that meets comfort. This is model predictive control in its simplest form.</p><div class="meta"><span class="pill">nightly</span></div></div>
+      <div class="step"><span class="n">5</span><h4>Test it in the real house</h4><p>The simulation's favorite becomes a challenger. Days are randomly assigned to the current champion or the challenger, and the comparison is weather-normalized on total-house runtime. The success measure and 2–3 checkpoints are fixed before the test starts, and the early checkpoints use stricter (wider) intervals so the extra looks together still keep about a 10% false-win rate. Peeking daily and stopping on a good-looking day would manufacture false wins.</p><div class="meta"><span class="pill">1–3 weeks per test</span></div></div>
+      <div class="step"><span class="n">6</span><h4>Adopt, then keep tuning</h4><p>The winner becomes the champion. Settings become condition-specific (one offset on 95°F sunny days, another on 82°F cloudy ones), and Bayesian optimization, run mostly against the simulator, picks the next values to try. When a model drifts, the app looks for a cause: season, a dirty filter, low refrigerant.</p><div class="meta"><span class="pill">continuous</span></div></div>
     </div>
     <div style="display:grid;gap:16px;grid-template-columns:minmax(0,1fr)">
       <div>
@@ -951,7 +1117,104 @@ C<sub>bed</sub>·dT<sub>bed</sub>/dt  = (T<sub>out</sub>−T<sub>bed</sub>)/R<su
   </div>
   <div class="callout info" style="margin-top:20px">
     <div class="ic" aria-hidden="true">i</div>
-    <div><h4>When is it "dialed in"?</h4><p>Large effects, like stopping the main floor from floating to 80°F, show up within days. Fine-tuning (1° vs 2°, a 10-minute change in lead time) needs 2–3 week switchbacks, because those effects are small next to day-to-day noise. The practical definition of dialed in: experiments stop finding differences larger than their own uncertainty. Then the app shifts from testing to watching for drift. Heating season starts a new round, because heat rising from the main floor then helps the upstairs instead of hurting it.</p></div>
+    <div><h4>When is it "dialed in"?</h4><p>Large effects, like stopping the main floor from floating to 80°F, can usually be confirmed within a season: a 10–15% change in total runtime needs roughly 1–7 weeks of test days per option (about 2–14 weeks in all), depending on how noisy the house's daily runtime turns out to be. Small refinements (1° vs 2°, ten minutes of recovery lead) are a different story. Confirming a 5% difference in one house can take 50–200 days per option, so those are judged mainly in the simulator and adopted when the simulator and a real test point the same way. In practice, "dialed in" means experiments stop finding differences larger than their own uncertainty. Then the app shifts from testing to watching for drift. Heating season starts a new round, because heat rising from the main floor then helps the upstairs.</p></div>
+  </div>
+</section>
+
+<!-- ================= WHO DECIDES WHAT ================= -->
+<section class="block" id="brain" aria-labelledby="h-brain">
+  <div class="sec-head">
+    <p class="eyebrow">Models + Claude</p>
+    <h2 id="h-brain">Machine learning or Claude? Both, in layers</h2>
+    <p>The models do the learning. Claude sits on top of them as the house's research engineer: it reads what they found, proposes what to try next, and runs backtests and simulations through tools. Every change it proposes passes automatic checks before reaching the house. A plain, predictable controller does the minute-to-minute work.</p>
+  </div>
+
+  <div class="layers" role="list">
+    <div class="layer" role="listitem">
+      <div class="layer-k"><span class="eyebrow">Layer 3 · judgment</span><b>Claude Opus 5.5</b><span class="cad">Nightly, weekly, within minutes of an anomaly, and whenever you ask</span></div>
+      <div class="layer-b"><p>Diagnoses why a day went the way it did, catches data and model problems early, designs and audits experiments, explains results, and proposes better models.</p>
+        <p class="can"><b>Can propose:</b> model features and settings, plan parameters inside a pre-approved range, and the next experiment. Nothing goes live until it passes the checks below, and new experiments also need your approval. It can veto the optimizer's next pick with a reason.</p></div>
+    </div>
+    <div class="gate" aria-hidden="true"><span>backtest · simulate · shadow days · trial window · your limits</span></div>
+    <div class="layer" role="listitem">
+      <div class="layer-k"><span class="eyebrow">Layer 2 · skill</span><b>Models &amp; optimizer</b><span class="cad">Refit nightly · replan at 6 AM, noon and 3 PM, and when the forecast shifts</span></div>
+      <div class="layer-b"><p>Weather baselines, the house model, choosing each day's plan, the experiment statistics, and picking which settings to test next.</p>
+        <p class="can"><b>Can change:</b> today's plan, within the current policy and your limits.</p></div>
+    </div>
+    <div class="gate" aria-hidden="true"><span>hard limits enforced in code</span></div>
+    <div class="layer" role="listitem">
+      <div class="layer-k"><span class="eyebrow">Layer 1 · reflexes</span><b>Controller</b><span class="cad">Every 3 minutes, and within seconds on local occupancy changes</span></div>
+      <div class="layer-b"><p>Runs the plan, reacts when rooms fill or empty, and steps in by rule when the upstairs is about to max out. It writes short holds (1–2 hours) and renews them only while everything checks out.</p>
+        <p class="can"><b>Never waits on Claude.</b> If the server, models or Claude stop, the holds expire and each ecobee goes back to its own schedule. Smart Away stays switched off in the ecobee settings, so that fallback doesn't bring back the float-to-80 problem.</p></div>
+    </div>
+  </div>
+
+  <h3 style="margin:40px 0 14px">Why not let Claude adjust everything in real time?</h3>
+  <p class="prose" style="margin-bottom:16px;color:var(--ink-2)"><b style="color:var(--ink)">Short answer: no.</b> It would cost hundreds of dollars a month instead of tens, wouldn't always take the same action in the same situation, would stop whenever the internet or the API does, and wouldn't control any better, because a house takes tens of minutes to hours to respond to a change. Side by side:</p>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th></th><th>Claude in the 3-minute loop, no models</th><th>Models + controller, Claude steering (recommended)</th></tr></thead>
+      <tbody>
+        <tr><td><b>Calls a day</b></td><td>About 480</td><td>About 1–5 analyst runs</td></tr>
+        <tr><td><b>Cost on the API</b></td><td>Roughly $300–1,300 a month, depending on how much context each call carries</td><td>Roughly $35–70 a month</td></tr>
+        <tr><td><b>Allowed on your subscription?</b></td><td>Not a good fit. Anthropic's terms say Agent SDK services should use an API key, and Pro/Max limits assume ordinary individual use, which 480 unattended calls a day is not.</td><td>The unattended agent uses an API key. You ask questions from Claude Code or Claude Desktop on your subscription.</td></tr>
+        <tr><td><b>Does it help control?</b></td><td>No. A house's temperature takes tens of minutes to hours to respond, so a few well-timed decisions a day matter more than 480 quick ones.</td><td>The controller handles the fast reactions; the models plan the slow ones</td></tr>
+        <tr><td><b>Same situation, same action?</b></td><td>Not guaranteed: Opus 5.5 has no setting that makes its answers repeatable</td><td>Yes. The controller and models are deterministic, testable and auditable.</td></tr>
+        <tr><td><b>Internet or API down</b></td><td>Nobody is driving</td><td>Nothing changes: the controller and models run on your server</td></tr>
+        <tr><td><b>Track record</b></td><td>A 2026 review of 66 studies on language models in HVAC control found none ready for real operation and recommended advisory roles</td><td>A month-long, researcher-run field trial in one occupied house measured about 18% savings against a fixed setpoint, with a wide 95% interval (about 4–31%) and power metering this house doesn't have</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin:40px 0 14px">How Claude pushes the models toward optimal</h3>
+  <p class="prose" style="margin-bottom:16px;color:var(--ink-2)">What slows learning in a house isn't computing. It's weather noise: a small difference between two strategies takes days of data to show through day-to-day variation. So Claude can't make the house dial in faster than the weather allows. What it adds is making each day of data count: choosing what to test, catching mistakes early, and explaining results. It does that in six ways:</p>
+  <div class="grid-2">
+    <div class="card"><h4>Mine the history first</h4><p>The backfill contains every afternoon your main floor already floated warm. Claude has the models treat those afternoons as natural experiments, tests the house already ran on its own (this is the history study), with two checks against fooling itself: the bed wing should show no effect, and the same analysis run on similar afternoons when nothing floated should find none either. Those checks matter because sun, weaker AC on hot afternoons and Smart Away all peak at the same time, so a simple before/after comparison would overstate how much the main floor heats the upstairs. The result is a starting estimate, confirmed later with small planned tests.</p></div>
+    <div class="card"><h4>Kill bad ideas in simulation</h4><p>Each candidate runs against real past weather in the house model first. Only candidates that look better there, by more than the model's own uncertainty, get a real day in your house.</p></div>
+    <div class="card"><h4>Size every test before it starts</h4><p>Claude runs the sample-size math first. A single house can usually confirm a 10–15% change within a season (roughly 2–14 weeks). Confirming a 5% change can take 50–200 days per option, so small tweaks get judged mostly in simulation.</p></div>
+    <div class="card"><h4>Stick to the plan, check honestly</h4><p>Each test fixes its success measure (total-house runtime, never one unit) and 2–3 checkpoints in advance. Checking every day and stopping at the first good-looking result would produce false wins, so early checkpoints use stricter intervals. Neither Claude nor the optimizer can redefine success once data arrives.</p></div>
+    <div class="card"><h4>Audit the next-test choice</h4><p>The optimizer's math picks the next setting to try. Claude reviews the choice, explains it, and can veto it with a reason, for example "a heat wave starts Thursday; test pre-cooling then."</p></div>
+    <div class="card"><h4>Fix the model, not just the settings</h4><p>When prediction errors show a pattern, such as always underestimating the upstairs on west-sun afternoons, Claude proposes a new feature. The backtest and shadow days decide whether it's adopted.</p></div>
+  </div>
+
+  <h3 style="margin:40px 0 14px">How robust the models are, honestly</h3>
+  <div class="grid-2" style="align-items:start">
+    <div class="prose">
+      <p>A public set of about 60,000 house models fitted to ecobee thermostat data gives a realistic benchmark. Their median indoor-temperature error is about 0.6°F one hour ahead and about 2.5°F a day ahead, and roughly 1 in 10 fit poorly. Your house has three coupled zones measured through compressor runtime alone, so expect somewhat worse.</p>
+      <p>That's good enough for coarse decisions: which offset band, whether to pre-cool, how early to start recovery. It isn't precise enough to trust a minute-by-minute trajectory, which is why the 3-minute rules keep correcting course. Without a power monitor, the model learns heat flows in runtime minutes rather than watts.</p>
+      <p><b>Build order follows from that.</b> Version 1 is the weather baselines, the history study and the linked-floors rule, checked against the weather baseline and then tuned with one planned switchback. The full house model and automatic tuning join only when they beat that rule in backtests.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="t" style="min-width:420px">
+        <thead><tr><th>Check</th><th>What must be true</th></tr></thead>
+        <tbody>
+          <tr><td><b>Clean data</b></td><td>Gaps, stuck sensors and unusual days are flagged and excluded</td></tr>
+          <tr><td><b>Walk-forward backtest</b></td><td>Trained only on the past, the model must beat a naive forecast on each next day, checked separately for cooling and heating season</td></tr>
+          <tr><td><b>Error checks</b></td><td>Both scatter (CV(RMSE) ≤ 20%) and bias, so seasonal errors can't cancel out</td></tr>
+          <tr><td><b>Physical sanity</b></td><td>Fitted values are positive and plausible, and the nightly report flags any that the data can't pin down</td></tr>
+          <tr><td><b>Shadow days</b></td><td>A new model or policy logs what it <em>would</em> do for 3–7 days before acting</td></tr>
+          <tr><td><b>Trial window</b></td><td>Then it acts for a limited window only, such as afternoons, before running full-time</td></tr>
+          <tr><td><b>Drift watch</b></td><td>Sustained prediction errors trigger a Claude investigation: season change, filter, refrigerant, a new appliance</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:20px;align-items:start">
+    <div class="card">
+      <h4>Fallbacks</h4>
+      <ol style="margin:.4em 0 0;padding-left:1.2em;color:var(--ink-2)">
+        <li>A model fails its checks → the last good model takes over</li>
+        <li>No good model → the controller runs the simple linked-floors rules</li>
+        <li>Server or controller down → holds expire within 2 hours and each ecobee runs its own schedule</li>
+        <li>ecobee cloud down → the local HomeKit link keeps live readings and basic timed holds</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h4>Can Claude change the model code itself?</h4>
+      <p><b>Settings, yes, through the checks.</b> Inside the app, Claude proposes features and parameters through tools, and the checks run on their own before anything goes live.</p>
+      <p style="margin-top:8px"><b>Code, only as a pull request.</b> In Claude Code on this repo, Claude can write a new model as a pull request. The scoring code and the most recent weeks of test data (held back so a model can't be tuned to them) stay read-only and outside its reach: a 2026 study found AI coding agents tried to tamper with unlocked evaluations in about half of runs. CI runs the backtest and you merge. A merged model still starts with shadow days.</p>
+    </div>
   </div>
 </section>
 
@@ -971,7 +1234,7 @@ C<sub>bed</sub>·dT<sub>bed</sub>/dt  = (T<sub>out</sub>−T<sub>bed</sub>)/R<su
         <tr><td><b>Open-Meteo forecast</b></td><td>Primary</td><td>Hourly and 15-minute temperature, humidity, dew point, cloud, wind, and sun (shortwave, direct, diffuse, and tilted to your roof and windows). Forecast out to 16 days; 15-minute data is native in North America.</td><td>Free, no API key, for non-commercial use, which includes personal home automation. 10,000 calls/day. CC BY 4.0: show "Weather data by Open-Meteo.com" next to the data.</td></tr>
         <tr><td><b>Open-Meteo archive</b></td><td>Backfill and baselines</td><td>The same variables hourly back to 1940. ERA5 lags about 5 days; the 9 km IFS series has no delay.</td><td>Same as above</td></tr>
         <tr><td><b>Open-Meteo previous runs</b></td><td>Judging forecast-based decisions</td><td>What the forecast said at decision time, so a pre-cool decision is judged on what was known then</td><td>Same as above</td></tr>
-        <tr><td><b>NWS api.weather.gov</b></td><td>Cross-check</td><td>Hourly observations from the nearest airport station and the official gridded forecast</td><td>Free, no key; requires a User-Agent header with a contact email</td></tr>
+        <tr><td><b>NWS api.weather.gov</b></td><td>Cross-check</td><td>Hourly observations from the nearest airport station and the official gridded forecast</td><td>Free, no key; requires a User-Agent header identifying the app (adding a contact email is recommended)</td></tr>
         <tr><td><b>ecobee outdoor columns</b></td><td>Cross-check</td><td>outdoorTemp and outdoorHumidity in every 5-minute runtime report</td><td>Comes with the ecobee data</td></tr>
         <tr><td><b>Your own weather station</b> <span class="muted">(optional)</span></td><td>Hyperlocal upgrade</td><td>A Tempest or Ambient station on your roof measures your actual sun and temperature</td><td>Free API for station owners</td></tr>
       </tbody>
@@ -990,8 +1253,8 @@ https://api.open-meteo.com/v1/forecast?latitude=<span class="k">LAT</span>&amp;l
   <div class="grid-2">
     <div class="card"><h4>An expected runtime for every day</h4><p>A baseline model per unit predicts runtime from that day's weather. The balance point is searched from 30–90°F (the CalTRACK method), and degree-days are computed from hourly temperatures, not the daily average, because the relationship isn't linear.</p></div>
     <div class="card"><h4>Savings = expected − actual</h4><p>Run the baseline with this period's weather and subtract what the units actually ran. This is the IPMVP "avoided energy" method. Each unit's runtime is metered separately, which makes the estimate tighter than a whole-house electric meter would.</p></div>
-    <div class="card"><h4>A waterfall every week</h4><p>The change from last week to this week is split into weather, sun, the strategy, and noise. That's the "What changed the total" chart in the mockup's <a href="#app" data-jump="t-analytics">Did it work?</a> tab.</p></div>
-    <div class="card"><h4>Randomized switchbacks for small effects</h4><p>Before/after comparisons are fine for big changes. For tuning, days are randomly assigned to one strategy or the other, so weather averages out across both. LBNL's randomized M&amp;V field study found this more accurate and faster than pre/post comparisons. The first few hours after each switch are dropped to account for thermal mass.</p></div>
+    <div class="card"><h4>A waterfall every week</h4><p>The latest period is compared with the one before it (the mockup uses the last 14 days vs the 14 before), and the change is split into weather, sun, the strategy, and noise. That's the "What changed the total" chart in the mockup's <a href="#app" data-jump="t-analytics">Did it work?</a> tab.</p></div>
+    <div class="card"><h4>Randomized switchbacks for small effects</h4><p>Before/after comparisons are fine for big changes. For tuning, days are randomly assigned to one strategy or the other, so weather averages out across both. A UC Berkeley (Center for the Built Environment) study that re-analyzed 639 commercial buildings with a simulated intervention found randomized designs more accurate and faster than pre/post comparisons, though even there a result took about 36 weeks. The first few hours after each switch are dropped to account for thermal mass.</p></div>
   </div>
 
   <h3 style="margin:36px 0 14px">Metrics the app tracks</h3>
@@ -999,7 +1262,7 @@ https://api.open-meteo.com/v1/forecast?latitude=<span class="k">LAT</span>&amp;l
     <table class="t">
       <thead><tr><th>Metric</th><th>Definition</th><th>Why it matters here</th></tr></thead>
       <tbody>
-        <tr><td><b>Runtime</b></td><td>Compressor seconds per 5-minute interval, summed (compCool1/2, compHeat, auxHeat)</td><td>The thing we're minimizing, per unit and for the house</td></tr>
+        <tr><td><b>Runtime</b></td><td>Equipment seconds per 5-minute interval: compCool1 when cooling; compHeat1 for a heat pump, or auxHeat1 for a furnace or backup heat. Each stage-1 column already includes stage-2 time, so stage-2 columns are stored for detail but never added on top.</td><td>The thing we're minimizing, per unit and for the house</td></tr>
         <tr><td><b>Weather-expected runtime</b></td><td>The baseline model's prediction for that day's actual weather</td><td>The yardstick for every claim</td></tr>
         <tr><td><b>Duty cycle</b></td><td>Share of an hour the compressor runs</td><td>100% means the unit can't keep up: the upstairs symptom</td></tr>
         <tr><td><b>Maxed-out minutes</b></td><td>Minutes at 100% duty while the zone is above target</td><td>The clearest sign of floors fighting</td></tr>
@@ -1018,38 +1281,38 @@ https://api.open-meteo.com/v1/forecast?latitude=<span class="k">LAT</span>&amp;l
 <section class="block" id="claude" aria-labelledby="h-claude">
   <div class="sec-head">
     <p class="eyebrow">Claude Agent SDK</p>
-    <h2 id="h-claude">Claude Opus 5.5, running on your account</h2>
-    <p>The Claude Agent SDK runs Claude as an agent inside your own Python service, using tools you write. Here those tools are your house data, the weather, the simulator and a proposal queue.</p>
+    <h2 id="h-claude">Setting Claude up on your account</h2>
+    <p>The Claude Agent SDK runs Claude Opus 5.5 as an agent inside your own Python service, with tools you write: your house data, the weather, the simulator, and a proposal queue. Two kinds of access cover the two ways you'll use Claude.</p>
   </div>
 
-  <h3 style="margin-bottom:14px">Two ways to connect your account</h3>
   <div class="grid-2">
     <div class="card">
-      <h4>Your Claude Pro or Max subscription</h4>
-      <p>Run <code>claude setup-token</code> once on any machine. It produces a one-year token tied to your subscription. Put it in the agent service as <code>CLAUDE_CODE_OAUTH_TOKEN</code>. Anthropic documents this for scripts and pipelines where browser login isn't possible.</p>
+      <span class="pill good" style="margin-bottom:8px">For the always-on agent</span>
+      <h4>An API key from the Claude Console</h4>
+      <p>Anthropic's terms say services built on the Agent SDK should use API key authentication. Create a key at platform.claude.com and give it to the agent service as <code>ANTHROPIC_API_KEY</code>.</p>
       <ul>
-        <li>No per-token bill. Usage counts against your plan's limits, the same pool as your own Claude use.</li>
-        <li>For personal use only. Anthropic's Agent SDK docs don't allow offering claude.ai login in products for other people. If you ever share this app, switch to an API key.</li>
-        <li>Renew the token yearly.</li>
+        <li>Opus 5.5 costs $4 per million input tokens and $20 per million output tokens; cached input is much cheaper.</li>
+        <li>Rough estimate: $0.80–1.60 per nightly review (about $25–50 a month), plus a few dollars a week for the weekly report, triggered investigations and Ask Claude questions. Call it $35–70 a month.</li>
+        <li><code>max_budget_usd</code> stops a run when its estimated cost reaches the cap. The estimate is client-side, so the last request can overshoot slightly.</li>
       </ul>
     </div>
     <div class="card">
-      <h4>An API key from the Claude Console</h4>
-      <p>Create a key at platform.claude.com and set <code>ANTHROPIC_API_KEY</code>. Billing is per token: Opus 5.5 costs $4 per million input tokens and $20 per million output tokens.</p>
+      <span class="pill" style="margin-bottom:8px">For you, asking questions</span>
+      <h4>Your Pro or Max subscription</h4>
+      <p>Claude Code and Claude Desktop on your laptop sign in with your subscription as usual. Point them at the app's MCP server and ask anything about the house: that's ordinary use of Anthropic's own apps, drawing on your plan.</p>
       <ul>
-        <li>Rough estimate: a nightly review plus a weekly report comes to about $10–20 a month. Real usage depends on how much data each run reads.</li>
-        <li><code>max_budget_usd</code> caps each run, so a runaway loop can't cost much.</li>
-        <li>Separate from your chat usage, and the right choice if anyone else will use the app.</li>
+        <li>The one-year token from <code>claude setup-token</code> is meant for scripts and CI. Anthropic's terms say subscription sign-in is for ordinary use of Claude Code and its other native apps, and that Agent SDK services should use API keys, so this plan doesn't run the unattended agent on it.</li>
+        <li>The in-app Ask Claude tab runs on the API key.</li>
       </ul>
     </div>
   </div>
 
   <h3 style="margin:36px 0 14px">When Claude runs</h3>
   <div class="grid-2">
-    <div class="card"><h4>Nightly review · 3:30 AM</h4><p>After ecobee's data for the day is final. Claude reads yesterday's results against the weather, checks running experiments, flags anomalies and writes your morning digest.</p></div>
-    <div class="card"><h4>Weekly report · Sunday</h4><p>The deeper look: attribution, experiment conclusions, what to test next, and maintenance warnings. Runs at higher effort.</p></div>
-    <div class="card"><h4>When something looks wrong</h4><p>Triggered by a detector: upstairs maxed out for 45+ minutes, the cooling rate dropping, humidity above the limit, a sensor offline. Claude investigates and explains what it found.</p></div>
-    <div class="card"><h4>When you ask</h4><p>In the app's Ask Claude tab, or from Claude Code and Claude Desktop on your laptop through the app's MCP server. There it uses your normal Claude login with the same tools.</p></div>
+    <div class="card"><h4>Nightly review · 3:30 AM</h4><p>After ecobee's data for the day is final. Claude reads yesterday against the weather, checks running experiments, flags anomalies, writes your morning digest, and makes at most one proposal.</p></div>
+    <div class="card"><h4>Weekly report · Sunday</h4><p>The deeper look at higher effort: attribution, experiment checkpoints, what to test next, maintenance warnings.</p></div>
+    <div class="card"><h4>When something looks wrong</h4><p>A detector fires (upstairs maxed out 45+ minutes, cooling rate dropping, humidity high, sensor offline). The controller has already acted by rule. Claude investigates within minutes and explains what it found.</p></div>
+    <div class="card"><h4>When you ask</h4><p>In the app's Ask Claude tab, or from Claude Code and Claude Desktop through the MCP server. Every number in an answer comes from a tool result, not from memory.</p></div>
   </div>
 
   <h3 style="margin:36px 0 14px">The tools Claude gets</h3>
@@ -1057,25 +1320,24 @@ https://api.open-meteo.com/v1/forecast?latitude=<span class="k">LAT</span>&amp;l
     <table class="t">
       <thead><tr><th>Tool</th><th>Type</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td class="num">get_house_status</td><td><span class="pill">read</span></td><td>Current temperatures, targets, occupancy, equipment state for all 3 units and 7 sensors</td></tr>
-        <tr><td class="num">query_runtime</td><td><span class="pill">read</span></td><td>Runtime by unit for any range, at 5-minute, hourly or daily resolution, with weather joined</td></tr>
-        <tr><td class="num">query_sensors</td><td><span class="pill">read</span></td><td>Room-level temperature and occupancy history</td></tr>
-        <tr><td class="num">get_weather</td><td><span class="pill">read</span></td><td>Observed and forecast weather for a range</td></tr>
-        <tr><td class="num">baseline_report</td><td><span class="pill">read</span></td><td>Expected vs actual runtime, savings and intervals for any period</td></tr>
-        <tr><td class="num">coupling_report</td><td><span class="pill">read</span></td><td>Current house-model parameters and how they've changed</td></tr>
-        <tr><td class="num">simulate_plan</td><td><span class="pill">read</span></td><td>Run a candidate policy through the house model against a forecast</td></tr>
-        <tr><td class="num">experiment_results</td><td><span class="pill">read</span></td><td>Status and statistics of running and finished experiments</td></tr>
-        <tr><td class="num">propose_policy_change</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Puts a change in the proposal queue. It's validated against your limits, then applied according to the autonomy mode.</td></tr>
-        <tr><td class="num">propose_experiment</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Queues a switchback test for your approval</td></tr>
-        <tr><td class="num">publish_report</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Saves the digest or weekly report and sends the notification</td></tr>
+        <tr><td class="num">get_house_status · query_runtime · query_sensors · get_weather</td><td><span class="pill">read</span></td><td>Live state and history for every unit, room and weather variable</td></tr>
+        <tr><td class="num">baseline_report · coupling_report · drift_report</td><td><span class="pill">read</span></td><td>Expected vs actual with intervals; house-model values and how sure they are; prediction-error trends</td></tr>
+        <tr><td class="num">natural_experiment_report</td><td><span class="pill">read</span></td><td>The history study of past warm-main-floor afternoons, with its no-effect checks</td></tr>
+        <tr><td class="num">refit_model · run_backtest · simulate_plan</td><td><span class="pill">compute</span></td><td>Try a feature or a policy against past data and the house model, in a sandbox. Results come back with errors and intervals.</td></tr>
+        <tr><td class="num">estimate_power</td><td><span class="pill">compute</span></td><td>How many days a test would need to detect a given effect</td></tr>
+        <tr><td class="num">explain_action</td><td><span class="pill">read</span></td><td>Why the controller made a given write</td></tr>
+        <tr><td class="num">propose_policy_change</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Queues a parameter change inside a pre-approved range. Validated in code, then backtest, shadow days, trial window.</td></tr>
+        <tr><td class="num">propose_experiment</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Queues a switchback with its success measure and checkpoints fixed. Rejected if it's too small to detect anything. You approve it.</td></tr>
+        <tr><td class="num">publish_report</td><td><span class="pill warn"><span class="dot"></span>gated</span></td><td>Saves the digest or report and sends the notification</td></tr>
       </tbody>
     </table>
   </div>
   <p class="small muted" style="margin-top:8px">Claude has no tool that talks to the thermostats. Only the controller writes to ecobee, and it enforces the limits itself.</p>
 
-  <p class="code-cap" style="margin-top:22px">agent/nightly.py · the nightly review (Python, claude-agent-sdk)</p>
-  <pre class="code"><span class="k">from</span> claude_agent_sdk <span class="k">import</span> query, ClaudeAgentOptions, ResultMessage, tool, create_sdk_mcp_server
-<span class="k">from</span> climate <span class="k">import</span> store, model, guardrails
+  <p class="code-cap" style="margin-top:22px">agent/nightly.py · the nightly review (Python, claude-agent-sdk, ANTHROPIC_API_KEY in the environment)</p>
+  <pre class="code"><span class="k">from</span> claude_agent_sdk <span class="k">import</span> query, ClaudeAgentOptions, ResultMessage, ResultError, tool, create_sdk_mcp_server
+<span class="k">from</span> climate <span class="k">import</span> store
+<span class="k">from</span> climate.control <span class="k">import</span> guardrails
 
 <span class="k">@tool</span>(<span class="s">"query_runtime"</span>, <span class="s">"Runtime by unit with weather joined"</span>,
       {<span class="s">"start"</span>: str, <span class="s">"end"</span>: str, <span class="s">"resolution"</span>: str})
@@ -1086,33 +1348,143 @@ https://api.open-meteo.com/v1/forecast?latitude=<span class="k">LAT</span>&amp;l
 <span class="k">@tool</span>(<span class="s">"propose_policy_change"</span>, <span class="s">"Queue a policy change for the controller"</span>,
       {<span class="s">"param"</span>: str, <span class="s">"value"</span>: float, <span class="s">"rationale"</span>: str})
 <span class="k">async def</span> propose_policy_change(args):
-    problem = guardrails.check(args[<span class="s">"param"</span>], args[<span class="s">"value"</span>])      <span class="c"># hard limits live in code</span>
+    problem = guardrails.check(args[<span class="s">"param"</span>], args[<span class="s">"value"</span>])      <span class="c"># allowed range lives in code</span>
     <span class="k">if</span> problem:
         <span class="k">return</span> {<span class="s">"content"</span>: [{<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">f"Rejected: {problem}"</span>}], <span class="s">"is_error"</span>: <span class="k">True</span>}
-    pid = <span class="k">await</span> store.queue_proposal(**args, source=<span class="s">"claude-nightly"</span>)
+    pid = <span class="k">await</span> store.queue_proposal(**args, source=<span class="s">"claude-nightly"</span>)  <span class="c"># backtest + shadow run next</span>
     <span class="k">return</span> {<span class="s">"content"</span>: [{<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">f"Queued proposal {pid}"</span>}]}
 
 house = create_sdk_mcp_server(name=<span class="s">"house"</span>, tools=[query_runtime, propose_policy_change])  <span class="c"># + the other tools</span>
 
 options = ClaudeAgentOptions(
     model=<span class="s">"claude-opus-5-5"</span>,
+    effort=<span class="s">"medium"</span>,                  <span class="c"># "high" for the weekly report</span>
     system_prompt=open(<span class="s">"agent/prompts/nightly.md"</span>).read(),
     mcp_servers={<span class="s">"house"</span>: house},
     allowed_tools=[<span class="s">"mcp__house__query_runtime"</span>, <span class="s">"mcp__house__propose_policy_change"</span>],
-    disallowed_tools=[<span class="s">"Bash"</span>, <span class="s">"Write"</span>, <span class="s">"Edit"</span>, <span class="s">"WebFetch"</span>, <span class="s">"WebSearch"</span>],
-    permission_mode=<span class="s">"dontAsk"</span>,      <span class="c"># unattended: anything not allowed above is denied</span>
+    <span class="c"># dontAsk still runs tools that never prompt (file reads, Agent), so remove built-ins outright</span>
+    disallowed_tools=[<span class="s">"Bash"</span>, <span class="s">"Read"</span>, <span class="s">"Write"</span>, <span class="s">"Edit"</span>, <span class="s">"Glob"</span>, <span class="s">"Grep"</span>, <span class="s">"Agent"</span>,
+                      <span class="s">"NotebookEdit"</span>, <span class="s">"WebFetch"</span>, <span class="s">"WebSearch"</span>],
+    permission_mode=<span class="s">"dontAsk"</span>,
+    cwd=<span class="s">"/srv/climate/agent-empty"</span>,     <span class="c"># an empty directory: no secrets within reach</span>
     max_turns=<span class="k">40</span>,
-    max_budget_usd=<span class="k">1.00</span>,
+    max_budget_usd=<span class="k">3.00</span>,
 )
 
 <span class="k">async def</span> nightly():
-    <span class="k">async for</span> msg <span class="k">in</span> query(prompt=<span class="s">"Review yesterday. Separate weather from strategy. "</span>
-                                 <span class="s">"Propose at most one change. Write the morning digest."</span>, options=options):
-        <span class="k">if</span> isinstance(msg, ResultMessage):
-            <span class="k">await</span> store.save_run(msg.result, msg.total_cost_usd, msg.session_id)</pre>
-  <p class="code-cap" style="margin-top:18px">ASK FROM YOUR LAPTOP · the same tools in Claude Code</p>
+    <span class="k">try</span>:
+        <span class="k">async for</span> msg <span class="k">in</span> query(prompt=<span class="s">"Review yesterday. Separate weather from strategy. "</span>
+                                     <span class="s">"Propose at most one change. Write the morning digest."</span>, options=options):
+            <span class="k">if</span> isinstance(msg, ResultMessage):
+                <span class="k">if</span> msg.terminal_reason != <span class="s">"completed"</span>:  <span class="c"># an API failure can still say subtype "success"</span>
+                    <span class="k">await</span> store.flag_failed_run(msg.session_id, msg.terminal_reason)
+                <span class="k">else</span>:
+                    <span class="k">await</span> store.save_run(msg.result, msg.total_cost_usd, msg.session_id)
+    <span class="k">except</span> ResultError:
+        <span class="k">pass</span>   <span class="c"># raised after an error result (turn cap, budget cap, API error); already flagged above</span></pre>
+  <p class="code-cap" style="margin-top:18px">ASK FROM YOUR LAPTOP · the same read tools in Claude Code, on your subscription</p>
   <pre class="code">claude mcp add --transport http climate http://homeserver.local:8750/mcp
 <span class="c"># then: "compare upstairs runtime this week to weather-expected, and explain Tuesday"</span></pre>
+</section>
+
+<!-- ================= ECOBEE CONNECTION ================= -->
+<section class="block" id="ecobee" aria-labelledby="h-eco">
+  <div class="sec-head">
+    <p class="eyebrow">ecobee connection</p>
+    <h2 id="h-eco">How the app talks to your ecobees and sensors</h2>
+    <p>The app uses two links at once, both straight from your server, with no Home Assistant or Apple in the path. The only direct link to the hardware that exists is HomeKit on your local network. Everything else that sounds more "direct" either doesn't exist or would mean replacing the thermostats.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <span class="pill good" style="margin-bottom:8px">Link 1 · required</span>
+      <h4>ecobee cloud API, signed in with your ecobee account</h4>
+      <p>The only source for compressor run time per 5 minutes, per-room history, about a year of backfill, and the comfort settings and sensor sets.</p>
+      <ul>
+        <li>Sign-in uses the <code>python-ecobee-api</code> library (the library behind Home Assistant's ecobee integration, which added account sign-in in 2026.3) for login, MFA and token refresh only. The app makes every data call itself.</li>
+        <li>Every 3 minutes: <code>thermostatSummary</code> (what changed, which units are running). On change: <code>thermostat</code> with sensors, events, program and the last few 5-minute run-time readings (about 15 minutes behind).</li>
+        <li>Hourly plus nightly: <code>runtimeReport</code> for the official 5-minute record (lags up to an hour).</li>
+        <li>About 30,000 requests a month in total, well under the 85,000 a month ecobee set for developer-key apps. Nothing is published for the account sign-in route, so the app stays inside that budget anyway.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="pill good" style="margin-bottom:8px">Link 2 · strongly recommended</span>
+      <h4>HomeKit, locally, with your server as the controller</h4>
+      <p>The Python library <code>aiohomekit</code> (version 4.0 or later) lets your server pair with each ecobee over your Wi-Fi.</p>
+      <ul>
+        <li>Pushed within seconds: each SmartSensor's temperature, motion and occupancy; each thermostat's temperature, humidity, and whether it's cooling or heating.</li>
+        <li>Polled: seconds since each room's last motion, and which equipment is running.</li>
+        <li>Keeps working when ecobee's cloud or the sign-in route breaks, including basic timed holds.</li>
+        <li>Pair directly rather than through Home Assistant: Home Assistant hides the ecobee-specific fields this app needs, and its mode switch creates permanent holds.</li>
+        <li>A thermostat pairs with one HomeKit controller, so the ecobees leave Apple Home. If the family uses Siri for the thermostats, that's the trade-off to decide.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 style="margin:36px 0 14px">"Can we wire straight to the device?"</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>Idea</th><th>Possible?</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><b>A local API on the thermostat</b></td><td><span class="pill crit">No</span></td><td>ecobee thermostats only talk to ecobee's cloud over an encrypted connection. HomeKit is the only local interface.</td></tr>
+        <tr><td><b>Matter</b></td><td><span class="pill crit">Not today</span></td><td>No Matter support for ecobee thermostats was found as of October 2026, including the Essential. Check the thermostat menu after firmware updates.</td></tr>
+        <tr><td><b>Read the SmartSensors directly</b></td><td><span class="pill crit">No</span></td><td>They use a proprietary 915 MHz radio and pair only with ecobee devices. No public decoder exists (rtl_433 has none), so their data only comes through the thermostat.</td></tr>
+        <tr><td><b>Hack the thermostat firmware</b></td><td><span class="pill crit">No</span></td><td>The only published access is a 2021 serial-port exploit on the ecobee3 lite that requires opening the unit. It voids the warranty, can brick the device that runs your HVAC, and has no community behind it.</td></tr>
+        <tr><td><b>Replace the ecobees with your own relay board</b></td><td><span class="pill warn"><span class="dot"></span>Possible, not advised</span></td><td>An ESP32 with ESPHome can drive the 24V wires and has anti-short-cycle timers, but you'd be building an uncertified thermostat. You'd lose the SmartSensors, HomeKit, the run-time reports and ecobee's equipment protections. If cloud-free control ever becomes a hard requirement, swap in a listed thermostat with a local API instead, such as a Venstar ColorTouch or a Honeywell T6 Pro Z-Wave.</td></tr>
+        <tr><td><b>Add your own measuring hardware, read-only</b></td><td><span class="pill good">Yes, recommended</span></td><td>Listening devices that never drive the equipment: see the list below.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin:36px 0 14px">Hardware worth adding, in priority order</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>Add</th><th>What it fixes</th><th>Rough cost</th></tr></thead>
+      <tbody>
+        <tr><td><b>A presence sensor in the Toy Room</b> (Aqara FP300 mmWave; an ecobee SmartSensor also works but is motion-only)</td><td>The Toy Room has no occupancy sensing: the Essential has none built in</td><td class="num">$40–50</td></tr>
+        <tr><td><b>2 temperature sensors at the top and bottom of the stairwell</b> (Zigbee, e.g. SONOFF SNZB-02D)</td><td>Measures the stairwell heat flow directly instead of inferring it</td><td class="num">~$16 each</td></tr>
+        <tr><td><b>Power monitoring on each condenser and air handler</b> (Emporia Vue 3 flashed to ESPHome, or Shelly EM Gen3 per unit)</td><td>Real kW per unit, so the app optimizes energy instead of minutes. Also catches a compressor that fails to start.</td><td class="num">~$200 total, or ~$82 per unit</td></tr>
+        <tr><td><b>mmWave presence in the Office, Living Room and School Room</b></td><td>People sitting still are missed by motion sensors</td><td class="num">$35–60 each</td></tr>
+        <tr><td><b>Door contacts on the bedrooms and Office</b></td><td>A door that closed after motion means someone is inside</td><td class="num">~$15 each</td></tr>
+        <tr><td><b>A wired attic probe</b>, if the upstairs ducts run there</td><td>Attic heat is a big upstairs load; battery sensors aren't rated for attic temperatures</td><td class="num">~$10–20</td></tr>
+        <tr><td><b>A 24V call monitor with supply/return air probes</b>, per air handler</td><td>Filter and airflow diagnostics from the temperature drop across the coil</td><td class="num">$40–80 each</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted" style="margin-top:8px">These add-on sensors join through a Zigbee/Thread coordinator or ESPHome. Home Assistant is a fine host for them, separate from the ecobee links.</p>
+
+  <h3 style="margin:36px 0 14px">Rules the ecobee adapter follows</h3>
+  <div class="grid-2">
+    <div class="card"><h4>Writes</h4><ul>
+      <li>Only short timed holds (<code>holdType: holdHours</code>, 1–2 h), renewed while healthy. Never indefinite holds.</li>
+      <li>Every write is read back. The sign-in library silently swallows HTTP errors.</li>
+      <li>Program edits (sensor sets) start from a fresh read and check the program hasn't changed since. Otherwise an edit you made in the ecobee app gets overwritten.</li>
+      <li>HomeKit holds: write the end time first, then the hold, then verify. Never touch the Home/Sleep/Away setpoint fields, which permanently edit the schedule.</li>
+      <li>Temperatures are rounded before converting to tenths of °F.</li>
+    </ul></div>
+    <div class="card"><h4>Sign-in and reliability</h4><ul>
+      <li>The account-login route broke or changed about three times in 14 months. Use TOTP or SMS MFA on the ecobee account; push and email MFA don't work.</li>
+      <li>Store only the newest refresh token, encrypted. Don't keep the password. A re-sign-in screen handles MFA codes.</li>
+      <li>The web client ID is a setting, not hard-coded, because ecobee can change it.</li>
+      <li>The library logs access tokens at debug level, so that logger stays quiet.</li>
+      <li>A circuit breaker switches the controller to the HomeKit link when the cloud fails.</li>
+    </ul></div>
+  </div>
+
+  <h3 style="margin:36px 0 14px">Phase 0 tests on your actual thermostats</h3>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>Test</th><th>Why it matters</th></tr></thead>
+      <tbody>
+        <tr><td>Request compressor columns (compCool1/2, fan, aux) from <code>runtimeReport</code> with the account-login token</td><td>Public code proves the route for summary and sensor history, not yet for compressor columns. The whole analytics layer depends on them.</td></tr>
+        <tr><td>Find how far back ecobee's 5-minute history goes</td><td>Decides how much of last summer the baseline gets</td></tr>
+        <tr><td>Read each unit's model number</td><td>The Toy Room unit should report <code>attisRetail</code> (Essential). The Hallway and Bedroom models decide whether those thermostats sense occupancy.</td></tr>
+        <tr><td>Set a temperature hold at night and check which sensors the upstairs uses</td><td>Confirms the "holds use Home's sensors" behavior before the controller relies on it</td></tr>
+        <tr><td>Pair the Essential over HomeKit and check that the Girls' Room sensor appears</td><td>No public HomeKit dump of an Essential exists</td></tr>
+        <tr><td>Check the backfill's calendar events for which Smart Away fired</td><td>Classic Smart Away switches to the Away setting (the float to 80°F). The eco+ version only nudges 1–4°F. They imply different coupling numbers.</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <!-- ================= ARCHITECTURE ================= -->
@@ -1125,19 +1497,22 @@ options = ClaudeAgentOptions(
 
   <div class="arch">
     <div class="lane"><h4>Sources</h4>
-      <div class="svc"><b>ecobee cloud</b><span>3 thermostats, 4 sensors, runtime reports, writes</span></div>
-      <div class="svc"><b>HomeKit, local</b><span>Optional second-by-second live state, as a backup path</span></div>
+      <div class="svc"><b>ecobee cloud</b><span>Runtime reports, history, sensor sets, settings, holds</span></div>
+      <div class="svc"><b>HomeKit, local</b><span>Live temperatures, motion, cooling state; backup holds</span></div>
+      <div class="svc"><b>Add-on sensors</b><span>Toy Room presence, stairwell temps, door contacts (Zigbee/ESPHome)</span></div>
       <div class="svc"><b>Open-Meteo + NWS</b><span>Forecast, observations, archive</span></div>
-      <div class="svc"><b>Power monitor</b><span>Optional: kW per condenser</span></div>
+      <div class="svc"><b>Power monitor</b><span>Optional: kW per unit</span></div>
     </div>
     <div class="lane"><h4>Ingest</h4>
       <div class="svc"><b>collector</b><span>Polls ecobee every 3 min, fetches details when something changes, pulls runtime reports hourly</span></div>
+      <div class="svc"><b>homekit</b><span>Holds the local HomeKit sessions; pushes motion and state in seconds; reconnects on drops</span></div>
       <div class="svc"><b>weather</b><span>Hourly forecast and observations; nightly archive fill</span></div>
-      <div class="svc"><b>backfill</b><span>One-time pull of 12–18 months of history, in 31-day chunks</span></div>
+      <div class="svc"><b>backfill</b><span>One-time pull of all available 5-minute history (about a year), in chunks</span></div>
     </div>
     <div class="lane"><h4>Store &amp; brains</h4>
       <div class="svc"><b>Postgres + TimescaleDB</b><span>5-minute readings, hourly and daily rollups</span></div>
-      <div class="svc"><b>models</b><span>Baselines, the house model, simulation (nightly)</span></div>
+      <div class="svc"><b>occupancy</b><span>Per-room state from motion, presence, doors, sleep windows and learned patterns</span></div>
+      <div class="svc"><b>models</b><span>Baselines, the history study, the house model, simulation (nightly)</span></div>
       <div class="svc"><b>experiments</b><span>Randomized schedules and analysis</span></div>
       <div class="svc"><b>controller</b><span>The 3-minute loop. Applies policy, enforces limits, logs every write.</span></div>
     </div>
@@ -1150,27 +1525,6 @@ options = ClaudeAgentOptions(
     </div>
   </div>
 
-  <h3 id="build-access" style="margin:40px 0 14px">Getting data out of ecobee</h3>
-  <div class="grid-3">
-    <div class="card"><span class="pill good" style="margin-bottom:8px">Recommended</span><h4>Sign in with your ecobee account</h4><p>The <code>python-ecobee-api</code> library (0.4.x) signs in with your ecobee username, password and MFA code, just like the ecobee web app. It keeps a refresh token and calls the regular ecobee API. Home Assistant's ecobee integration has worked this way since 2026.3.</p><p style="margin-top:8px"><b>Risk:</b> it borrows ecobee's own web-app login rather than an approved developer key, so an ecobee login change could break it. The app hides it behind one adapter so it can be swapped quickly.</p></div>
-    <div class="card"><span class="pill" style="margin-bottom:8px">If you have one</span><h4>An ecobee developer key from before March 2024</h4><p>Existing keys still work and use the official PIN-and-token flow, the most stable option. New keys haven't been issued since March 28, 2024, and ecobee hasn't said when that will change.</p></div>
-    <div class="card"><span class="pill" style="margin-bottom:8px">Backup / real-time</span><h4>HomeKit, locally</h4><p>Through Home Assistant's HomeKit Controller you get pushed updates in seconds: temperatures, room sensors and occupancy, targets, cooling or idle. It has no runtime history and no sensor-set control. A thermostat pairs with only one HomeKit controller, so it would leave Apple Home.</p></div>
-  </div>
-
-  <div class="table-wrap" style="margin-top:18px">
-    <table class="t">
-      <thead><tr><th>Need</th><th>ecobee call</th><th>How often</th><th>Notes</th></tr></thead>
-      <tbody>
-        <tr><td>What changed?</td><td class="num">GET /thermostatSummary</td><td>Every 3 min</td><td>ecobee asks clients not to poll faster than this. Revision strings say what changed; <code>includeEquipmentStatus</code> says which units are running.</td></tr>
-        <tr><td>Live detail</td><td class="num">GET /thermostat</td><td>When a revision changes</td><td>Runtime, sensors, settings, program, events. Up to 25 thermostats per request, so all three fit in one call.</td></tr>
-        <tr><td>5-minute truth</td><td class="num">GET /runtimeReport</td><td>Hourly, plus a nightly re-pull</td><td>Seconds of compressor run time per 5-minute interval, plus per-sensor temperature and occupancy. Lags up to about an hour. At most 31 days per request.</td></tr>
-        <tr><td>Change a target</td><td class="num">setHold / resumeProgram</td><td>Controller decisions only</td><td>Temperatures in tenths of °F (77°F = 770). The app uses timed holds so nothing gets stuck.</td></tr>
-        <tr><td>Change sensor sets</td><td class="num">POST program</td><td>Rarely</td><td>Rewrites the whole program, so the app reads it, edits it and writes it back.</td></tr>
-        <tr><td>Stop ecobee fighting</td><td class="num">settings.autoAway, followMeComfort</td><td>Once, then verified daily</td><td>Smart Home/Away and Follow Me off. Demand-response events show up in <code>dmOffset</code>.</td></tr>
-      </tbody>
-    </table>
-  </div>
-
   <div class="grid-2" style="margin-top:28px;align-items:start">
     <div>
       <h3 style="margin-bottom:12px">Core tables</h3>
@@ -1179,11 +1533,12 @@ options = ClaudeAgentOptions(
         <tbody>
           <tr><td class="num">units, sensors</td><td>3 thermostats, 7 temperature points, room names, which floor</td></tr>
           <tr><td class="num">readings_5m</td><td>Per sensor: temp, occupancy. Per unit: humidity, targets, mode, comfort setting, equipment</td></tr>
-          <tr><td class="num">runtime_5m</td><td>Per unit: compCool1/2, compHeat, auxHeat, fan seconds</td></tr>
+          <tr><td class="num">runtime_5m</td><td>Per unit: compCool1/2, compHeat1/2, auxHeat1/2, fan seconds (stage 1 already includes stage 2)</td></tr>
+          <tr><td class="num">occupancy_events, room_state_1m</td><td>Every motion, presence and door signal; each room's state and confidence by minute</td></tr>
           <tr><td class="num">weather_hourly</td><td>Source, observed or forecast, all variables above</td></tr>
           <tr><td class="num">policies, policy_versions</td><td>Champion and challengers with their parameters</td></tr>
           <tr><td class="num">experiments, experiment_days</td><td>Random assignment, exclusions, results</td></tr>
-          <tr><td class="num">control_actions</td><td>Every write to ecobee: who, why, before and after</td></tr>
+          <tr><td class="num">control_actions</td><td>Every write to ecobee: who, why, channel (cloud or HomeKit), before, after, and the read-back result</td></tr>
           <tr><td class="num">model_fits, agent_runs, reports</td><td>Model versions and accuracy; Claude runs, cost, output</td></tr>
         </tbody>
       </table></div>
@@ -1193,7 +1548,8 @@ options = ClaudeAgentOptions(
 <div class="tree"><b>climate-ai/</b>
 ├── <b>api/</b>                 FastAPI app, WebSocket, auth
 │   └── climate/
-│       ├── sources/      ecobee.py · homekit.py · openmeteo.py · nws.py
+│       ├── sources/      ecobee.py · homekit.py · openmeteo.py · nws.py · addons.py
+│       ├── occupancy/    room_state.py · priors.py · predict.py
 │       ├── collector/    poller, runtime reports, backfill
 │       ├── models/       baseline.py · thermal_rc.py · simulate.py
 │       ├── control/      policy.py · guardrails.py · controller.py
@@ -1218,29 +1574,29 @@ options = ClaudeAgentOptions(
   <div class="sec-head">
     <p class="eyebrow">Roadmap</p>
     <h2 id="h-road">Build order</h2>
-    <p>Each phase ends in something you can use. Nothing touches a thermostat until phase 4. It's October, so the backfill hands you last summer's cooling data right away. Heating season gets its own learning pass, and that's when heat rising from the main floor starts working in your favor.</p>
+    <p>Each phase ends in something you can use. Apart from Phase 0's HomeKit pairing and a one-night test hold, nothing writes to a thermostat until phase 4, and complexity is earned: the simple linked-floors rule goes first, and the full house model only replaces it if it does better. It's October, so the backfill hands you last summer's cooling data right away. Heating season gets its own learning pass, and that's when heat rising from the main floor starts working in your favor.</p>
   </div>
   <div>
-    <div class="phase"><div class="when"><b>Phase 0</b>this week</div><div><h4>Access and foundations</h4><ul><li>ecobee sign-in with MFA; confirm all 3 thermostats and 4 sensors come through</li><li>Docker Compose skeleton, database schema, Open-Meteo for your coordinates</li></ul><p class="exit"><b>Done when</b>all 7 sensors are stored every 3 minutes</p></div></div>
-    <div class="phase"><div class="when"><b>Phase 1</b>weeks 1–2</div><div><h4>History and the live dashboard</h4><ul><li>Backfill 12–18 months of 5-minute data and matching weather</li><li>Live and Runtime screens; daily digest to your phone</li></ul><p class="exit"><b>Done when</b>daily runtime per unit matches ecobee's own reports within 1%</p></div></div>
-    <div class="phase"><div class="when"><b>Phase 2</b>weeks 2–4</div><div><h4>Baselines and honest analytics</h4><ul><li>Balance points, weather-expected runtime per unit, attribution waterfall</li><li>First coupling estimate from last summer's data</li></ul><p class="exit"><b>Done when</b>each unit's baseline predicts held-out days within 20% CV(RMSE)</p></div></div>
-    <div class="phase"><div class="when"><b>Phase 3</b>weeks 3–5</div><div><h4>Claude as analyst (read-only)</h4><ul><li>House tools, nightly review, weekly report, Ask Claude tab</li><li>MCP server so you can ask from Claude Code or Desktop</li></ul><p class="exit"><b>Done when</b>the weekly report tells you something you didn't know</p></div></div>
-    <div class="phase"><div class="when"><b>Phase 4</b>weeks 5–7</div><div><h4>Controller, Suggest mode, Linked floors</h4><ul><li>Guardrails, audit log, ecobee feature settings, sensor sets per time block</li><li>Linked floors as the first policy, measured weather-normalized</li></ul><p class="exit"><b>Done when</b>upstairs maxed-out minutes are near zero and the savings have a 90% interval</p></div></div>
-    <div class="phase"><div class="when"><b>Phase 5</b>week 7 on</div><div><h4>Thermal model, experiments, Auto mode</h4><ul><li>House model, switchback engine, forecast pre-cooling, condition-specific settings</li><li>Heating-season mode, equipment health alerts</li></ul><p class="exit"><b>Done when</b>experiments stop finding gains larger than their uncertainty</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 0</b>this week</div><div><h4>Access, local pairing, and the facts</h4><ul><li>ecobee sign-in with TOTP or SMS MFA; HomeKit pairing for all three thermostats (decide on Apple Home first)</li><li>Run the <a href="#ecobee">Phase 0 tests</a>: compressor columns, history depth, model numbers, hold sensor behavior, Smart Away type</li><li>Order the Toy Room presence sensor and the two stairwell sensors; database schema and Open-Meteo for your location</li></ul><p class="exit"><b>Done when</b>all 7 temperature points stream live and the Phase 0 tests have answers</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 1</b>weeks 1–2</div><div><h4>History and the live dashboard</h4><ul><li>Backfill all available 5-minute history and matching weather</li><li>Live, Rooms and Runtime screens; daily digest to your phone</li></ul><p class="exit"><b>Done when</b>daily runtime per unit matches ecobee's own reports within 1%</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 2</b>weeks 2–4</div><div><h4>Baselines, the history study, occupancy v1</h4><ul><li>Weather-expected runtime per unit and the attribution waterfall</li><li>History study of past warm-main-floor afternoons for a first coupling estimate</li><li>Room occupancy with three states (occupied, asleep, empty) and learned patterns</li></ul><p class="exit"><b>Done when</b>baselines pass their checks on held-out days, and you've spot-checked a week of room states</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 3</b>weeks 3–5</div><div><h4>Claude as analyst (read-only)</h4><ul><li>House tools, nightly review, weekly report, Ask Claude tab, all on an API key</li><li>MCP server so you can ask from Claude Code or Desktop on your subscription</li></ul><p class="exit"><b>Done when</b>the weekly report tells you something you didn't know</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 4</b>weeks 5–8</div><div><h4>Controller, Suggest mode, Linked floors</h4><ul><li>Guardrails, timed holds with read-back, audit log, ecobee feature settings, sensor sets per time block</li><li>Linked floors checked against the weather baseline before and after (a 10–15% effect shows within weeks), then its offset tuned with one switchback, its success measure and checkpoints fixed in advance</li></ul><p class="exit"><b>Done when</b>upstairs maxed-out minutes are near zero and total-house savings have a 90% interval</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 5</b>week 8 on</div><div><h4>House model, tuning, Auto mode, heating season</h4><ul><li>The full house model, forecast pre-cooling and automatic tuning, each adopted only if it beats the linked-floors rule in backtests</li><li>Predicted arrivals, equipment health alerts, a heating-season learning pass</li></ul><p class="exit"><b>Done when</b>experiments stop finding gains larger than their uncertainty</p></div></div>
   </div>
 
   <h3 style="margin:40px 0 14px">What I need from you to start</h3>
   <div class="qlist">
     <div class="q"><b>Equipment.</b> AC with a gas furnace, or heat pumps? Tonnage per unit, from the outdoor unit's nameplate.</div>
+    <div class="q"><b>Thermostat models.</b> What are the Hallway and Bedroom ecobees? This decides whether they sense occupancy.</div>
+    <div class="q"><b>Apple Home.</b> Are the ecobees in Apple Home today, and does the family use Siri for them? Local pairing takes them out.</div>
+    <div class="q"><b>ecobee login.</b> Is MFA on, and which kind? TOTP or SMS works; push and email don't.</div>
     <div class="q"><b>Upstairs ducts.</b> Do they run through the attic?</div>
     <div class="q"><b>Stairwell.</b> Open, or is there a door you could close?</div>
-    <div class="q"><b>ecobee key.</b> Do you have a developer API key from before March 2024?</div>
-    <div class="q"><b>Server.</b> What will run this? Is Home Assistant already running?</div>
-    <div class="q"><b>Location.</b> Address or ZIP for the weather point. It stays on your server.</div>
-    <div class="q"><b>Rate plan.</b> Flat or time-of-use? Time-of-use changes what "best" means.</div>
-    <div class="q"><b>Current ecobee settings.</b> Are Smart Home/Away, Follow Me or eco+ features on today?</div>
-    <div class="q"><b>Comfort.</b> Your preferred band per floor and time of day, and when the main floor is usually empty.</div>
-    <div class="q"><b>Claude.</b> Use your Pro/Max subscription token, or a Console API key?</div>
+    <div class="q"><b>Server.</b> What will run this? Is Home Assistant already running (useful for add-on sensors)?</div>
+    <div class="q"><b>Location and rates.</b> ZIP for the weather point, and a flat or time-of-use electricity rate?</div>
+    <div class="q"><b>Routines.</b> Bedtimes for the Girls' Room and Bedroom, school hours, office hours.</div>
+    <div class="q"><b>Comfort.</b> Your preferred band per floor and time of day.</div>
   </div>
 </section>
 
@@ -1256,14 +1612,19 @@ options = ClaudeAgentOptions(
       <a href="https://developer.ecobee.com/home/developer/api/documentation/v1/operations/get-thermostat-summary.shtml" target="_blank" rel="noopener">ecobee thermostat summary</a> ·
       <a href="https://github.com/home-assistant/home-assistant.io/blob/current/source/_integrations/ecobee.markdown" target="_blank" rel="noopener">Home Assistant ecobee integration</a> ·
       <a href="https://github.com/nkgilley/python-ecobee-api" target="_blank" rel="noopener">python-ecobee-api</a> ·
+      <a href="https://github.com/Jc2k/aiohomekit" target="_blank" rel="noopener">aiohomekit</a> ·
+      <a href="https://github.com/beestat/app" target="_blank" rel="noopener">beestat</a> ·
+      <a href="https://github.com/HarryVallianos/North-American-House-Thermal-Models" target="_blank" rel="noopener">60k ecobee house models (Vallianos et al.)</a> ·
       <a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo docs</a> ·
       <a href="https://open-meteo.com/en/terms" target="_blank" rel="noopener">Open-Meteo terms</a> ·
       <a href="https://www.weather.gov/documentation/services-web-api" target="_blank" rel="noopener">NWS API</a> ·
       <a href="https://caltrack-technical-documentation.readthedocs.io/en/latest/" target="_blank" rel="noopener">CalTRACK methods</a> ·
-      <a href="https://escholarship.org/uc/item/9ns4168n" target="_blank" rel="noopener">LBNL randomized M&amp;V</a> ·
+      <a href="https://escholarship.org/uc/item/9ns4168n" target="_blank" rel="noopener">UC Berkeley CBE randomized M&amp;V</a> ·
       <a href="https://orbit.dtu.dk/en/publications/identifying-suitable-models-for-the-heat-dynamics-of-buildings/" target="_blank" rel="noopener">Bacher &amp; Madsen, RC grey-box models</a> ·
       <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a> ·
-      <a href="https://code.claude.com/docs/en/authentication" target="_blank" rel="noopener">Claude Code authentication</a>
+      <a href="https://code.claude.com/docs/en/authentication" target="_blank" rel="noopener">Claude Code authentication</a> ·
+      <a href="https://code.claude.com/docs/en/legal-and-compliance" target="_blank" rel="noopener">Claude Code legal and compliance</a> ·
+      <a href="https://code.claude.com/docs/en/agent-sdk/permissions" target="_blank" rel="noopener">Agent SDK permissions</a>
     </p>
     <p style="margin-top:14px">Every number in the app mockup and the scored example is generated example data. None of it is a reading from your house.</p>
   </div>
@@ -1346,7 +1707,7 @@ const DUTY=(function(){
       const lag=Math.max(0,Math.sin(Math.PI*(h-10)/12));
       const night=h<7||h>21?0.18:0;
       let v=(0.012*d.cdd+0.05)*(0.35+1.25*lag)+0.045*d.solar*solarShape+night*0.25*(d.cdd/15)+0.05*gauss();
-      if(d.policy==="linked"&&h>=11&&h<=20)v*=0.74;
+      if(d.policy==="linked"&&h>=11&&h<=20)v*=0.74;else if(h>=12&&h<=18)v*=1.5;
       vals.push(Math.round(Math.max(0,Math.min(1,v))*100));
     }return {date:d.date,policy:d.policy,vals};});
   return rows;
@@ -1530,7 +1891,8 @@ function couplingChart(host,tout,onBest){
 }
 
 /* 6 · indoor temperature, last 6 hours (5-minute points) */
-function tempsChart(host,series){
+function tempsChart(host,series,opts){
+  opts=opts||{};const xl=opts.xlabels||["−6h","−4h","−2h","now"];const ttl=opts.title||(i=>{const n=series[0].values.length;const mins=(n-1-i)*5;return mins===0?"Now":`${Math.floor(mins/60)}h ${mins%60}m ago`;});
   host.replaceChildren();
   legend(host,series.map(s=>({label:s.label,color:C(s.color),shape:"ln"})));
   const wrap=H("div","chart",null,host);const W=cw(host,560),Ht=200,M={l:36,r:44,t:10,b:24};
@@ -1538,14 +1900,33 @@ function tempsChart(host,series){
   const all=series.flatMap(s=>s.values);const lo=Math.floor(Math.min(...all)-.3),hi=Math.ceil(Math.max(...all)+.3);const n=series[0].values.length;
   const x=i=>M.l+i/(n-1)*(W-M.l-M.r),y=v=>M.t+(Ht-M.t-M.b)*(1-(v-lo)/(hi-lo));
   for(let v=lo;v<=hi;v++){S("line",{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),stroke:C("--grid")},svg);txt(svg,M.l-6,y(v)+4,v+"°",{"text-anchor":"end"});}
-  ["−6h","−4h","−2h","now"].forEach((s,k)=>txt(svg,M.l+(k/3)*(W-M.l-M.r),Ht-6,s,{"text-anchor":"middle"}));
-  series.forEach(s=>{S("polyline",{points:s.values.map((v,i)=>x(i)+","+y(v)).join(" "),fill:"none",stroke:C(s.color),"stroke-width":2,"stroke-linejoin":"round"},svg);
+  xl.forEach((s,k)=>txt(svg,M.l+(k/(xl.length-1))*(W-M.l-M.r),Ht-6,s,{"text-anchor":"middle"}));
+  series.forEach(s=>{if(s.band){const up=s.values.map((v,i)=>x(i)+","+y(v+s.band)).join(" ");const dn=s.values.map((v,i)=>x(i)+","+y(v-s.band)).reverse().join(" ");S("polygon",{points:up+" "+dn,fill:C(s.color),opacity:.14},svg);}});
+  series.forEach(s=>{S("polyline",{points:s.values.map((v,i)=>x(i)+","+y(v)).join(" "),fill:"none",stroke:C(s.color),"stroke-width":2,"stroke-linejoin":"round","stroke-dasharray":s.dash||"none"},svg);
     const lv=s.values[n-1];S("circle",{cx:x(n-1),cy:y(lv),r:4,fill:C(s.color),stroke:C("--surface"),"stroke-width":2},svg);txt(svg,x(n-1)+8,y(lv)+4,lv.toFixed(1)+"°",{class:"lbl-strong"});});
   const tip=makeTip(wrap);const cross=S("line",{y1:M.t,y2:Ht-M.b,stroke:C("--ink-2"),opacity:0},svg);
   svg.addEventListener("pointermove",e=>{const r=svg.getBoundingClientRect();const sx=(e.clientX-r.left)*W/r.width;const i=Math.max(0,Math.min(n-1,Math.round((sx-M.l)/(W-M.l-M.r)*(n-1))));
-    cross.setAttribute("x1",x(i));cross.setAttribute("x2",x(i));cross.setAttribute("opacity",.5);const mins=(n-1-i)*5;const wr=wrap.getBoundingClientRect();
-    showTip(tip,wrap,e.clientX-wr.left,e.clientY-wr.top,mins===0?"Now":`${Math.floor(mins/60)}h ${mins%60}m ago`,series.map(s=>({color:C(s.color),value:s.values[i].toFixed(1)+"°F",label:s.label})));});
+    cross.setAttribute("x1",x(i));cross.setAttribute("x2",x(i));cross.setAttribute("opacity",.5);const wr=wrap.getBoundingClientRect();
+    showTip(tip,wrap,e.clientX-wr.left,e.clientY-wr.top,ttl(i),series.map(s=>({color:C(s.color),value:s.values[i].toFixed(1)+"°F",label:s.label})));});
   svg.addEventListener("pointerleave",()=>{hideTip(tip);cross.setAttribute("opacity",0);});
+}
+
+/* 7 · room occupancy probability by hour (rooms × 24) */
+function occHeat(host,rows){
+  host.replaceChildren();
+  const wrap=H("div","chart",null,host);const W=cw(host,560),M={l:92,r:8,t:8,b:26};const cell=(W-M.l-M.r)/24;const ch=20;const Ht=M.t+rows.length*ch+M.b;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${Ht}`,role:"img","aria-label":"Probability each room is in use, by hour of a weekday"},wrap);
+  const ramp=["--h0","--h1","--h2","--h3","--h4","--h5","--h6","--h7"];const col=v=>C(ramp[Math.min(7,Math.floor(v*8))]);
+  rows.forEach((r,ri)=>{r.p.forEach((v,h)=>S("rect",{x:M.l+h*cell+1,y:M.t+ri*ch+1,width:Math.max(1,cell-2),height:ch-2,rx:2,fill:col(v)},svg));
+    const sw=S("rect",{x:4,y:M.t+ri*ch+ch/2-4,width:8,height:8,rx:2,fill:C(r.zc)},svg);txt(svg,16,M.t+ri*ch+ch/2+4,r.room,{});});
+  [0,6,12,18].forEach(h=>txt(svg,M.l+h*cell+cell/2,Ht-8,h===0?"12a":h<12?h+"a":h===12?"12p":(h-12)+"p",{"text-anchor":"middle"}));
+  const key=H("div","chart-legend",null,host);H("span",null,"never",key);const strip=H("span",null,null,key);strip.style.cssText="display:inline-flex;gap:2px";ramp.forEach(r=>{const s=H("span","sq",null,strip);s.style.background=C(r);s.style.width="14px";});H("span",null,"almost always",key);
+  const tip=makeTip(wrap);const hl=S("rect",{width:cell,height:ch,fill:"none",stroke:C("--ink"),"stroke-width":1.5,rx:2,opacity:0},svg);
+  svg.addEventListener("pointermove",e=>{const b=svg.getBoundingClientRect();const sx=(e.clientX-b.left)*W/b.width,sy=(e.clientY-b.top)*Ht/b.height;
+    const h=Math.floor((sx-M.l)/cell),ri=Math.floor((sy-M.t)/ch);if(h<0||h>23||ri<0||ri>=rows.length){hideTip(tip);hl.setAttribute("opacity",0);return;}
+    hl.setAttribute("x",M.l+h*cell);hl.setAttribute("y",M.t+ri*ch);hl.setAttribute("opacity",1);const wr=wrap.getBoundingClientRect();const lab=(h%12===0?12:h%12)+(h<12?" AM":" PM");
+    showTip(tip,wrap,e.clientX-wr.left,e.clientY-wr.top,`${rows[ri].room} · ${lab}`,[{color:col(rows[ri].p[h]),value:Math.round(rows[ri].p[h]*100)+"%",label:rows[ri].src&&rows[ri].src(h)||"chance it's in use"}]);});
+  svg.addEventListener("pointerleave",()=>{hideTip(tip);hl.setAttribute("opacity",0);});
 }
 /* ---------- wiring ---------- */
 (function(){
@@ -1577,14 +1958,44 @@ try{const saved=localStorage.getItem("cai-tab");if(saved&&$("#"+saved))select(sa
 function wave(start,end,amp,period,phase){const v=[];for(let i=0;i<72;i++){const t=i/71;const saw=((i+phase)%period)/period;v.push(start+(end-start)*t+amp*(0.5-saw)+0.05*gauss());}
   v[71]=end;return v;}
 const TEMPS=[
-  {label:"Main floor",color:"--s-main",values:wave(77.0,77.4,0.6,9,3)},
-  {label:"Upstairs",color:"--s-up",values:wave(76.2,78.4,0.45,12,5)},
-  {label:"Bed / Office",color:"--s-bed",values:wave(75.8,75.9,0.5,14,1)}];
+  {label:"Main floor",color:"--s-main",values:wave(77.2,77.7,0.6,9,3)},
+  {label:"Upstairs",color:"--s-up",values:wave(76.4,78.6,0.45,12,5)},
+  {label:"Bed / Office",color:"--s-bed",values:wave(75.8,75.8,0.5,14,1)}];
 let ago=8;setInterval(()=>{ago=ago>=179?2:ago+1;$("#liveAgo").textContent=`Live · updated ${ago} s ago`;},1000);
 const sg=$("#suggest");
-$("#sgApply").addEventListener("click",()=>{sg.replaceChildren();const w=H("span","who","Applied",sg);H("p",null,"Main floor set to 78°F until 6 PM. The controller will undo it early if the upstairs duty passes 85%.",sg);
-  const ev=H("div","ev");H("time",null,"3:44 PM",ev);const d=H("div",null,null,ev);H("b",null,"Main floor 77° → 78° until 6 PM",d);H("div","who","You approved Claude's suggestion",d);$("#feed").prepend(ev);});
-$("#sgSkip").addEventListener("click",()=>{sg.replaceChildren();H("span","who","Dismissed",sg);H("p",null,"Got it. Claude records the dismissal as a preference signal and won't suggest this again today.",sg);});
+$("#sgApply").addEventListener("click",()=>{sg.replaceChildren();H("span","who","Applied",sg);H("p",null,"The wing keeps the Office as its sensor until 6 PM, then returns to its schedule.",sg);
+  const ev=H("div","ev");H("time",null,"3:44 PM",ev);const d=H("div",null,null,ev);H("b",null,"Wing keeps the Office sensor until 6 PM",d);H("div","who","You approved the optimizer's suggestion",d);$("#feed").prepend(ev);});
+$("#sgSkip").addEventListener("click",()=>{sg.replaceChildren();H("span","who","Dismissed",sg);H("p",null,"Got it. The app records the dismissal as a preference signal and won't suggest this again today.",sg);});
+
+
+/* ---- rooms ---- */
+const P=(base,peaks)=>{const a=Array(24).fill(base);Object.entries(peaks).forEach(([k,v])=>{String(k).split(",").forEach(h=>{if(h.includes("-")){const [x,y]=h.split("-").map(Number);for(let i=x;i<=y;i++)a[i]=v;}else a[+h]=v;});});return a;};
+const sleepSrc=(from,to)=>h=>(h>=from||h<to)?"sleep schedule (motion can't see sleepers)":"learned from motion history";
+const OCC=[
+  {room:"Hallway",zc:"--s-main",p:P(.04,{7:.3,8:.25,12:.2,17:.3,21:.2})},
+  {room:"Living Room",zc:"--s-main",p:P(.03,{7:.3,8:.2,"9-15":.1,16:.25,17:.4,18:.6,19:.85,20:.9,21:.8,22:.4,23:.1})},
+  {room:"Kitchen",zc:"--s-main",p:P(.05,{6:.2,7:.7,8:.4,11:.3,12:.6,13:.2,16:.3,17:.7,18:.8,19:.4})},
+  {room:"School Room",zc:"--s-main",p:P(.02,{8:.7,"9-11":.9,12:.4,"13-14":.85,15:.3})},
+  {room:"Toy Room",zc:"--s-up",p:P(.05,{7:.2,8:.1,15:.6,16:.85,17:.8,18:.5,19:.4,20:.2})},
+  {room:"Girls' Room",zc:"--s-up",p:P(.05,{"0-6":.95,7:.6,8:.15,20:.6,"21-23":.95}),src:sleepSrc(21,7)},
+  {room:"Office",zc:"--s-bed",p:P(.03,{8:.6,"9-11":.9,12:.5,"13-16":.9,17:.4})},
+  {room:"Bedroom",zc:"--s-bed",p:P(.03,{"0-5":.95,6:.8,7:.3,21:.4,"22-23":.95}),src:sleepSrc(22,7)}];
+const ROOMS=[
+  ["Hallway","Main floor","--s-main",false,"—","Thermostat location; a walk-through space","—","No","77.4° · buffer"],
+  ["Living Room","Main floor","--s-main",false,"6%","No motion for 2 h 10 min (live over HomeKit)","Evenings","Yes","77.9° · buffer"],
+  ["Kitchen","Main floor","--s-main",false,"4%","No motion for 2 h 40 min","—","Yes","78.3° · buffer"],
+  ["School Room","Main floor","--s-main",false,"9%","School ended 3 PM on the schedule; no motion since 2:51 PM","School days 8–3","Yes","76.8° · buffer"],
+  ["Toy Room","Upstairs","--s-up",true,"97%","Radar presence sensor (recommended add-on). The Essential thermostat has no occupancy sensor of its own.","Daytime","Yes (day set)","78.6° · 77–79 ✓"],
+  ["Girls' Room","Upstairs","--s-up",false,"8%","No motion since 9:05 AM; counts as asleep from 9 PM (sleep window)","Nights","Night set only","78.1° · relaxed"],
+  ["Office","Bed / Office","--s-bed",true,"91%","Radar sensor (optional add-on) sees someone at the desk. No motion for 22 min, so ecobee alone would call it empty in 8 min.","Weekdays 9–5","Yes (9–5 set)","75.8° · 75–77 ✓"],
+  ["Bedroom","Bed / Office","--s-bed",false,"3%","Empty; counts as asleep from 10 PM (sleep window)","Nights","Night set only","76.4° · relaxed"]];
+(function(){const tb=$("#roomsTable tbody");ROOMS.forEach(r=>{const tr=H("tr",null,null,tb);const c0=H("td",null,null,tr);const sw=H("span","swatch",null,c0);sw.style.background=C(r[2]);H("b",null,r[0],c0);
+  H("td",null,r[1],tr);const c2=H("td",null,null,tr);H("span",r[3]?"pill good":"pill",r[3]?`In use · ${r[4]}`:`Empty · ${r[4]}`,c2);
+  H("td",null,r[5],tr);H("td",null,r[6],tr);H("td",null,r[7],tr);H("td","num",r[8],tr);});})();
+
+/* ---- model: upstairs forecast vs actual, noon to 6 PM ---- */
+const FC=(function(){const a=[],f=[];for(let i=0;i<72;i++){const t=i/71;const base=77.2+1.1*Math.sin(Math.PI*t*0.9);const cyc=0.35*(0.5-((i+4)%11)/11);
+  f.push(+(base+0.05).toFixed(2));a.push(+(base+cyc+0.12*Math.sin(i/5)+0.06*gauss()).toFixed(2));}return {a,f};})();
 
 /* ---- runtime ---- */
 let range=28;
@@ -1617,6 +2028,9 @@ function renderCoupling(){const t=+$("#toutR").value;$("#toutO").textContent=t+"
 $("#toutR").addEventListener("input",renderCoupling);
 
 const renders={"t-live":()=>tempsChart($("#ch-temps"),TEMPS),
+  "t-rooms":()=>occHeat($("#ch-occ"),OCC),
+  "t-model":()=>tempsChart($("#ch-fc"),[{label:"Actual",color:"--s-up",values:FC.a},{label:"Forecast at noon (±0.8°F)",color:"--s-out",values:FC.f,band:0.8,dash:"5 4"}],
+     {xlabels:["noon","2 PM","4 PM","6 PM"],title:i=>{const m=12*60+i*5;const h=Math.floor(m/60),mm=m%60;return `${h>12?h-12:h}:${String(mm).padStart(2,"0")} PM`;}}),
   "t-runtime":()=>{renderRuntime();heatmapChart($("#ch-heat"),DUTY,"Sep 19");},
   "t-analytics":()=>{scatterChart($("#ch-scatter"),DAYS,M);waterfallChart($("#ch-water"),M);},
   "t-coupling":renderCoupling};
@@ -1651,11 +2065,11 @@ const answers=[
     return {tools:['get_house_status()','query_runtime(start="Oct 2", end="Oct 2", resolution="hour")','get_weather(start="Sep 19", end="Oct 2")','baseline_report(period="Oct 2")'],
     paras:[`Yesterday (${y.date}) the house ran ${hoursFmt(y.total)}${before?`, the most since ${before.date}`:""}. It was also the hottest day in two weeks: a mean of ${y.mean}°F and ${y.cdd} cooling degree-days, against ${avg(prior,d=>d.cdd).toFixed(1)} on average over the 13 days before.`,
       `For that weather the baseline expects ${hoursFmt(exp)}. Actual was ${pct(y.total/exp-1)} against that, so yesterday was a normal day for its weather. Nothing broke and nothing needs changing.`,
-      `By unit: main floor ${hoursFmt(y.main)}, upstairs ${hoursFmt(y.up)}, bed wing ${hoursFmt(y.bed)}. The main floor held the linked offset all afternoon because the Toy Room was occupied from 1 to 6 PM. The upstairs peaked at 78% duty around 4 PM and never maxed out.`]};},
+      `By unit: main floor ${hoursFmt(y.main)}, upstairs ${hoursFmt(y.up)}, bed wing ${hoursFmt(y.bed)}. The main floor held the linked offset all afternoon because the Toy Room was occupied from 1 to 6 PM. The upstairs peaked at ${Math.max(...DUTY[DUTY.length-1].vals)}% duty in the afternoon and never maxed out.`]};},
   ()=>({tools:['coupling_report(units=["main","bed"])','query_sensors(units=["main","bed"], start="Aug 8", end="Oct 2")'],
     paras:["Barely, if at all. Across 56 days of 5-minute data, the bedroom wing's heat gain doesn't change measurably when the main floor runs warm. The fitted link is 0.03°F/hr per °F (90% interval −0.02 to 0.08). For comparison, main floor to upstairs is 0.41.",
       "The wing's runtime follows outdoor temperature and afternoon sun on its own walls. My recommendation is to keep it on its own schedule.",
-      "If you want to be certain, I can propose a one-week test: the main floor alternates between 76°F and 79°F on random days while the wing holds 76°F. If the wing's runtime doesn't move between the two, that settles it."]})
+      "If you want to be certain, I can size a test first: the main floor would alternate between 76°F and 79°F on random days while the wing holds 76°F. Ruling out a link small enough to matter would take several weeks, not one."]})
 ];
 function ask(i){$$("#qchips .qchip").forEach(b=>b.setAttribute("aria-pressed",+b.dataset.q===i));const log=$("#chatLog");log.replaceChildren();
   const q=$$("#qchips .qchip")[i].textContent;H("div","msg user",q,log);const a=answers[i]();const m=H("div","msg ai",null,log);
@@ -1665,7 +2079,7 @@ $("#composer").addEventListener("submit",e=>e.preventDefault());
 
 /* ---- guardrails ---- */
 const desc={"Observe only":"Collects data and reports. Never changes a thermostat.",
-  "Suggest mode":"Proposes changes in the app and on your phone. Nothing changes until you tap Apply.",
+  "Suggest mode":"Runs the policies and experiments you've approved (like Linked floors and the offset test) inside your limits. Anything new, such as a different setting, a schedule change or another experiment, is proposed in the app and on your phone and waits until you tap Apply.",
   "Auto within limits":"Applies changes inside your limits without asking, tells you, and lets you undo any change for 24 hours. New experiments still need your approval."};
 function setMode(m){$$("#autoSeg button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.m===m));$("#autoDesc").textContent=desc[m];$("#modeChip").textContent=m;}
 $$("#autoSeg button").forEach(b=>b.addEventListener("click",()=>setMode(b.dataset.m)));setMode("Suggest mode");
