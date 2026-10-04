@@ -15,9 +15,8 @@ from climate.store.db import session_scope
 
 
 def test_unauthenticated_socket_is_closed_4401(client):
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect("/api/ws") as sock:
-            sock.receive_json()
+    with pytest.raises(WebSocketDisconnect) as exc, client.websocket_connect("/api/ws") as sock:
+        sock.receive_json()
     assert exc.value.code == ws_mod.CLOSE_UNAUTHORIZED
 
 
@@ -28,9 +27,9 @@ def test_owner_and_agent_get_the_hello(owner, agent):
 
 
 def test_cross_origin_cookie_socket_is_refused(owner):
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with owner.websocket_connect("/api/ws", headers={"Origin": "https://evil.example"}) as sock:
-            sock.receive_json()
+    evil = {"Origin": "https://evil.example"}
+    with pytest.raises(WebSocketDisconnect) as exc, owner.websocket_connect("/api/ws", headers=evil) as sock:
+        sock.receive_json()
     assert exc.value.code == ws_mod.CLOSE_FORBIDDEN
 
 

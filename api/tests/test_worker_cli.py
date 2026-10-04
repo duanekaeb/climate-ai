@@ -6,7 +6,14 @@ from cryptography.fernet import Fernet
 from sqlalchemy import select
 
 from climate import cli
-from climate.store.app_settings import AgentSettings, OwnerSettings, SourceSettings, beat, get_setting, put_setting
+from climate.store.app_settings import (
+    AgentSettings,
+    OwnerSettings,
+    SourceSettings,
+    beat,
+    get_setting,
+    put_setting,
+)
 from climate.store.orm import Job
 
 

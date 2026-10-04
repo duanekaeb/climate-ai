@@ -107,7 +107,7 @@ def test_claim_and_finish(agent, fake_queue):
         "terminal_reason": "completed", "num_turns": 12, "usage": {"output_tokens": 900}})
     assert r.status_code == 200, r.text
     assert (r.json()["status"], r.json()["result_text"], r.json()["num_turns"]) == ("completed", "All good.", 12)
-    finish_call = [c for c in fake_queue if c[0] == "finish"][0]
+    finish_call = next(c for c in fake_queue if c[0] == "finish")
     assert finish_call[1] == rid and "error" not in finish_call[2]  # unset fields are not passed
 
     assert agent.post(f"/api/agent/runs/{rid}/finish", json={"status": "completed"}).status_code == 409

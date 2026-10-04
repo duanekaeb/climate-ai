@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 import pytest
 from sqlalchemy import func, select
@@ -91,6 +92,14 @@ async def test_weather_failure_keeps_runtime(db, monkeypatch):
 
 class FakeSim:
     kind = "simulator"
+    instances: ClassVar[list[FakeSim]] = []
+
+    def __init__(self) -> None:
+        self.closed = False
+        FakeSim.instances.append(self)
+
+    async def close(self) -> None:
+        self.closed = True
 
     def generate_history(self, start: datetime, end: datetime):
         runtime, snaps = [], []
@@ -160,6 +169,8 @@ async def test_simulator_backfill_if_empty(db, monkeypatch, fake_sim):
     assert db.get(LiveSensor, "main.kitchen") is not None
     assert db.execute(select(func.count()).select_from(OccupancyEvent)).scalar() > 0
 
+    assert FakeSim.instances[-1].closed  # end state persisted for the worker's live simulator
+
     # runtime_5m is no longer empty: nothing to do
     assert await bf.backfill_simulator_if_empty(2) is None
 
@@ -189,3 +200,17 @@ async def test_simulator_backfill_skips_for_ecobee_and_tolerates_missing_engine(
 async def test_backfill_with_a_simulator_source_uses_generated_history(db, fake_sim):
     out = await bf.backfill(FakeSim(), END - timedelta(hours=3), END)
     assert out["source"] == "simulator" and out["runtime_rows"] == 3 * 12 * 2
+
+
+async def test_backfill_on_the_live_source_holds_its_lock(db, fake_sim):
+    import asyncio
+
+    from climate.worker import LockedSource
+
+    src = LockedSource(FakeSim())
+    task = asyncio.create_task(bf.backfill(src, END - timedelta(hours=1), END))
+    await asyncio.sleep(0)
+    async with src.lock:  # waits until generation has released the lock
+        pass
+    out = await task
+    assert out["runtime_rows"] == 12 * 2

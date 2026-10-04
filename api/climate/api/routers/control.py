@@ -139,7 +139,7 @@ def parse_dt(value: object) -> datetime | None:
         return value
     if isinstance(value, str) and value:
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return datetime.fromisoformat(value)  # 3.11+ accepts a trailing "Z"
         except ValueError:
             return None
     return None
@@ -195,11 +195,11 @@ def control_violations(c: ControlSettings) -> list[tuple[str, str]]:
             band = getattr(uc, period)
             loc = f"control.comfort.{unit_key}.{period}"
             if not lim.min_heat_f <= band.heat_f <= lim.max_heat_f:
-                out.append((loc, f"{unit_key} {period}: heat {band.heat_f}°F is outside the hard limits "
-                                 f"{lim.min_heat_f}-{lim.max_heat_f}°F."))
+                out.append((loc, (f"{unit_key} {period}: heat {band.heat_f}°F is outside the hard limits "
+                                  f"{lim.min_heat_f}-{lim.max_heat_f}°F.")))
             if not lim.min_cool_f <= band.cool_f <= lim.max_cool_f:
-                out.append((loc, f"{unit_key} {period}: cool {band.cool_f}°F is outside the hard limits "
-                                 f"{lim.min_cool_f}-{lim.max_cool_f}°F."))
+                out.append((loc, (f"{unit_key} {period}: cool {band.cool_f}°F is outside the hard limits "
+                                  f"{lim.min_cool_f}-{lim.max_cool_f}°F.")))
             if band.cool_f - band.heat_f < lim.min_deadband_f:
                 out.append((loc, f"{unit_key} {period}: heat must be at least {lim.min_deadband_f}°F below cool."))
     bad_units = [u for u in c.act_units if u not in UNIT_KEYS]

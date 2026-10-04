@@ -1058,8 +1058,8 @@ async def _finish_login(client: Any) -> dict[str, Any]:
         await _db(_store_login, refresh_token)
     except SecretsUnavailable as exc:
         return _error(str(exc))
-    except Exception:
-        log.exception("could not store the ecobee sign-in")
+    except Exception as exc:  # noqa: BLE001 - no traceback: SQL errors can echo bound parameters
+        log.error("could not store the ecobee sign-in (%s)", type(exc).__name__)
         return _error("Signed in to ecobee, but the sign-in could not be saved. Try again.")
     log.info("ecobee account signed in; refresh token stored")
     return {"status": "signed_in"}

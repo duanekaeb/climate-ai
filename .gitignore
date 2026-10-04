@@ -30,3 +30,4 @@ agent-empty/
 ios/**/xcuserdata/
 ios/**/DerivedData/
 ios/*.xcodeproj/
+build/

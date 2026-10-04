@@ -461,7 +461,10 @@ class Worker:
                     log.info("simulator history ready: %d runtime rows", result.get("runtime_rows", 0))
             except Exception as exc:  # noqa: BLE001
                 log.warning("simulator history backfill failed:\n%s", _trace(exc))
-        await self.ensure_source()
+        try:
+            await self.ensure_source()
+        except Exception as exc:  # noqa: BLE001 - the source loop keeps retrying
+            log.warning("could not build the data source: %s", safe_error(exc))
 
     async def _close_source(self) -> None:
         src, self.source, self.source_kind = self.source, None, None

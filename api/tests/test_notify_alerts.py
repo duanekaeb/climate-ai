@@ -92,7 +92,7 @@ def test_push_non_ascii_title_is_rfc2047(ntfy):
 
 
 def test_push_failure_never_raises(ntfy, monkeypatch):
-    sent, status = ntfy
+    _, status = ntfy
     status["code"] = 500
     assert notify.push("t", "b") is False
 
