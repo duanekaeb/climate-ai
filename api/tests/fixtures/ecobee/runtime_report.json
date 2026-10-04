@@ -1,0 +1,147 @@
+{
+ "startDate": "2026-10-04",
+ "startInterval": 60,
+ "endDate": "2026-10-04",
+ "endInterval": 63,
+ "columns": "auxHeat1,auxHeat2,compCool1,compCool2,compHeat1,compHeat2,fan,hvacMode,zoneAveTemp,zoneHumidity,zoneHeatTemp,zoneCoolTemp,zoneClimate,outdoorTemp,outdoorHumidity",
+ "reportList": [
+  {
+   "thermostatIdentifier": "411111111111",
+   "rowCount": 5,
+   "rowList": [
+    "2026-10-03,23:55:00,0,0,300,0,0,0,300,cool,74.3,48,67.0,74.0,Sleep,71.5,79",
+    "2026-10-04,00:00:00,0,0,300,120,0,0,300,cool,74.1,48,67.0,74.0,Sleep,71.2,80",
+    "2026-10-04,00:05:00,0,0,180,,0,0,200,cool,74.0,48,67.0,74.0,Sleep,71.0,81",
+    "2026-10-04,00:10:00,,,,,,,,,,,,,,,",
+    "2026-10-04,00:15:00,0,0,0,0,0,0,0,cool,73.8,,67.0,74.0,Sleep,,"
+   ]
+  },
+  {
+   "thermostatIdentifier": "422222222222",
+   "rowCount": 2,
+   "rowList": [
+    "2026-10-04,00:00:00,0,0,300,300,0,0,300,cool,76.9,52,67.0,74.0,Sleep,71.2,80",
+    "2026-10-04,00:05:00,0,0,300,240,0,0,300,cool,76.7,52,67.0,74.0,Sleep,71.0,81"
+   ]
+  }
+ ],
+ "sensorList": [
+  {
+   "thermostatIdentifier": "411111111111",
+   "sensors": [
+    {
+     "sensorId": "ei:0:1",
+     "sensorName": "Hallway",
+     "sensorType": "temperature",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "ei:0:2",
+     "sensorName": "Hallway",
+     "sensorType": "humidity",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "ei:0:3",
+     "sensorName": "Hallway",
+     "sensorType": "occupancy",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "rs:100:1",
+     "sensorName": "School Room",
+     "sensorType": "temperature",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "rs:100:2",
+     "sensorName": "School Room",
+     "sensorType": "occupancy",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "rs:103:1",
+     "sensorName": "Garage",
+     "sensorType": "temperature",
+     "sensorUsage": "monitor"
+    }
+   ],
+   "columns": [
+    "date",
+    "time",
+    "ei:0:1",
+    "ei:0:2",
+    "ei:0:3",
+    "rs:100:1",
+    "rs:100:2",
+    "rs:103:1"
+   ],
+   "data": [
+    "2026-10-03,23:55:00,74.3,48,1,72.9,0,80.4",
+    "2026-10-04,00:00:00,74.1,48,1,72.6,0,80.1",
+    "2026-10-04,00:05:00,74.0,48,0,72.5,,80.0",
+    "2026-10-04,00:10:00,,,,,,",
+    "2026-10-04,00:15:00,73.8,47,0,,0,79.9"
+   ]
+  },
+  {
+   "thermostatIdentifier": "422222222222",
+   "sensors": [
+    {
+     "sensorId": "ei:0:1",
+     "sensorName": "Toy Room",
+     "sensorType": "temperature",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "ei:0:2",
+     "sensorName": "Toy Room",
+     "sensorType": "humidity",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "rs:100:1",
+     "sensorName": "Toy Room Sensor",
+     "sensorType": "temperature",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "rs:100:2",
+     "sensorName": "Toy Room Sensor",
+     "sensorType": "occupancy",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "rs:101:1",
+     "sensorName": "Girls Room",
+     "sensorType": "temperature",
+     "sensorUsage": "monitor"
+    },
+    {
+     "sensorId": "rs:101:2",
+     "sensorName": "Girls Room",
+     "sensorType": "occupancy",
+     "sensorUsage": "monitor"
+    }
+   ],
+   "columns": [
+    "date",
+    "time",
+    "ei:0:1",
+    "ei:0:2",
+    "rs:100:1",
+    "rs:100:2",
+    "rs:101:1",
+    "rs:101:2"
+   ],
+   "data": [
+    "2026-10-04,00:00:00,76.9,52,76.2,1,75.8,1",
+    "2026-10-04,00:05:00,76.7,52,76.0,1,75.6,1"
+   ]
+  }
+ ],
+ "status": {
+  "code": 0,
+  "message": ""
+ }
+}

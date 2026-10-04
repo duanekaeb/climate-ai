@@ -144,5 +144,432 @@ def plan(state: HouseState) -> list[UnitTarget]:
        precool_start_hour lower cool_f by precool_degrees_f on occupied floors.
     5. Bed wing: independent (its own comfort) when bed_wing_independent.
     Rooms without a sensor never contribute a temperature; unknown/stale data -> occupied.
+
+    Implementation notes (see the helpers below):
+    - "Keeps every occupied room in band": cool_f = band.cool_f - the largest learned offset
+      among the unit's occupied sensored rooms (the warmest-running one), heat_f = band.heat_f
+      - the smallest; offsets are clipped to +/-3°F and a missing offset counts as 0. Only
+      when the rooms disagree by more than the deadband does the priority room alone decide.
+      At night the main floor steers on the Hallway only (its night sensor set).
+    - Recovery: when the house stops being empty (the earliest of an occupied room's
+      ``since`` and the phones coming home) and the upstairs is still at its setback with
+      nobody upstairs, the upstairs keeps its setback for recovery_lead_min while the main
+      floor recovers first. Predicted arrivals ("Arriving") are not used yet.
+    - Pre-cool runs from precool_start_hour until the schedule's evening_start.
+    - A thermostat switched off gets rule 'hold_off' (no hold, current setpoints).
+    - desired='program' when the rounded target equals what the ecobee program holds: the
+      snapshot setpoints when no hold is active, or ``settings['program_heat_f'/'program_cool_f']``
+      when the source reports them.
     """
-    raise NotImplementedError
+    ctx = _Ctx.build(state)
+    targets: dict[str, UnitTarget] = {}
+    for unit_key in ctx.planning_order:
+        targets[unit_key] = _plan_unit(ctx, unit_key, targets)
+    _apply_recovery(ctx, targets)
+    return [_finish(ctx, targets[k]) for k in ctx.unit_keys]
+
+
+# ---------------------------------------------------------------------------------------
+# plan helpers (private; climate.state reuses _unit_period / _priority_room)
+# ---------------------------------------------------------------------------------------
+
+from dataclasses import dataclass  # noqa: E402  (kept below plan: the types above are the contract)
+from datetime import time, timedelta  # noqa: E402
+
+from climate.house import ROOMS, UNIT_KEYS, UNITS  # noqa: E402
+from climate.store.app_settings import DEFAULT_COMFORT, ComfortBand, Schedule  # noqa: E402
+from climate.timeutil import in_window, parse_hhmm, to_local  # noqa: E402
+
+Period = Literal["day", "night", "away"]
+_OFFSET_CAP_F = 3.0  # learned offsets beyond this are treated as this (model noise guard)
+_MATCH_F = 0.25  # setpoints within this are "the same" (thermostats show 0.5°F steps)
+_LABELS: dict[str, tuple[str, str, str]] = {
+    # subject, object, location
+    "main": ("Main floor", "the main floor", "on the main floor"),
+    "up": ("Upstairs", "upstairs", "upstairs"),
+    "bed": ("Bed / Office wing", "the bed / office wing", "in the bed / office wing"),
+}
+_THERMOSTAT_ROOM = {u.key: u.thermostat_room_key for u in UNITS}
+
+
+@dataclass
+class _Ctx:
+    state: HouseState
+    local: datetime
+    unit_keys: list[str]
+    planning_order: list[str]
+    periods: dict[str, Period]
+    rooms_by_unit: dict[str, list[RoomStatus]]
+    occupied: dict[str, list[RoomStatus]]
+
+    @classmethod
+    def build(cls, state: HouseState) -> _Ctx:
+        local = to_local(state.now, state.tz)
+        keys = [k for k in UNIT_KEYS if k in state.units] + [k for k in state.units if k not in UNIT_KEYS]
+        if not keys:
+            keys = list(UNIT_KEYS)
+        # upstairs first: the main floor's linked and setback targets derive from it
+        order = [k for k in ("up", "main") if k in keys] + [k for k in keys if k not in ("up", "main")]
+        rooms_by_unit: dict[str, list[RoomStatus]] = {k: [] for k in keys}
+        for r in state.rooms.values():
+            rooms_by_unit.setdefault(r.unit_key, []).append(r)
+        periods = {
+            k: _unit_period(k, state.rooms, state.occupancy, local, state.house_empty) for k in rooms_by_unit
+        }
+        occupied = {k: [r for r in rs if _counts_as_occupied(r)] for k, rs in rooms_by_unit.items()}
+        return cls(state, local, keys, order, periods, rooms_by_unit, occupied)
+
+
+def _unit_period(
+    unit_key: str, rooms: dict[str, RoomStatus], occupancy: OccupancySettings, local_now: datetime,
+    house_empty: bool,
+) -> Period:
+    """'night' if any of the unit's sleep rooms is asleep or inside its sleep window, else
+    'away' when the whole house is empty, else 'day'."""
+    for room in ROOMS:
+        if room.unit_key != unit_key or not room.is_sleep_room:
+            continue
+        status = rooms.get(room.key)
+        if status is not None and status.state == "asleep":
+            return "night"
+        if _in_sleep_window(room.key, occupancy, local_now):
+            return "night"
+    return "away" if house_empty else "day"
+
+
+def _in_sleep_window(room_key: str, occupancy: OccupancySettings, local_now: datetime) -> bool:
+    return any(in_window(local_now, w.start, w.end, w.days) for w in occupancy.sleep_windows.get(room_key, []))
+
+
+def _priority_room(unit_key: str, period: str, local_now: datetime, schedule: Schedule) -> tuple[str, str] | None:
+    """(room_key, why) the unit steers for right now under blueprint §3, or None."""
+    if period == "away":
+        return None
+    night = period == "night"
+    if unit_key == "up":
+        return ("girls_room", "night") if night else ("toy_room", "daytime")
+    if unit_key == "bed":
+        if night:
+            return "bedroom", "night"
+        if in_window(local_now, schedule.office_start, schedule.office_end, schedule.office_days):
+            return "office", "office hours"
+        return None
+    if unit_key == "main":
+        if night:
+            return "hallway", "night"
+        if in_window(local_now, schedule.school_start, schedule.school_end, schedule.school_days):
+            return "school_room", "school hours"
+        if in_window(local_now, schedule.evening_start, "00:00"):
+            return "living_room", "evening"
+    return None
+
+
+def _counts_as_occupied(r: RoomStatus) -> bool:
+    """Comfort rooms that must stay in band: occupied, asleep, or a sensored room whose data
+    is unknown or stale (uncertain means occupied). Unsensored rooms outside their sleep
+    window ('unknown') are not comfort targets."""
+    if not r.has_comfort_target:
+        return False
+    if r.state in ("occupied", "asleep"):
+        return True
+    return r.has_sensor and (r.state == "unknown" or r.stale)
+
+
+def _band(control: ControlSettings, unit_key: str, period: Period) -> ComfortBand:
+    comfort = control.comfort.get(unit_key) or DEFAULT_COMFORT.get(unit_key) or DEFAULT_COMFORT["main"]
+    return getattr(comfort, period)
+
+
+def _labels(state: HouseState, unit_key: str) -> tuple[str, str, str]:
+    if unit_key in _LABELS:
+        return _LABELS[unit_key]
+    name = state.units[unit_key].name if unit_key in state.units else unit_key
+    return name, f"the {name.lower()}", f"in the {name.lower()}"
+
+
+def _plan_unit(ctx: _Ctx, unit_key: str, done: dict[str, UnitTarget]) -> UnitTarget:
+    st = ctx.state
+    p = st.policy
+    period = ctx.periods.get(unit_key, "day")
+    band = _band(st.control, unit_key, period)
+    subject, obj, loc = _labels(st, unit_key)
+    occ = ctx.occupied.get(unit_key, [])
+    prio = _priority_room(unit_key, period, ctx.local, st.control.schedule)
+    unit = st.units.get(unit_key)
+    snap = unit.snapshot if unit else None
+
+    if snap is not None and snap.hvac_mode == "off":
+        return UnitTarget(
+            unit_key=unit_key,
+            heat_f=snap.heat_sp_f if snap.heat_sp_f is not None else band.heat_f,
+            cool_f=snap.cool_sp_f if snap.cool_sp_f is not None else band.cool_f,
+            rule="hold_off",
+            reason=f"The {subject.lower()} thermostat is switched off, so the controller leaves it alone.",
+            desired="program",
+        )
+
+    if period == "away":
+        return _setback_target(ctx, unit_key, band, done)
+
+    deadband = st.control.limits.min_deadband_f
+    if period == "night":
+        if unit_key == "main":
+            steer = [r for r in ctx.rooms_by_unit.get(unit_key, []) if r.room_key == _THERMOSTAT_ROOM["main"]]
+        else:
+            steer = [r for r in occ if r.has_sensor]
+        heat, cool, notes, steered = _steer(band, steer, prio[0] if prio else None, deadband)
+        asleep = [
+            r.name for r in ctx.rooms_by_unit.get(unit_key, [])
+            if r.is_sleep_room and (r.state == "asleep" or _in_sleep_window(r.room_key, st.occupancy, ctx.local))
+        ]
+        who = f"{_join(asleep)} asleep" if asleep else "sleep window"
+        where = " on the Hallway" if unit_key == "main" else ""
+        reason = f"Night ({who}): {obj} holds sleep comfort {_fmt_band(band.heat_f, band.cool_f)}{where}"
+        return UnitTarget(
+            unit_key=unit_key, heat_f=heat, cool_f=cool, rule="sleep", reason=_sentence(reason, notes),
+            priority_room=prio[0] if prio else steered,
+        )
+
+    # day
+    if unit_key == "main" and not occ and p.linked_floors_enabled and "up" in done and ctx.occupied.get("up"):
+        return _linked_target(ctx, band, done["up"])
+
+    steer = [r for r in occ if r.has_sensor]
+    heat, cool, notes, steered = _steer(band, steer, prio[0] if prio and _is_in(prio[0], occ) else None, deadband)
+    independent = unit_key == "bed" and p.bed_wing_independent
+    rule: str = "independent" if independent else "comfort"
+    lead = f"{subject} runs on its own: " if independent else ""
+    if occ:
+        names = _join([r.name for r in occ])
+        why = f" ({prio[1]})" if prio and _is_in(prio[0], occ) and len(occ) == 1 else ""
+        core = f"{names} occupied{why}; day comfort {_fmt_band(band.heat_f, band.cool_f)}"
+        reason = (lead + core) if independent else f"{subject}: {core}"
+    elif independent:
+        reason = f"{lead}no one detected, but the house isn't empty, so it holds day comfort {_fmt_band(band.heat_f, band.cool_f)}"
+    else:
+        reason = (
+            f"No one detected {loc}, but the house isn't empty: holding day comfort "
+            f"{_fmt_band(band.heat_f, band.cool_f)}"
+        )
+        if unit_key == "main" and p.linked_floors_enabled:
+            reason += " (nobody upstairs, so the floors are not linked)"
+    priority_room = prio[0] if prio and _is_in(prio[0], occ) else steered
+
+    if occ and _precool_applies(ctx):
+        cool -= p.precool_degrees_f
+        rule = "precool"
+        notes.append(
+            f"pre-cooling {p.precool_degrees_f:g}°F on a hot, sunny day (forecast high "
+            f"{st.forecast_high_f:g}°F) until {_clock_hhmm(st.control.schedule.evening_start)}"
+        )
+    return UnitTarget(
+        unit_key=unit_key, heat_f=heat, cool_f=cool, rule=rule, reason=_sentence(reason, notes),  # type: ignore[arg-type]
+        priority_room=priority_room,
+    )
+
+
+def _linked_target(ctx: _Ctx, main_day: ComfortBand, up: UnitTarget) -> UnitTarget:
+    """Rule 2: main floor empty by day, someone upstairs -> tie main to the upstairs target."""
+    st = ctx.state
+    p = st.policy
+    main_away = _band(st.control, "main", "away")
+    cool = min(main_day.cool_f, up.cool_f - p.linked_offset_f)
+    heat = max(main_away.heat_f, up.heat_f - p.linked_heat_gap_f)
+    up_rooms = ctx.occupied.get("up", [])
+    names = _join([_the(r.name) for r in up_rooms])
+    verb = "is" if len(up_rooms) == 1 else "are"
+    empties = [r.since for r in ctx.rooms_by_unit.get("main", []) if r.state == "empty" and r.since is not None]
+    since = f" since {_clock(max(empties), st.tz)}" if empties else ""
+    gap = _round_half(up.cool_f) - _round_half(cool)
+    reason = (
+        f"Main floor empty{since} and {names} {verb} occupied: main floor held {gap:g}°F under upstairs "
+        f"({_round_half(cool):g}°F), heat no lower than {_round_half(heat):g}°F"
+    )
+    return UnitTarget(unit_key="main", heat_f=heat, cool_f=cool, rule="linked_floors", reason=reason + ".",
+                      priority_room=None)
+
+
+def _setback_target(ctx: _Ctx, unit_key: str, band: ComfortBand, done: dict[str, UnitTarget]) -> UnitTarget:
+    """Rule 3: whole house empty -> away bands; the main floor stays setback_gap_f under upstairs
+    (cooling) and no more than setback_gap_f below it (heating)."""
+    st = ctx.state
+    subject, obj, _ = _labels(st, unit_key)
+    why = _lower_first(st.house_empty_reason.rstrip(".")) or "nobody home"
+    heat, cool = band.heat_f, band.cool_f
+    extra = ""
+    up = done.get("up")
+    if unit_key == "main" and up is not None and up.rule == "house_setback":
+        gap = st.policy.setback_gap_f
+        cool = min(band.cool_f, up.cool_f - gap)
+        heat = max(band.heat_f, up.heat_f - gap)
+        extra = f", {_round_half(up.cool_f) - _round_half(cool):g}°F under upstairs"
+    reason = f"House empty ({why}): {obj} sets back to {_fmt_band(heat, cool)}{extra}."
+    return UnitTarget(unit_key=unit_key, heat_f=heat, cool_f=cool, rule="house_setback", reason=reason)
+
+
+def _steer(
+    band: ComfortBand, rooms: list[RoomStatus], priority_key: str | None, deadband: float,
+) -> tuple[float, float, list[str], str | None]:
+    """Setpoints that keep every steering room in band given its learned offset from the
+    thermostat's average. Returns (heat, cool, notes, room steered for)."""
+    offs = {r.room_key: _clip(r.offset_f) for r in rooms}
+    if not offs:
+        return band.heat_f, band.cool_f, [], None
+    names = {r.room_key: r.name for r in rooms}
+    warm = max(offs, key=lambda k: offs[k])
+    cold = min(offs, key=lambda k: offs[k])
+    cool_adj, heat_adj = offs[warm], offs[cold]
+    notes: list[str] = []
+    if band.cool_f - cool_adj - (band.heat_f - heat_adj) < deadband and priority_key in offs:
+        cool_adj = heat_adj = offs[priority_key]
+        warm = cold = priority_key
+        notes.append(f"the rooms disagree by more than the deadband, so it steers for {_the(names[priority_key])}")
+    if abs(cool_adj) >= 0.05:
+        if cool_adj > 0:
+            notes.append(f"cooling {cool_adj:.1f}°F lower because {_the(names[warm])} runs warm")
+        else:
+            notes.append(f"cooling {-cool_adj:.1f}°F higher because every occupied room runs cooler than the thermostat")
+    if abs(heat_adj) >= 0.05:
+        if heat_adj < 0:
+            notes.append(f"heating {-heat_adj:.1f}°F higher because {_the(names[cold])} runs cool")
+        else:
+            notes.append(f"heating {heat_adj:.1f}°F lower because every occupied room runs warmer than the thermostat")
+    return band.heat_f - heat_adj, band.cool_f - cool_adj, notes, (warm if cool_adj >= -heat_adj else cold)
+
+
+def _precool_applies(ctx: _Ctx) -> bool:
+    st = ctx.state
+    p = st.policy
+    if not p.precool_enabled or st.forecast_sunny is not True or st.forecast_high_f is None:
+        return False
+    if st.forecast_high_f < p.precool_min_forecast_high_f:
+        return False
+    return time(p.precool_start_hour, 0) <= ctx.local.time() < parse_hhmm(st.control.schedule.evening_start)
+
+
+def _apply_recovery(ctx: _Ctx, targets: dict[str, UnitTarget]) -> None:
+    """Rule 3 recovery: the main floor leaves setback first; the upstairs follows
+    recovery_lead_min after the house stopped being empty, unless someone is upstairs."""
+    st = ctx.state
+    lead = st.policy.recovery_lead_min
+    if st.house_empty or lead <= 0 or "up" not in targets or "main" not in targets:
+        return
+    if ctx.periods.get("up") != "day" or ctx.occupied.get("up") or targets["up"].rule == "hold_off":
+        return
+    up = st.units.get("up")
+    away = _band(st.control, "up", "away")
+    snap = up.snapshot if up else None
+    if snap is None or snap.cool_sp_f is None or snap.heat_sp_f is None:
+        return
+    if not (snap.cool_sp_f >= away.cool_f - 0.5 and snap.heat_sp_f <= away.heat_f + 0.5):
+        return  # upstairs is not sitting at its setback, nothing to stagger
+    start = _presence_start(st)
+    if start is None:
+        return
+    until = start + timedelta(minutes=lead)
+    if st.now >= until:
+        return
+    t0, t1 = _clock(start, st.tz), _clock(until, st.tz)
+    targets["up"] = UnitTarget(
+        unit_key="up", heat_f=away.heat_f, cool_f=away.cool_f, rule="recovery",
+        reason=(f"House occupied again at {t0}: the main floor recovers first; upstairs stays set back "
+                f"({_fmt_band(away.heat_f, away.cool_f)}) until {t1} with nobody up there."),
+    )
+    main = targets["main"]
+    if main.rule == "comfort":
+        targets["main"] = main.model_copy(update={
+            "rule": "recovery",
+            "reason": (f"House occupied again at {t0}: the main floor recovers first, to "
+                       f"{_fmt_band(_round_half(main.heat_f), _round_half(main.cool_f))}; upstairs follows at {t1}."),
+        })
+
+
+def _presence_start(state: HouseState) -> datetime | None:
+    """When the house stopped being empty: the earliest of an occupied sensored room's
+    ``since`` and the moment the phones came home."""
+    starts = [
+        r.since for r in state.rooms.values()
+        if r.state == "occupied" and r.has_sensor and r.since is not None
+    ]
+    occ = state.occupancy
+    if occ.phones_away is False and occ.phones_updated_at is not None:
+        starts.append(occ.phones_updated_at)
+    return min(starts) if starts else None
+
+
+def _finish(ctx: _Ctx, t: UnitTarget) -> UnitTarget:
+    """Round to the thermostat's 0.5°F and decide whether a hold is needed at all."""
+    heat, cool = _round_half(t.heat_f), _round_half(t.cool_f)
+    t = t.model_copy(update={"heat_f": heat, "cool_f": cool})
+    if t.desired == "program":
+        return t
+    prog = _program_setpoints(ctx.state.units.get(t.unit_key))
+    if prog is not None and abs(prog[0] - heat) <= _MATCH_F and abs(prog[1] - cool) <= _MATCH_F:
+        t = t.model_copy(update={"desired": "program"})
+    return t
+
+
+def _program_setpoints(unit: UnitStatus | None) -> tuple[float, float] | None:
+    """What the ecobee program holds right now, when we can tell."""
+    snap = unit.snapshot if unit else None
+    if snap is None:
+        return None
+    ph, pc = snap.settings.get("program_heat_f"), snap.settings.get("program_cool_f")
+    if _is_number(ph) and _is_number(pc):
+        return float(ph), float(pc)  # type: ignore[arg-type]
+    if snap.hold is None and snap.heat_sp_f is not None and snap.cool_sp_f is not None:
+        return snap.heat_sp_f, snap.cool_sp_f
+    return None
+
+
+def _is_number(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_in(room_key: str, rooms: list[RoomStatus]) -> bool:
+    return any(r.room_key == room_key for r in rooms)
+
+
+def _clip(offset: float | None) -> float:
+    if offset is None:
+        return 0.0
+    return max(-_OFFSET_CAP_F, min(_OFFSET_CAP_F, float(offset)))
+
+
+def _round_half(v: float) -> float:
+    return round(v * 2) / 2
+
+
+def _fmt_band(heat: float, cool: float) -> str:
+    return f"{_round_half(heat):g}–{_round_half(cool):g}°F"
+
+
+def _clock(ts: datetime, tz: str) -> str:
+    local = to_local(ts, tz)
+    return f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+
+
+def _clock_hhmm(hhmm: str) -> str:
+    t = parse_hhmm(hhmm)
+    return f"{t.hour % 12 or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}"
+
+
+def _the(name: str) -> str:
+    """'the Toy Room', 'the Girls' Room', but "Olive's Room"."""
+    return name if "'s " in name else f"the {name}"
+
+
+def _join(items: list[str]) -> str:
+    items = list(dict.fromkeys(items))
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _lower_first(s: str) -> str:
+    return s[:1].lower() + s[1:] if s else s
+
+
+def _sentence(core: str, notes: list[str]) -> str:
+    core = core.rstrip(".")
+    return (f"{core}; {'; '.join(notes)}." if notes else f"{core}.")

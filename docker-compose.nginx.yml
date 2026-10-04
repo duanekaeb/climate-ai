@@ -1,0 +1,25 @@
+# Optional override: attach the `app` service to the Docker network of a CONTAINERIZED nginx
+# (e.g. the one fronting your GrowWise services), so nginx can proxy to it by name.
+# Not needed when nginx runs on the host (use deploy/nginx/climate.conf instead).
+#
+#   docker network ls                       # find nginx's network, e.g. growwise_default
+#   # in .env:
+#   NGINX_NETWORK=growwise_default
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.nginx.yml
+#   docker compose up -d
+#
+# nginx then reaches the app at http://climate-ai-app:8000
+# (deploy/nginx/climate-docker-network.conf). The alias is deliberately specific: a plain
+# `app` could collide with another project's service on the shared network.
+
+services:
+  app:
+    networks:
+      nginx:
+        aliases:
+          - climate-ai-app
+
+networks:
+  nginx:
+    name: ${NGINX_NETWORK:?set NGINX_NETWORK in .env to your nginx container's Docker network}
+    external: true

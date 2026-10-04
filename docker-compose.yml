@@ -1,0 +1,273 @@
+# Climate AI: one home server, Docker Compose v2.
+#
+#   cp .env.example .env      # then fill in the secrets (see docs/DEPLOY.md)
+#   docker compose up -d --build
+#
+# Default services: db, app, worker, agent. Optional profiles:
+#   homekit  local HomeKit (host networking, Linux only)   docker compose --profile homekit up -d
+#   mcp      MCP server for Claude Code / Desktop           docker compose --profile mcp up -d
+#   ntfy     self-hosted push notifications                 docker compose --profile ntfy up -d
+# (or set COMPOSE_PROFILES=homekit,mcp in .env to make them stick).
+#
+# Every published port binds to 127.0.0.1 by default: the owner's nginx (or Tailscale) is the
+# only way in. Nothing here should ever be exposed to the internet.
+#
+# Networks: `data` joins db with app and worker only; the agent, mcp and ntfy containers sit
+# on `default` and cannot even reach Postgres. The homekit service uses the host network
+# (mDNS) and reaches Postgres through the 127.0.0.1-only published port.
+
+name: climate-ai
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# The app, worker and homekit services run the same image with different commands.
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: docker/app.Dockerfile
+  image: climate-ai-app:local
+
+# The agent and mcp services share the agent image.
+x-agent-image: &agent-image
+  build:
+    context: .
+    dockerfile: docker/agent.Dockerfile
+  image: climate-ai-agent:local
+
+# CLIMATE_* settings for the app/worker/homekit containers come from .env (env_file). The
+# database URL is derived from POSTGRES_* unless CLIMATE_DATABASE_URL is set in .env.
+x-app-env: &app-env
+  TZ: ${TZ:-UTC}
+  CLIMATE_DATABASE_URL: ${CLIMATE_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-climate}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-climate}}
+  CLIMATE_WEB_DIR: /app/web
+  # The app never calls Claude; keep the Claude token out of these containers even though
+  # it lives in the same .env file.
+  CLAUDE_CODE_OAUTH_TOKEN: ""
+
+services:
+  db:
+    # TimescaleDB 2.30.2 on PostgreSQL 16 (tag verified on Docker Hub, published 2026-09-29).
+    # Upgrading the 2.x minor is an ALTER EXTENSION away; do not jump the PostgreSQL major
+    # (pg16) without a dump/restore. See docs/DEPLOY.md, "Updating".
+    image: timescale/timescaledb:2.30.2-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-climate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-climate}
+      TIMESCALEDB_TELEMETRY: "off"
+      TZ: ${TZ:-UTC}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # 127.0.0.1 only. The host-networked homekit service connects here.
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    shm_size: 256m
+    healthcheck:
+      # TCP check: during first-run initialisation Postgres listens on the socket only, so
+      # this stays unhealthy until the real server is up.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      data: {}
+    logging: *logging
+
+  app:
+    <<: *app-image
+    # Migrates and seeds on start, then serves the API (/api), the websocket (/api/ws) and the
+    # built web app (/). --proxy-headers: trust X-Forwarded-* from the owner's nginx (the
+    # port is bound to 127.0.0.1, so only local processes can reach it).
+    command: ["uvicorn", "climate.api.app:app", "--host", "0.0.0.0", "--port", "8000",
+              "--proxy-headers", "--forwarded-allow-ips=*"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *app-env
+      CLIMATE_MIGRATE_ON_START: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8470}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,sys,urllib.request as u; sys.exit(0 if json.load(u.urlopen('http://127.0.0.1:8000/api/health', timeout=4)).get('ok') else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks:
+      default: {}
+      data: {}
+    logging: *logging
+
+  worker:
+    <<: *app-image
+    # Owns the thermostat source (simulator or ecobee cloud), weather, controller and the
+    # nightly jobs. Starts after the app is healthy, i.e. after migrations ran.
+    command: ["python", "-m", "climate.worker"]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    env_file: .env
+    environment:
+      <<: *app-env
+      CLIMATE_MIGRATE_ON_START: "0"
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks:
+      default: {}
+      data: {}
+    logging: *logging
+
+  homekit:
+    <<: *app-image
+    # Local HomeKit controller for the three ecobees (aiohomekit). Needs mDNS, so it runs on
+    # the HOST network: Linux only (Docker Desktop on macOS/Windows cannot do mDNS from a
+    # container). See docs/HOMEKIT.md.
+    profiles: [homekit]
+    command: ["python", "-m", "climate.collector.homekit_service"]
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    env_file: .env
+    environment:
+      <<: *app-env
+      CLIMATE_MIGRATE_ON_START: "0"
+      # Host network: reach Postgres through the 127.0.0.1-only published port.
+      CLIMATE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-climate}:${POSTGRES_PASSWORD}@127.0.0.1:${DB_PORT:-5433}/${POSTGRES_DB:-climate}
+      CLIMATE_HOMEKIT_STATE_DIR: /var/lib/climate/homekit
+    volumes:
+      # charmap.json cache only (0700). Pairing keys are stored encrypted in the database.
+      - homekit-state:/var/lib/climate/homekit
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  agent:
+    <<: *agent-image
+    # Claude Agent SDK on the owner's Claude subscription. Default-on (not a profile) so that
+    # a plain `docker compose up -d --build` after an update always recreates it too; until
+    # CLAUDE_CODE_OAUTH_TOKEN is set it does nothing useful but harms nothing (Claude is never
+    # in the control path). Don't want it at all? `docker compose stop agent`.
+    # It talks to the app over HTTP with the agent token only: no database credentials, no
+    # secret key, and it is not on the data network.
+    #
+    # ANTHROPIC_API_KEY is deliberately NOT passed through (nor any other billing variable).
+    # It would take priority over the subscription and bill the API; the agent refuses to
+    # start if it ever finds one. Do not add it here or to the image.
+    command: ["python", "-m", "climate_agent.scheduler"]
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: ${TZ:-UTC}
+      CLIMATE_API_URL: http://app:8000
+      CLIMATE_AGENT_TOKEN: ${CLIMATE_AGENT_TOKEN:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      CLAUDE_TOKEN_CREATED: ${CLAUDE_TOKEN_CREATED:-}
+      CLIMATE_AGENT_MODEL: ${CLIMATE_AGENT_MODEL:-}
+      CLIMATE_AGENT_FALLBACK_MODEL: ${CLIMATE_AGENT_FALLBACK_MODEL:-}
+      CLIMATE_AGENT_MAX_TURNS: ${CLIMATE_AGENT_MAX_TURNS:-30}
+      CLIMATE_LOG_LEVEL: ${CLIMATE_LOG_LEVEL:-INFO}
+    depends_on:
+      app:
+        condition: service_healthy
+    # Read-only root filesystem; the Claude Code CLI writes only under HOME (~/.claude,
+    # ~/.claude.json) and /tmp, both tmpfs. uid/gid 10002 = the `agent` user in the image.
+    read_only: true
+    # Contents vanish on restart, which is fine: the sign-in comes from the environment and
+    # run history lives in the app's database.
+    tmpfs:
+      - /home/agent:uid=10002,gid=10002,mode=0700,size=256m
+      - /tmp:mode=1777,size=256m,exec
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks:
+      default: {}
+    logging: *logging
+
+  mcp:
+    <<: *agent-image
+    # The same read/compute/gated tools for Claude Code or Claude Desktop on your own machine.
+    # Bound to 127.0.0.1 by default; set MCP_BIND (e.g. the server's Tailscale IP) to reach it
+    # from another machine. No Claude token here: the client brings its own sign-in.
+    profiles: [mcp]
+    command: ["python", "-m", "climate_agent.mcp_server", "--http", "0.0.0.0:8471"]
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: ${TZ:-UTC}
+      CLIMATE_API_URL: http://app:8000
+      CLIMATE_MCP_TOKEN: ${CLIMATE_MCP_TOKEN:-}
+      CLIMATE_LOG_LEVEL: ${CLIMATE_LOG_LEVEL:-INFO}
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8471}:8471"
+    read_only: true
+    tmpfs:
+      - /home/agent:uid=10002,gid=10002,mode=0700,size=16m
+      - /tmp:mode=1777,size=64m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks:
+      default: {}
+    logging: *logging
+
+  ntfy:
+    # Optional self-hosted push notifications. Point CLIMATE_NTFY_URL at http://ntfy (the
+    # compose-internal name). Your phone must also reach it: proxy it through nginx or use
+    # Tailscale (docs/DEPLOY.md), or skip this service and use ntfy.sh with a secret topic.
+    profiles: [ntfy]
+    image: binwiederhier/ntfy:v2.28.0
+    command: ["serve"]
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      # The URL your phone uses to reach this ntfy (required if you set the upstream below).
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-}
+      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+      NTFY_BEHIND_PROXY: "true"
+      # iPhone instant delivery from a self-hosted ntfy needs Apple push, which goes through
+      # ntfy.sh as a relay: set NTFY_UPSTREAM_BASE_URL=https://ntfy.sh in .env to opt in.
+      NTFY_UPSTREAM_BASE_URL: ${NTFY_UPSTREAM_BASE_URL:-}
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+    ports:
+      - "127.0.0.1:${NTFY_PORT:-8472}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 http://127.0.0.1:80/v1/health -O - | grep -Eq '\"healthy\" *: *true'"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      default: {}
+    logging: *logging
+
+volumes:
+  pgdata: {}
+  homekit-state: {}
+  ntfy-cache: {}
+
+networks:
+  default: {}
+  data: {}
