@@ -120,24 +120,25 @@ def room_results(state: HouseState) -> dict[str, RoomStateResult]:
 # ---------------------------------------------------------------------------------------
 
 
+# One indexed probe per room on the (room_key, ts) primary key: the latest row, the latest
+# row with a different state before it, and the first row after that (= since).
 _PREVIOUS_SQL = text(
     """
-    WITH recent AS (
-        SELECT room_key, ts, state FROM room_states WHERE ts >= :since AND ts <= :now
-    ), latest AS (
-        SELECT DISTINCT ON (room_key) room_key, ts, state, confidence, reason
-        FROM room_states WHERE ts >= :since AND ts <= :now
-        ORDER BY room_key, ts DESC
-    ), last_other AS (
-        SELECT r.room_key, max(r.ts) AS ts
-        FROM recent r JOIN latest l USING (room_key)
-        WHERE r.state <> l.state
-        GROUP BY r.room_key
-    )
-    SELECT l.room_key, l.state, l.confidence, l.reason, l.ts,
-           (SELECT min(r.ts) FROM recent r
-             WHERE r.room_key = l.room_key AND (o.ts IS NULL OR r.ts > o.ts)) AS since
-    FROM latest l LEFT JOIN last_other o USING (room_key)
+    SELECT rm.key AS room_key, l.state, l.confidence, l.reason, l.ts,
+           (SELECT min(r.ts) FROM room_states r
+             WHERE r.room_key = rm.key AND r.ts >= :since AND r.ts <= l.ts
+               AND (o.ts IS NULL OR r.ts > o.ts)) AS since
+    FROM rooms rm
+    CROSS JOIN LATERAL (
+        SELECT ts, state, confidence, reason FROM room_states
+        WHERE room_key = rm.key AND ts >= :since AND ts <= :now
+        ORDER BY ts DESC LIMIT 1
+    ) l
+    LEFT JOIN LATERAL (
+        SELECT ts FROM room_states
+        WHERE room_key = rm.key AND ts >= :since AND ts < l.ts AND state <> l.state
+        ORDER BY ts DESC LIMIT 1
+    ) o ON TRUE
     """
 )
 
@@ -427,7 +428,7 @@ def _policy(session: Session, now: datetime, tz: str) -> tuple[PolicyParams, int
     try:
         with session.begin_nested():
             params, policy_id = changes.policy_for(session, now, tz)
-    except Exception:
+    except Exception:  # state must never fail on the policy lookup
         log.warning("could not load the policy; using the defaults", exc_info=True)
         params, policy_id = PolicyParams(), None
 
@@ -438,7 +439,7 @@ def _policy(session: Session, now: datetime, tz: str) -> tuple[PolicyParams, int
             arm = switchback.active_arm(session, now, tz)
     except NotImplementedError:
         arm = None
-    except Exception:
+    except Exception:  # an unfinished or failing experiment module never breaks state
         log.warning("experiments.switchback.active_arm failed; running without the experiment arm", exc_info=True)
         arm = None
     if arm:

@@ -459,7 +459,7 @@ def runtime_daily(
         mode = r.mode if r.mode in ("cool", "heat") else None
         out.append(
             DailyRuntime(
-                Date=r.day,
+                date=r.day,
                 unit_key=r.unit_key,
                 cool_min=round(r.cool_s / 60.0, 1),
                 heat_min=round(r.heat_s / 60.0, 1),
@@ -500,7 +500,7 @@ def runtime_intraday(
         kind, src = "forecast", pick_weather_source(session, "forecast", start, last)
     outdoor = [OutdoorPoint(ts=w.ts, temp_f=_r(w.temp_f)) for w in _weather_rows(session, kind, src, start, last)] if src else []
     units = [IntradayUnit(unit_key=k, points=pts) for k, pts in sorted(by_unit.items(), key=lambda kv: UNIT_SORT.get(kv[0], 99))]
-    return Intraday(Date=d, units=units, outdoor=outdoor)
+    return Intraday(date=d, units=units, outdoor=outdoor)
 
 
 @router.get("/weather", response_model=WeatherOut)

@@ -23,7 +23,7 @@ watch(days, (d) => analysis.loadNatural(d), { immediate: true })
 
 const data = computed(() => analysis.natural.data)
 const ci = computed(() => pair(data.value?.ci90))
-const events = computed(() => [...(data.value?.events ?? [])].sort((a, b) => (a.Date < b.Date ? 1 : -1)))
+const events = computed(() => [...(data.value?.events ?? [])].sort((a, b) => (a.date < b.date ? 1 : -1)))
 
 /** Controls carry no interval of their own; show their size relative to the main estimate. */
 function relative(v: number | null): string {
@@ -93,8 +93,8 @@ function relative(v: number | null): string {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="e in events" :key="e.Date" class="border-t border-line">
-                  <td class="py-1.5 pr-2 whitespace-nowrap">{{ dayLabel(e.Date) }}</td>
+                <tr v-for="e in events" :key="e.date" class="border-t border-line">
+                  <td class="py-1.5 pr-2 whitespace-nowrap">{{ dayLabel(e.date) }}</td>
                   <td class="py-1.5 pr-2 text-right whitespace-nowrap">{{ signed(e.main_floor_float_f, 1, '°') }}</td>
                   <td class="py-1.5 pr-2 text-right whitespace-nowrap">{{ minutes(e.up_runtime_min) }}</td>
                   <td class="py-1.5 pr-2 text-right whitespace-nowrap text-muted">{{ minutes(e.expected_up_runtime_min) }}</td>

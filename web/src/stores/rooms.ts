@@ -52,6 +52,16 @@ export function floorLabel(key: string): string {
   return FLOORS.find((f) => f.key === key)?.label ?? key
 }
 
+/** "45 s ago" / "12 min ago" / "3 h ago" / "2 d ago". */
+export function secondsAgo(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return ''
+  const s = Math.max(0, Math.round(seconds))
+  if (s < 90) return `${s} s ago`
+  if (s < 5400) return `${Math.round(s / 60)} min ago`
+  if (s < 172800) return `${Math.round(s / 3600)} h ago`
+  return `${Math.round(s / 86400)} d ago`
+}
+
 /** "motion 45 s ago" / "motion 12 min ago" / "no motion for 3 h". */
 export function motionText(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return ''

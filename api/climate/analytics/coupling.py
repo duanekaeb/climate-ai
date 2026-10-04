@@ -398,7 +398,7 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
         r = by["up"][d]
         e = expected_covered_seconds(fit_up, r) if fit_up else math.nan
         events_out.append(NaturalEvent(
-            Date=date.fromordinal(d), main_floor_float_f=round(float_f[d], 1), up_runtime_min=round(r.cool_s / 60.0, 1),
+            date=date.fromordinal(d), main_floor_float_f=round(float_f[d], 1), up_runtime_min=round(r.cool_s / 60.0, 1),
             expected_up_runtime_min=None if math.isnan(e) else round(e / 60.0, 1),
         ))
 

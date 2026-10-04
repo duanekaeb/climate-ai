@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi import status as http
 
 from climate.api import auth
-from climate.api.schemas import AuthState, PasswordBody
+from climate.api.schemas import AuthState, LoginBody, PasswordBody
 
 router = APIRouter(tags=["auth"])
 
@@ -38,7 +38,7 @@ def setup_password(body: PasswordBody, response: Response) -> AuthState:
 
 
 @router.post("/auth/login", response_model=AuthState)
-def login(body: PasswordBody, request: Request, response: Response) -> AuthState:
+def login(body: LoginBody, request: Request, response: Response) -> AuthState:
     ip = _client_ip(request)
     auth.throttle(ip)
     if not auth.password_set():

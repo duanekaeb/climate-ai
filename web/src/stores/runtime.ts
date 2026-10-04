@@ -35,9 +35,9 @@ export function sortUnitKeys(keys: Iterable<string>): string[] {
 export function summarizeDays(rows: DailyRuntime[]): RuntimeDay[] {
   const byDate = new Map<string, DailyRuntime[]>()
   for (const r of rows) {
-    const list = byDate.get(r.Date)
+    const list = byDate.get(r.date)
     if (list) list.push(r)
-    else byDate.set(r.Date, [r])
+    else byDate.set(r.date, [r])
   }
   return [...byDate.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))

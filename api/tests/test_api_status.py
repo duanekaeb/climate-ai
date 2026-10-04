@@ -197,7 +197,7 @@ def test_runtime_intraday_and_weather(owner):
     r = owner.get("/api/runtime/intraday", params={"date": yesterday.isoformat()})
     assert r.status_code == 200
     body = r.json()
-    assert body["Date"] == yesterday.isoformat()
+    assert body["date"] == yesterday.isoformat()
     assert [u["unit_key"] for u in body["units"]] == ["main", "up", "bed"]
     assert all(len(u["points"]) >= 276 for u in body["units"])  # a full local day of 5-minute slots
     assert len(body["outdoor"]) >= 23

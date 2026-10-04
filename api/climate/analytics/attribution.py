@@ -173,7 +173,7 @@ def savings(session: Session, start: date, end: date) -> Savings:
     ]
     days = [
         SavingsDay(
-            Date=d,
+            date=d,
             expected_min=round(p.expected[d] / 60.0, 1) if ok else None,
             actual_min=round(p.actual[d] / 60.0, 1),
             outdoor_mean_f=p.outdoor.get(d),

@@ -73,8 +73,8 @@ def setup_house(db, now: datetime = NOW, *, mode: str = "act", occupied: tuple[s
     put_setting(db, "occupancy", OccupancySettings(phones_away=phones_away))
     for s in SENSORS:
         occ = (s.room_key in occupied) if s.has_occupancy else None
-        values = dict(sensor_key=s.key, ts=now - timedelta(minutes=1), source="simulator", temp_f=75.0,
-                      humidity=45.0 if s.has_humidity else None, occupied=occ, motion=occ, online=True)
+        values = {"sensor_key": s.key, "ts": now - timedelta(minutes=1), "source": "simulator", "temp_f": 75.0,
+                      "humidity": 45.0 if s.has_humidity else None, "occupied": occ, "motion": occ, "online": True}
         db.execute(insert(LiveSensor).values(**values).on_conflict_do_update(
             index_elements=[LiveSensor.sensor_key], set_=values))
     for u in ("main", "up", "bed"):

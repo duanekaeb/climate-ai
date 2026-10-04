@@ -24,7 +24,7 @@ const option = computed<ChartOption>(() => {
     tooltip: { ...baseOption(p).tooltip, trigger: 'axis' },
     xAxis: {
       type: 'category',
-      data: props.days.map((d) => dayLabel(d.Date)),
+      data: props.days.map((d) => dayLabel(d.date)),
       ...ax,
       splitLine: { show: false },
       axisLabel: { ...ax.axisLabel, hideOverlap: true },

@@ -91,7 +91,7 @@ class BaselineFit:
 
     @property
     def passes(self) -> bool:
-        return self.cvrmse <= CV_MAX and abs(self.nmbe) <= NMBE_MAX
+        return bool(self.cvrmse <= CV_MAX and abs(self.nmbe) <= NMBE_MAX)
 
     @property
     def mean_y_s(self) -> float:
@@ -145,7 +145,7 @@ def fit_baseline(days: list[DayRow], mode: str) -> BaselineFit | None:
 
     X = degree_days_grid(rows, BP_GRID, mode)  # (n, k)
     n = y.size
-    ym = y.mean()
+    ym = float(y.mean())
     xm = X.mean(axis=0)
     xc = X - xm
     sxx = (xc * xc).sum(axis=0)
@@ -539,7 +539,7 @@ def daily_runtime(session: Session, days: int = 30, now: datetime | None = None)
             expected = None if math.isnan(e) else round(e / 60.0, 1)
         out.append(
             DailyRuntime(
-                Date=r.day, unit_key=r.unit_key, cool_min=round(r.cool_s / 60.0, 1), heat_min=round(r.heat_s / 60.0, 1),
+                date=r.day, unit_key=r.unit_key, cool_min=round(r.cool_s / 60.0, 1), heat_min=round(r.heat_s / 60.0, 1),
                 aux_min=round(r.aux_s / 60.0, 1), fan_min=round(r.fan_s / 60.0, 1), expected_min=expected,
                 mode=r.mode, outdoor_mean_f=r.outdoor_mean_f, outdoor_max_f=r.outdoor_max_f, cdd65=r.cdd65,
                 hdd65=r.hdd65, maxed_min=r.maxed_min,

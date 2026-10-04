@@ -53,6 +53,7 @@ export interface ApiTypes {
   IntradayUnit?: IntradayUnit
   JobOut?: JobOut
   LocationSettings?: LocationSettings
+  LoginBody?: LoginBody
   ManualHoldBody?: ManualHoldBody
   ModeBody?: ModeBody
   ModelFitOut?: ModelFitOut
@@ -469,10 +470,10 @@ export interface CouplingPoint {
  * via the `definition` "DailyRuntime".
  */
 export interface DailyRuntime {
-  Date: string
   aux_min: number
   cdd65: number | null
   cool_min: number
+  date: string
   expected_min: number | null
   fan_min: number
   hdd65: number | null
@@ -848,7 +849,7 @@ export interface WeatherNow {
  * via the `definition` "Intraday".
  */
 export interface Intraday {
-  Date: string
+  date: string
   outdoor: OutdoorPoint[]
   units: IntradayUnit[]
 }
@@ -913,6 +914,15 @@ export interface LocationSettings {
   zip: string | null
 }
 /**
+ * Signing in. No minimum here: CLIMATE_OWNER_PASSWORD may predate the 8-character rule.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "LoginBody".
+ */
+export interface LoginBody {
+  password: string
+}
+/**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "ManualHoldBody".
  */
@@ -955,7 +965,7 @@ export interface ModelFitOut {
  * via the `definition` "NaturalEvent".
  */
 export interface NaturalEvent {
-  Date: string
+  date: string
   expected_up_runtime_min: number | null
   main_floor_float_f: number
   up_runtime_min: number
@@ -996,6 +1006,8 @@ export interface SleepWindow {
   start: string
 }
 /**
+ * Choosing a password (first-run setup).
+ *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "PasswordBody".
  */
@@ -1187,8 +1199,8 @@ export interface SavingsByUnit {
  * via the `definition` "SavingsDay".
  */
 export interface SavingsDay {
-  Date: string
   actual_min: number
+  date: string
   expected_min: number | null
   outdoor_mean_f: number | null
 }
@@ -1221,6 +1233,7 @@ export interface SensorOut {
  * via the `definition` "SettingsOut".
  */
 export interface SettingsOut {
+  agent: AgentSettings
   control: ControlSettings
   location: LocationSettings
   occupancy: OccupancySettings
@@ -1240,6 +1253,7 @@ export interface SettingsOut {
  * via the `definition` "SettingsUpdate".
  */
 export interface SettingsUpdate {
+  agent: AgentSettings | null
   control: ControlSettings | null
   location: LocationSettings | null
   occupancy: OccupancySettings | null
@@ -1306,7 +1320,7 @@ export interface SimulateBody {
  * via the `definition` "SimulateOut".
  */
 export interface SimulateOut {
-  Date: string
+  date: string
   model: 'rc' | 'rule_of_thumb'
   note: string
   total_runtime_min: number
@@ -1378,5 +1392,5 @@ export interface WeatherPoint {
  */
 export interface WsEvent {
   id: number | null
-  type: 'status' | 'action' | 'agent_run' | 'alert' | 'homekit' | 'change' | 'report'
+  type: 'status' | 'action' | 'agent_run' | 'alert' | 'homekit' | 'change' | 'report' | 'ping'
 }

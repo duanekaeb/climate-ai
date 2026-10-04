@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { routes } from '@/router'
 import { useAuth } from '@/stores/auth'
@@ -25,9 +25,14 @@ function toggleTheme() {
   }
 }
 
-onMounted(() => {
-  if (auth.state?.authenticated) status.start()
-})
+// The router guard loads auth before the first page renders; start live status once signed in.
+watch(
+  () => auth.state?.authenticated,
+  (signedIn) => {
+    if (signedIn) status.start()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>

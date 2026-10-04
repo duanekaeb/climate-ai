@@ -117,7 +117,7 @@ async def tick(source: ThermostatSource | None, now: datetime | None = None) -> 
             return []
         try:
             targets = plan(state)
-        except Exception:
+        except Exception:  # room states are still saved; nothing is written this tick
             log.exception("policy.plan failed; no control actions this tick")
             return []
         src = _source_settings(s)
@@ -129,7 +129,7 @@ async def tick(source: ThermostatSource | None, now: datetime | None = None) -> 
                 created += ids
                 if write is not None:
                     writes.append(write)
-            except Exception:
+            except Exception:  # one unit's failure never stops the others
                 log.exception("controller tick failed for unit %s", target.unit_key)
 
     for w in writes:
@@ -171,8 +171,13 @@ async def execute_queued(source: ThermostatSource | None, now: datetime | None =
                 publish(s, "action", row.id)
                 if write is not None:
                     writes.append(write)
-            except Exception:
+            except Exception as exc:  # fail the row visibly instead of retrying it forever
                 log.exception("could not prepare queued action %s", row.id)
+                row.status = "failed"
+                row.error = f"Not sent: {type(exc).__name__}: {exc}"[:1000]
+                row.completed_at = now
+                handled.append(row.id)
+                publish(s, "action", row.id)
     for w in writes:
         await _perform(source, w)
     return handled

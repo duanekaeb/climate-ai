@@ -79,7 +79,9 @@ def make_history(session: Session, days: int = 30, end: datetime | None = None, 
         t += timedelta(minutes=5)
 
     for table, rows in ((WeatherHour, weather), (Runtime5m, runtime), (Reading5m, readings)):
-        for i in range(0, len(rows), 5000):
-            session.execute(insert(table).values(rows[i : i + 5000]).on_conflict_do_nothing())
+        # Postgres allows at most 65,535 bind parameters per statement.
+        chunk = max(1, 60_000 // max(1, len(rows[0]) if rows else 1))
+        for i in range(0, len(rows), chunk):
+            session.execute(insert(table).values(rows[i : i + chunk]).on_conflict_do_nothing())
     session.flush()
     return {"start": start, "end": end, "weather": len(weather), "runtime": len(runtime), "readings": len(readings)}

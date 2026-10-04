@@ -29,6 +29,7 @@
 }
 
 .dark {
+  color-scheme: dark; /* native date/time/select controls follow the theme */
   --color-page: #0b1120;
   --color-surface: #111827;
   --color-surface-2: #1f2937;

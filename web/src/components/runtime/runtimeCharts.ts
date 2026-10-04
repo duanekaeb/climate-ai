@@ -32,6 +32,8 @@ export interface DailyChartInput {
 export function dailyRuntimeOption({ days, unitKeys, selectedDate, theme: t }: DailyChartInput): EChartsOption {
   const ax = axisStyle(t)
   const dates = days.map((d) => d.date)
+  const peakMin = Math.max(0, ...days.map((d) => Math.max(d.total, d.expected ?? 0)))
+  const stepMin = hourStep(peakMin) * 60
 
   const bars: BarSeriesOption[] = unitKeys.map((k, i) => ({
     name: unitName(k),
@@ -114,7 +116,8 @@ export function dailyRuntimeOption({ days, unitKeys, selectedDate, theme: t }: D
     yAxis: [
       {
         type: 'value',
-        interval: hourStep(Math.max(0, ...days.map((d) => Math.max(d.total, d.expected ?? 0)))) * 60,
+        interval: stepMin,
+        max: Math.max(stepMin, Math.ceil(peakMin / stepMin) * stepMin),
         ...ax,
         axisLabel: { ...ax.axisLabel, formatter: (v: number) => `${Math.round(v / 60)} h` },
       },
@@ -288,10 +291,10 @@ export function intradayOption({ intraday, unitKeys, tz, theme: t }: IntradayCha
       {
         type: 'value',
         gridIndex: 1,
+        // Each unit can run at most 5 minutes per 5-minute slot; bars stack across units.
         min: 0,
-        max: single ? 5 : undefined,
-        minInterval: 1,
-        splitNumber: 2,
+        max: 5 * Math.max(1, units.length),
+        interval: 5,
         ...ax,
         axisLabel: { ...ax.axisLabel, formatter: '{value} m' },
       },

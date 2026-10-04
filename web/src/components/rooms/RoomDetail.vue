@@ -5,7 +5,7 @@ import type { RoomStatus } from '@/api/types'
 import AsyncState from '@/components/AsyncState.vue'
 import Icon from '@/components/Icon.vue'
 import { UNIT_NAMES, localDate, localTime, pct, temp } from '@/lib/format'
-import { NO_SENSOR_TEXT, STATE_CHIP, STATE_LABELS, floorLabel, motionText, useRooms } from '@/stores/rooms'
+import { NO_SENSOR_TEXT, STATE_CHIP, STATE_LABELS, floorLabel, secondsAgo, useRooms } from '@/stores/rooms'
 import RoomHistoryChart from './RoomHistoryChart.vue'
 import { occupancyBands } from './roomChart'
 
@@ -104,8 +104,8 @@ const offsetText = computed(() => {
         <dd class="num">{{ pct(room.confidence * 100) }}</dd>
       </div>
       <div v-if="room.seconds_since_motion !== null">
-        <dt class="text-xs text-muted">Motion</dt>
-        <dd class="num">{{ motionText(room.seconds_since_motion) }}</dd>
+        <dt class="text-xs text-muted">Last motion</dt>
+        <dd class="num">{{ secondsAgo(room.seconds_since_motion) }}</dd>
       </div>
       <div v-if="offsetText">
         <dt class="text-xs text-muted">Offset vs thermostat</dt>

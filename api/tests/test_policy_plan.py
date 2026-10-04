@@ -174,13 +174,13 @@ def test_conflicting_offsets_resolved_by_priority():
 
 def test_precool_on_hot_sunny_afternoons_only():
     p = PolicyParams(precool_enabled=True, precool_degrees_f=1.0, precool_start_hour=13)
-    hot = dict(forecast_high_f=96.0, forecast_sunny=True)
+    hot = {"forecast_high_f": 96.0, "forecast_sunny": True}
     t = by_unit(plan(make_state(at(14), occupied=("toy_room",), policy=p, **hot)))
     assert t["up"].rule == "precool" and t["up"].cool_f == 76.0
     assert t["main"].cool_f == 75.0  # linked to the pre-cooled upstairs
     # before the start hour, on a mild day, or when disabled: no pre-cool
     assert by_unit(plan(make_state(at(12), occupied=("toy_room",), policy=p, **hot)))["up"].rule == "comfort"
-    mild = dict(forecast_high_f=85.0, forecast_sunny=True)
+    mild = {"forecast_high_f": 85.0, "forecast_sunny": True}
     assert by_unit(plan(make_state(at(14), occupied=("toy_room",), policy=p, **mild)))["up"].rule == "comfort"
     assert by_unit(plan(make_state(at(14), occupied=("toy_room",), **hot)))["up"].rule == "comfort"
 

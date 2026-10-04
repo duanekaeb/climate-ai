@@ -46,6 +46,7 @@ from climate.control.policy import CLAUDE_SIGNOFF_RANGES, OWNER_ONLY_PARAMS, Pol
 from climate.house import ROOM_BY_KEY, UNIT_KEYS
 from climate.sources.base import HoldRequest
 from climate.store.app_settings import (
+    AgentSettings,
     ControlSettings,
     LocationSettings,
     OccupancySettings,
@@ -236,6 +237,7 @@ def settings_out(session: Session) -> SettingsOut:
         control=get_setting(session, "control", ControlSettings),
         occupancy=get_setting(session, "occupancy", OccupancySettings),
         location=get_setting(session, "location", LocationSettings),
+        agent=get_setting(session, "agent", AgentSettings),
         policy=policy,
         policy_version_id=policy_id,
         signoff_ranges={k: (float(lo), float(hi)) for k, (lo, hi) in CLAUDE_SIGNOFF_RANGES.items()},
@@ -277,10 +279,12 @@ def put_settings_route(
         violations += location_violations(body.location)
     if violations:
         raise unprocessable(violations)
-    for key, value in (("control", body.control), ("occupancy", body.occupancy), ("location", body.location)):
+    for key, value in (
+        ("control", body.control), ("occupancy", body.occupancy), ("location", body.location), ("agent", body.agent)
+    ):
         if value is not None:
             put_setting(session, key, value, updated_by="owner")
-    if body.control or body.occupancy or body.location:
+    if body.control or body.occupancy or body.location or body.agent:
         events.publish(session, "status")
     out = settings_out(session)
     session.commit()

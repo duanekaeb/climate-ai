@@ -40,7 +40,15 @@ class AuthState(BaseModel):
 
 
 class PasswordBody(BaseModel):
+    """Choosing a password (first-run setup)."""
+
     password: str = Field(min_length=8, max_length=200)
+
+
+class LoginBody(BaseModel):
+    """Signing in. No minimum here: CLIMATE_OWNER_PASSWORD may predate the 8-character rule."""
+
+    password: str = Field(min_length=1, max_length=200)
 
 
 class Health(BaseModel):
@@ -167,7 +175,7 @@ class HouseStatus(BaseModel):
 class WsEvent(BaseModel):
     """Pushed on /api/ws. Clients refetch what changed; payloads stay tiny."""
 
-    type: Literal["status", "action", "agent_run", "alert", "homekit", "change", "report"]
+    type: Literal["status", "action", "agent_run", "alert", "homekit", "change", "report", "ping"]
     id: int | None = None
 
 
@@ -197,7 +205,7 @@ class RoomHistory(BaseModel):
 
 
 class DailyRuntime(BaseModel):
-    Date: Date
+    date: Date
     unit_key: str
     cool_min: float
     heat_min: float  # compHeat1 (heat pump) or auxHeat1 (furnace) per unit equipment
@@ -234,7 +242,7 @@ class OutdoorPoint(BaseModel):
 
 
 class Intraday(BaseModel):
-    Date: Date
+    date: Date
     units: list[IntradayUnit]
     outdoor: list[OutdoorPoint]
 
@@ -276,7 +284,7 @@ class BaselineOut(BaseModel):
 
 
 class SavingsDay(BaseModel):
-    Date: Date
+    date: Date
     expected_min: float | None
     actual_min: float
     outdoor_mean_f: float | None = None
@@ -360,7 +368,7 @@ class DriftReport(BaseModel):
 
 
 class NaturalEvent(BaseModel):
-    Date: Date
+    date: Date
     main_floor_float_f: float  # how far the main floor floated above its occupied setpoint
     up_runtime_min: float
     expected_up_runtime_min: float | None
@@ -418,6 +426,7 @@ class SettingsOut(BaseModel):
     control: ControlSettings
     occupancy: OccupancySettings
     location: LocationSettings
+    agent: AgentSettings
     policy: PolicyParams
     policy_version_id: int | None
     signoff_ranges: dict[str, tuple[float, float]]
@@ -428,6 +437,7 @@ class SettingsUpdate(BaseModel):
     control: ControlSettings | None = None
     occupancy: OccupancySettings | None = None
     location: LocationSettings | None = None
+    agent: AgentSettings | None = None
 
 
 class ModeBody(BaseModel):
@@ -503,7 +513,7 @@ class ProposeExperimentBody(BaseModel):
 class Checkpoint(BaseModel):
     day: int
     info_fraction: float
-    alpha_spent: float
+    alpha_spent: float  # incremental: alpha spent AT this look (the looks sum to alpha)
     z_crit: float
 
 
@@ -619,7 +629,7 @@ class SimPoint(BaseModel):
 
 
 class SimulateOut(BaseModel):
-    Date: Date
+    date: Date
     model: Literal["rc", "rule_of_thumb"]
     units: dict[str, list[SimPoint]]
     total_runtime_min: float

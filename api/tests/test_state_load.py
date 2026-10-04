@@ -21,8 +21,8 @@ NOW = datetime(2026, 7, 15, 10, 0, tzinfo=ZoneInfo(TZ)).astimezone(UTC)  # Wedne
 
 def sensor(db, key: str, *, age_min: float = 1, temp: float | None = 75.0, humidity: float | None = None,
            occupied: bool | None = False, online: bool = True, now: datetime = NOW) -> None:
-    values = dict(sensor_key=key, ts=now - timedelta(minutes=age_min), source="simulator", temp_f=temp,
-                  humidity=humidity, occupied=occupied, motion=occupied, online=online)
+    values = {"sensor_key": key, "ts": now - timedelta(minutes=age_min), "source": "simulator", "temp_f": temp,
+                  "humidity": humidity, "occupied": occupied, "motion": occupied, "online": online}
     db.execute(insert(LiveSensor).values(**values).on_conflict_do_update(index_elements=[LiveSensor.sensor_key],
                                                                          set_=values))
 
@@ -112,8 +112,8 @@ def test_weather(db):
     for h in range(24):
         ts = day_start + timedelta(hours=h)
         kind = "observed" if ts <= NOW else "forecast"
-        rows.append(dict(ts=ts, source="open-meteo", kind=kind, temp_f=78.0 + (h if h <= 16 else 32 - h),
-                         cloud_cover=15.0 if 12 <= h < 18 else 90.0))
+        rows.append({"ts": ts, "source": "open-meteo", "kind": kind, "temp_f": 78.0 + (h if h <= 16 else 32 - h),
+                         "cloud_cover": 15.0 if 12 <= h < 18 else 90.0})
     db.execute(insert(WeatherHour).values(rows))
     db.commit()
     st = load_house_state(db, NOW)
@@ -170,9 +170,9 @@ def occupancy_history(db, end: datetime, days: int) -> None:
         local = t.astimezone(ZoneInfo(TZ))
         awake = 7 <= local.hour < 22
         afternoon = 12 <= local.hour < 18 and local.weekday() < 5
-        rows.append(dict(ts=t, sensor_key="main.kitchen", temp_f=75.0, occupied=awake and not afternoon,
-                         source="ecobee_report"))
-        rows.append(dict(ts=t, sensor_key="up.toy_room", temp_f=76.0, occupied=awake, source="ecobee_report"))
+        rows.append({"ts": t, "sensor_key": "main.kitchen", "temp_f": 75.0, "occupied": awake and not afternoon,
+                         "source": "ecobee_report"})
+        rows.append({"ts": t, "sensor_key": "up.toy_room", "temp_f": 76.0, "occupied": awake, "source": "ecobee_report"})
         t += timedelta(minutes=5)
     for i in range(0, len(rows), 2000):
         db.execute(insert(Reading5m).values(rows[i:i + 2000]))

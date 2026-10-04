@@ -116,7 +116,7 @@ const option = computed<ChartOption>(() => {
 
     <div v-if="candidate" class="mt-4 space-y-2 border-t border-line pt-4" aria-live="polite">
       <p class="text-sm">
-        {{ dayLabelLong(candidate.Date) }}: <span class="num font-semibold">{{ minutes(candidate.total_runtime_min) }}</span>
+        {{ dayLabelLong(candidate.date) }}: <span class="num font-semibold">{{ minutes(candidate.total_runtime_min) }}</span>
         of total runtime
         <template v-if="baseline">
           vs <span class="num">{{ minutes(baseline.total_runtime_min) }}</span> with the current policy
