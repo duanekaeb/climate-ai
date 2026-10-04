@@ -1376,7 +1376,7 @@ class SimulatedHouse:
             return f"cool - heat must be at least {HEAT_COOL_MIN_DELTA_F}°F"
         return None
 
-    async def resume_program(self, unit_key: str, reason: str) -> WriteResult:
+    async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
         """Clear any hold so the unit follows its program again; read it back."""
         self._tick()
         request = {"unit_key": unit_key, "action": "resumeProgram", "reason": reason}

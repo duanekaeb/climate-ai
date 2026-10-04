@@ -141,7 +141,10 @@ class ThermostatSource(Protocol):
         """Write a holdHours temperature hold, then read it back (the library swallows errors)."""
         ...
 
-    async def resume_program(self, unit_key: str, reason: str) -> WriteResult:
+    async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
+        """Cancel the running hold and return to the schedule. Unless ``force`` (an owner's
+        explicit resume), refuse when the running hold is not one the controller wrote, so a
+        hand-set hold is never erased by the controller."""
         ...
 
     async def health(self) -> SourceHealth:
