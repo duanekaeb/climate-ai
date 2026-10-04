@@ -95,7 +95,7 @@ async function save() {
         :class="
           mode === m.value
             ? m.value === 'act'
-              ? 'bg-good text-white shadow-sm'
+              ? 'bg-good/20 text-good shadow-sm'
               : 'bg-surface text-ink shadow-sm'
             : 'text-muted hover:text-ink'
         "

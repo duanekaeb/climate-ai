@@ -307,7 +307,3 @@ def actions_by_status(session: Session, t0: datetime, t1: datetime) -> dict[str,
         {"t0": t0, "t1": t1},
     )
     return {s: int(c) for s, c in rows}
-
-
-def local_day_bounds(d: date, tz: str) -> tuple[datetime, datetime]:
-    return day_bounds_utc(d, tz)

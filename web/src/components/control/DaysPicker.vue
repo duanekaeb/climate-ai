@@ -24,7 +24,7 @@ function toggle(d: number) {
       :title="WEEKDAYS[i]"
       :disabled="disabled"
       class="h-8 w-8 rounded-lg border text-xs font-medium disabled:opacity-50"
-      :class="model.includes(i) ? 'border-accent bg-accent text-white' : 'border-line bg-surface text-muted'"
+      :class="model.includes(i) ? 'border-accent bg-accent/15 text-accent' : 'border-line bg-surface text-muted'"
       @click="toggle(i)"
     >
       {{ d }}

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // ecobee account sign-in (email + password, then an MFA code when the account asks for one).
 // The password lives only in this component's input and is cleared as soon as it is sent.
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { EcobeeSetup } from '@/api/types'
 import Card from '@/components/Card.vue'
 import { useSetup } from '@/stores/setup'
@@ -39,7 +39,7 @@ async function login() {
   }
   const pw = password.value
   password.value = ''
-  await run(async () => {
+  const ok = await run(async () => {
     const res = await setup.ecobeeLogin(email.value.trim(), pw)
     if (res.status === 'mfa_required') {
       mfaLocal.value = true
@@ -48,7 +48,8 @@ async function login() {
     } else if (res.status === 'error') {
       throw new Error(res.error || 'ecobee sign-in failed.')
     }
-  }, 'Signed in to ecobee.')
+  })
+  if (ok && props.ecobee.signed_in) done.value = 'Signed in to ecobee.'
 }
 
 async function verify() {
@@ -59,12 +60,16 @@ async function verify() {
     return
   }
   code.value = ''
-  await run(async () => {
+  const ok = await run(async () => {
     const res = await setup.ecobeeMfa(c)
     if (res.status === 'error') throw new Error(res.error || 'That code was not accepted.')
     if (res.status === 'signed_in') mfaLocal.value = false
-  }, 'Signed in to ecobee.')
+  })
+  if (ok && props.ecobee.signed_in) done.value = 'Signed in to ecobee.'
 }
+
+const codeInput = ref<HTMLInputElement | null>(null)
+watch(step, (s) => s === 'mfa' && nextTick(() => codeInput.value?.focus()))
 
 function startOver() {
   mfaLocal.value = false
@@ -111,8 +116,8 @@ onBeforeUnmount(() => {
         <p class="text-sm font-medium">{{ mfaPrompt }}</p>
         <label class="block max-w-xs space-y-1">
           <span class="text-sm text-muted">Verification code</span>
-          <input v-model="code" class="input num tracking-widest" inputmode="numeric" autocomplete="one-time-code"
-                 maxlength="8" pattern="\d{4,8}" required autofocus />
+          <input ref="codeInput" v-model="code" class="input num tracking-widest" inputmode="numeric" autocomplete="one-time-code"
+                 maxlength="8" pattern="\d{4,8}" required />
         </label>
         <p class="rounded-xl bg-surface-2 p-2.5 text-xs text-muted">
           Only authenticator-app (TOTP) or SMS verification works with this sign-in. If your ecobee account uses

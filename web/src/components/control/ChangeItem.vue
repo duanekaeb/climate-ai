@@ -54,11 +54,11 @@ const rows = computed(() =>
 )
 
 type Decision = DecisionBody['decision']
-const options = computed<{ value: Decision; label: string; tone: 'primary' | 'danger' | 'plain' }[]>(() => [
+const options: { value: Decision; label: string; tone: 'primary' | 'danger' | 'plain' }[] = [
   { value: 'approve', label: 'Approve', tone: 'primary' },
   { value: 'hold', label: 'Hold', tone: 'plain' },
   { value: 'reject', label: 'Reject', tone: 'danger' },
-])
+]
 
 function decide(decision: Decision, reason: string) {
   return control.decideChange(props.change.id, { decision, reason })

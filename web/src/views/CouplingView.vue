@@ -30,7 +30,10 @@ const placeboCi = computed(() => pair(c.value?.placebo_ci90))
 const hasOutdoor = computed(() => (c.value?.points ?? []).some((p) => p.outdoor_f !== null))
 
 /** The coefficient is upstairs runtime minutes per hour; the same thing as duty points. */
-const dutyPoints = computed(() => (c.value?.coef_min_per_degf == null ? null : (c.value.coef_min_per_degf / 60) * 100))
+const dutyPoints = computed(() => {
+  const coef = c.value?.coef_min_per_degf
+  return coef === null || coef === undefined ? null : (coef / 60) * 100
+})
 const placeboVerdict = computed<'clean' | 'suspect' | 'unknown'>(() => {
   if (!placeboCi.value) return 'unknown'
   return crossesZero(placeboCi.value[0], placeboCi.value[1]) ? 'clean' : 'suspect'

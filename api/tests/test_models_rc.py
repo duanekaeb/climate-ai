@@ -15,7 +15,6 @@ from climate.models import backtest as bt
 from climate.models import thermal_rc as rc
 from climate.store.orm import ModelFit, Reading5m, Runtime5m, WeatherHour
 from climate.timeutil import day_bounds_utc, local_date, utcnow
-from tests.factories import make_history
 
 TZ = "America/Chicago"
 TRUE = rc.RCModel(
@@ -175,6 +174,44 @@ def test_fit_room_offsets_day_night(db):
 # ---------------------------------------------------------------------------------------
 # backtest and simulate
 # ---------------------------------------------------------------------------------------
+
+
+def make_history(db, days: int) -> None:
+    """Recorded-looking cooling history for the last ``days`` (ends at the current hour):
+    hourly Open-Meteo weather, 5-minute runtime per unit and occupancy readings. The main
+    floor is empty on weekday afternoons (12:00-18:00 local) while the upstairs is in use,
+    the case the linked-floors rule is about. (Local stand-in for tests.factories.make_history,
+    whose 5000-row inserts exceed Postgres' bind-parameter limit.)"""
+    rng = np.random.default_rng(11)
+    end = utcnow().replace(minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=days)
+    weather, runtime, readings = [], [], []
+    t = start - timedelta(hours=2)
+    while t < end + timedelta(hours=2):
+        lh = (t.hour - 5) % 24
+        weather.append(dict(ts=t, source="open-meteo", kind="observed", temp_f=82 + 11 * np.sin((lh - 10) / 24 * 2 * np.pi),
+                            rh=55.0, dewpoint_f=62.0, cloud_cover=30.0,
+                            shortwave_wm2=float(max(0.0, 800 * np.sin((lh - 6.5) / 12 * np.pi))), wind_mph=5.0,
+                            precip_in=0.0))
+        t += timedelta(hours=1)
+    t = start
+    while t < end:
+        lh = (t.hour - 5) % 24 + t.minute / 60
+        out = 82 + 11 * np.sin((lh - 10) / 24 * 2 * np.pi)
+        main_empty = 12 <= lh < 18 and t.weekday() < 5
+        for u, zone, sp in (("main", 76.0 + (2.0 if main_empty else 0.0), 76.0), ("up", 77.0, 77.0), ("bed", 75.5, 75.0)):
+            secs = int(min(300, max(0, (out - 65) * 9 + rng.normal(0, 10))))
+            runtime.append(dict(ts=t, unit_key=u, comp_cool1=secs, fan=secs, hvac_mode="cool",
+                                zone_temp_f=zone + float(rng.normal(0, 0.2)), heat_sp_f=68.0, cool_sp_f=sp,
+                                outdoor_temp_f=float(out), source="test"))
+        for u, keys in OCC_SENSORS.items():
+            occupied = bool(7 <= lh < 22 and not (u == "main" and main_empty))
+            for k in keys:
+                readings.append(dict(ts=t, sensor_key=k, temp_f=None, occupied=occupied, source="test"))
+        t += timedelta(minutes=5)
+    _insert(db, WeatherHour, weather)
+    _insert(db, Runtime5m, runtime)
+    _insert(db, Reading5m, readings)
 
 
 def _baselines():

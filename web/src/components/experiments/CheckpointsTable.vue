@@ -28,28 +28,27 @@ const rows = computed(() => {
             <th class="py-1 pr-2 text-right font-medium">Day</th>
             <th class="py-1 pr-2 text-right font-medium">Info</th>
             <th class="py-1 pr-2 text-right font-medium">Alpha spent</th>
-            <th class="py-1 pr-2 text-right font-medium">z needed</th>
-            <th class="py-1 font-medium" />
+            <th class="py-1 text-right font-medium">z needed</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="c in rows" :key="c.n" class="border-t border-line" :class="c.state === 'later' && 'text-muted'">
-            <td class="py-1.5 pr-2">{{ c.n }} of {{ rows.length }}</td>
+            <td class="py-1.5 pr-2 whitespace-nowrap">
+              {{ c.n }} of {{ rows.length }}
+              <span v-if="c.state === 'reached'" class="text-good" title="reached">✓</span>
+              <span v-else-if="c.state === 'next'" class="text-[11px] text-accent">next</span>
+            </td>
             <td class="py-1.5 pr-2 text-right">{{ c.day }}</td>
             <td class="py-1.5 pr-2 text-right">{{ num(c.info_fraction * 100, 0, '%') }}</td>
             <td class="py-1.5 pr-2 text-right">{{ num(c.alpha_spent, 3) }}</td>
-            <td class="py-1.5 pr-2 text-right">{{ num(c.z_crit, 2) }}</td>
-            <td class="py-1.5 text-right">
-              <span v-if="c.state === 'reached'" class="chip bg-good/15 text-good">reached</span>
-              <span v-else-if="c.state === 'next'" class="chip bg-accent/15 text-accent">next</span>
-            </td>
+            <td class="py-1.5 text-right">{{ num(c.z_crit, 2) }}</td>
           </tr>
         </tbody>
       </table>
     </div>
     <p class="mt-1 text-xs text-muted">
-      Fixed before the test began. "Alpha spent" is the share of the {{ num(alpha * 100, 0, '%') }} false-win budget
-      used up by that look; "z needed" is how strong the difference must be to stop there.
+      Fixed before the test began. "Alpha spent" is how much of the {{ num(alpha * 100, 0, '%') }} false-win budget
+      has been used up by that look (cumulative); "z needed" is how strong the difference must be to stop there.
     </p>
   </div>
 </template>

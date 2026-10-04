@@ -371,8 +371,9 @@ def _manual_override(
     if hold.start is not None:
         start = hold.start
     else:
+        # first seen: the controller's log row for it, else right now (the tick logs it now)
         seen = manual_detection(session, unit_key, hold, write.ts if write is not None else None)
-        start = seen.ts if seen is not None else min(snap.ts, now)
+        start = seen.ts if seen is not None else now
     return start + backoff
 
 

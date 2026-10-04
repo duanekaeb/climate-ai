@@ -31,7 +31,8 @@ function prefill() {
   heat.value = live.value?.heat_sp_f ?? band?.heat_f ?? 68
   cool.value = live.value?.cool_sp_f ?? band?.cool_f ?? 76
 }
-watch(unit, prefill, { immediate: true })
+// Prefill when the unit changes, and once the live setpoints arrive.
+watch(() => [unit.value, live.value !== null] as const, prefill, { immediate: true })
 watch(
   hourOptions,
   (opts) => {

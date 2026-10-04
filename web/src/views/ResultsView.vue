@@ -54,7 +54,7 @@ watch(
   (r) => {
     if (!rangeError.value) void analysis.loadSavings(r.start, r.end)
   },
-  { immediate: true, deep: true },
+  { immediate: true },
 )
 
 onMounted(() => {
