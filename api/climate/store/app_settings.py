@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, TypeVar
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -84,9 +84,48 @@ class ControlSettings(BaseModel):
     limits: HardLimits = Field(default_factory=HardLimits)
     schedule: Schedule = Field(default_factory=Schedule)
     hold_hours: int = Field(default=2, ge=1, le=2)
-    manual_backoff_hours: float = Field(default=4.0, ge=0, le=24)
+    # A hold a person set (at the thermostat, in the ecobee app, Apple Home, or this app's
+    # hold form) always wins for as long as it runs; nothing here limits it. This back-off
+    # applies only after someone presses Resume (at the thermostat, in the ecobee app, or
+    # this app's "Resume schedule"): the ecobee schedule then runs this long before the
+    # controller writes again. Counted from when the resume was first seen. (Stored rows from
+    # before the rename carry it as ``manual_backoff_hours``.)
+    resume_backoff_hours: float = Field(
+        default=4.0, ge=0, le=24, validation_alias=AliasChoices("resume_backoff_hours", "manual_backoff_hours")
+    )
+    # Push a reminder when a person's hold has run this long (0 = never). It only reminds;
+    # the controller still waits for the hold to end or for "Back to automatic".
+    manual_hold_reminder_hours: float = Field(default=0.0, ge=0, le=72)
     # Units the controller may write to in "act" mode (others stay suggest-only).
     act_units: list[str] = ["main", "up", "bed"]
+
+
+# ---------------------------------------------------------------------------------------
+# utility (demand-response) events
+# ---------------------------------------------------------------------------------------
+
+
+class UtilityEventSettings(BaseModel):
+    """What the app does around utility energy-saving (demand-response) events.
+
+    The app never counteracts an event while staying in it: during a running event the
+    controller stands down. The only ways out are honest opt-outs (ecobee records them and
+    the utility sees them): the owner's "Skip this event", or a skip rule below. Pre-
+    conditioning happens only BEFORE an announced event, and its hold always ends at least
+    ``precondition_end_gap_min`` before the event starts, so the event is applied to the
+    normal setpoint, never to a lowered (or raised) one."""
+
+    alerts: bool = True  # push when an event is announced, starts, ends or is skipped
+    # Automatic skip rules (honest opt-outs). In 'suggest' mode a matching rule only alerts.
+    auto_skip: bool = False
+    skip_when_asleep: bool = True  # someone is asleep in a sleep room on that unit
+    skip_above_f: float | None = Field(default=None, ge=72, le=90)  # an occupied/asleep room reaches this (cooling)
+    skip_below_f: float | None = Field(default=None, ge=55, le=70)  # an occupied/asleep room falls to this (heating)
+    # Pre-cool (cooling) / pre-heat (heating) before an announced event.
+    precondition: bool = False
+    precondition_degrees_f: float = Field(default=2.0, ge=0.5, le=3.0)
+    precondition_hours: int = Field(default=2, ge=1, le=2)  # one holdHours hold of this length
+    precondition_end_gap_min: int = Field(default=10, ge=10, le=60)  # the hold ends this long before the start
 
 
 # ---------------------------------------------------------------------------------------
@@ -139,6 +178,17 @@ class LocationSettings(BaseModel):
     confirmed: bool = False
 
 
+class EcobeeOriginal(BaseModel):
+    """A unit's ecobee settings as they were before the controller first changed them, so
+    "Hand back to ecobee" can restore them. Captured once per unit (first ecobee snapshot,
+    and again just before any first write that would change one of them if still missing)."""
+
+    captured_at: datetime
+    auto_away: bool | None = None  # settings.autoAway (Smart Away)
+    follow_me: bool | None = None  # settings.followMeComfort (Follow Me)
+    home_sensors: list[str] | None = None  # sensor keys in the Home comfort setting
+
+
 class SourceSettings(BaseModel):
     kind: Literal["simulator", "ecobee"] = "simulator"
     homekit_enabled: bool = False
@@ -175,7 +225,11 @@ SETTINGS_MODELS: dict[str, type[BaseModel]] = {
     "source": SourceSettings,
     "agent": AgentSettings,
     "owner": OwnerSettings,
+    "utility_events": UtilityEventSettings,
 }
+# Non-settings rows (not owner-editable): 'ecobee_original' = {unit_key: EcobeeOriginal},
+# 'ecobee_holds' (the ecobee adapter's record of our last hold), 'heartbeat:<service>'.
+ECOBEE_ORIGINAL_KEY = "ecobee_original"
 
 M = TypeVar("M", bound=BaseModel)
 

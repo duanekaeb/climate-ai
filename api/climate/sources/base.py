@@ -33,15 +33,69 @@ class SensorReading(BaseModel):
     battery_low: bool | None = None
 
 
+# HoldInfo.hold_type vocabulary (see climate.sources.ecobee_parse for how it is inferred):
+# a person's or the controller's plain hold, by how it was set ...
+PLAIN_HOLD_TYPES = ("holdHours", "nextTransition", "indefinite", "dateTime")
+# ... ecobee's own automatic Smart Away / Smart Home (not a person; the controller may take it back) ...
+AUTO_EVENTS = ("autoAway", "autoHome")
+# ... a person pressed Quick Save (Smart Away's manual button): a person's hold ...
+PERSON_EVENTS = ("quickSave",)
+# ... and events the controller NEVER overrides (it stands down while one runs).
+PROTECTED_EVENTS = ("vacation", "demandResponse")
+KNOWN_HOLD_TYPES = (*PLAIN_HOLD_TYPES, *AUTO_EVENTS, *PERSON_EVENTS, *PROTECTED_EVENTS)
+# Any other running ecobee event type ('sensor', 'switchOccupancy', 'today', or one ecobee adds
+# later) arrives verbatim in hold_type: the controller treats the unit as hands-off and alerts.
+
+
 class HoldInfo(BaseModel):
+    """What overrides the thermostat's schedule right now (the top running ecobee event)."""
+
     kind: Literal["temperature", "climate"] = "temperature"
-    heat_f: float | None = None
+    heat_f: float | None = None  # absolute setpoints; None for a relative event
     cool_f: float | None = None
     climate_ref: str | None = None
     start: datetime | None = None
-    end: datetime | None = None
-    hold_type: str | None = None  # ecobee: holdHours / nextTransition / indefinite / dateTime
+    end: datetime | None = None  # None = no end reported; indefinite holds report year 2035+
+    hold_type: str | None = None  # PLAIN_HOLD_TYPES or the ecobee event type (see above)
     set_by_us: bool = False  # True when it matches a hold the controller wrote
+    # Event details (ecobee events; None/False for plain holds)
+    event_name: str | None = None  # e.g. the utility program's event name
+    is_relative: bool = False  # setpoints are offsets from the scheduled comfort setting
+    heat_offset_f: float | None = None  # relative heat change in °F (e.g. -2.0)
+    cool_offset_f: float | None = None  # relative cool change in °F (e.g. +2.0)
+    is_optional: bool | None = None  # demand response: True = the owner may opt out
+    link_ref: str | None = None  # ecobee's id linking an event and its alerts (stable per event)
+
+
+class ThermostatEvent(BaseModel):
+    """A demand-response or vacation event on a thermostat, running or scheduled ahead
+    (ecobee lists announced utility events before they start). Times are UTC."""
+
+    event_type: str  # 'demandResponse' | 'vacation'
+    name: str | None = None
+    running: bool = False
+    start: datetime | None = None
+    end: datetime | None = None
+    heat_f: float | None = None
+    cool_f: float | None = None
+    is_relative: bool = False
+    heat_offset_f: float | None = None
+    cool_offset_f: float | None = None
+    is_optional: bool | None = None
+    is_cool_off: bool = False  # cooling turned off during the event
+    is_heat_off: bool = False
+    duty_cycle_pct: int | None = None  # % of scheduled runtime allowed (100 = no change)
+    link_ref: str | None = None
+
+
+class UtilityInfo(BaseModel):
+    """The utility ecobee associates the thermostat with (includeUtility). Its presence, or a
+    demand-response event, is how the app tells the owner a thermostat is enrolled."""
+
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    web: str | None = None
 
 
 class UnitSnapshot(BaseModel):
@@ -64,8 +118,12 @@ class UnitSnapshot(BaseModel):
     sensors: list[SensorReading] = Field(default_factory=list)
     # Which sensors participate in each comfort setting: {'home': ['main.hallway_tstat', ...]}
     sensor_sets: dict[str, list[str]] = Field(default_factory=dict)
-    settings: dict[str, object] = Field(default_factory=dict)  # autoAway, followMeComfort, heatCoolMinDelta...
+    settings: dict[str, object] = Field(default_factory=dict)  # autoAway, followMeComfort, heatCoolMinDelta, drAccept...
     connected: bool = True
+    # Demand-response and vacation events, running or announced ahead (empty from HomeKit,
+    # which shows no ecobee events). The running top event is also in ``hold``.
+    events: list[ThermostatEvent] = Field(default_factory=list)
+    utility: UtilityInfo | None = None  # ecobee only; None = no utility reported
 
 
 class RuntimeInterval(BaseModel):
@@ -142,9 +200,18 @@ class ThermostatSource(Protocol):
         ...
 
     async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
-        """Cancel the running hold and return to the schedule. Unless ``force`` (an owner's
-        explicit resume), refuse when the running hold is not one the controller wrote, so a
-        hand-set hold is never erased by the controller."""
+        """Cancel the running plain hold and return to the schedule. Unless ``force`` (an
+        owner's explicit resume), refuse when the running hold is not one the controller
+        wrote, so a hand-set hold is never erased by the controller. Never cancels an event
+        (vacation, demand response, ...): that is ``opt_out_event``'s job."""
+        ...
+
+    async def opt_out_event(self, unit_key: str, reason: str) -> WriteResult:
+        """Opt out of the RUNNING demand-response event (the owner's "Skip this event" or the
+        owner's skip rule): ecobee's documented cancel, ``resumeProgram`` with the event on
+        top, which ecobee records and reports to the utility. Refuses (ok=False) when the top
+        running event is not demandResponse or is mandatory (``isOptional`` false); reads
+        back that the event no longer runs. ``request['refused']`` is True on a refusal."""
         ...
 
     async def health(self) -> SourceHealth:

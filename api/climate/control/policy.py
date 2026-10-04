@@ -18,7 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from climate.sources.base import UnitSnapshot
-from climate.store.app_settings import ControlSettings, OccupancySettings
+from climate.store.app_settings import ControlSettings, OccupancySettings, UtilityEventSettings
 
 RoomStateName = Literal["occupied", "asleep", "empty", "unknown", "no_target"]
 
@@ -84,6 +84,54 @@ class RoomStatus(BaseModel):
     is_priority: bool = False  # the room the unit is steering for right now
 
 
+class PersonHold(BaseModel):
+    """A hold a person set. It always wins: the controller writes nothing to the unit while
+    it runs, however long that is (``climate.state`` detects it; guardrails blocks on it).
+
+    ``by``: 'app' = the owner's hold from this app's hold form; 'thermostat' = anything else a
+    person did (at the wall, in the ecobee app, Apple Home, Siri: ecobee does not say which)."""
+
+    since: datetime  # when it was set: hold.start, else first seen
+    first_seen: datetime  # when the controller first saw (and logged) it
+    by: Literal["thermostat", "app"] = "thermostat"
+    hold_type: str | None = None  # holdHours / nextTransition / indefinite / dateTime / quickSave
+    until: datetime | None = None  # when it ends on its own; None = until someone changes it
+    heat_f: float | None = None
+    cool_f: float | None = None
+    climate_ref: str | None = None  # a comfort setting picked by hand ('away', 'sleep', ...)
+    detection_id: int | None = None  # the control_actions row that logged it
+
+
+class UtilityEventState(BaseModel):
+    """An announced or running utility event on one unit (a ``utility_events`` row), as the
+    policy, guardrails and controller see it. Loaded by ``climate.utility.events.load_active``."""
+
+    id: int
+    unit_key: str
+    event_key: str
+    name: str | None = None
+    status: Literal["announced", "running", "ended", "cancelled", "opted_out"]
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    heat_f: float | None = None
+    cool_f: float | None = None
+    is_relative: bool = False
+    heat_offset_f: float | None = None
+    cool_offset_f: float | None = None
+    is_optional: bool | None = None
+    skip: Literal["requested", "done", "failed", "refused"] | None = None
+    skip_by: Literal["owner", "rule"] | None = None
+
+    def covers(self, now: datetime) -> bool:
+        """The event's own window contains ``now`` (by the clock, whatever the last snapshot
+        says) and nobody opted out of it."""
+        if self.skip == "done" or self.status in ("cancelled", "opted_out", "ended"):
+            return False
+        if self.status == "running":
+            return self.end_at is None or now < self.end_at
+        return self.start_at is not None and self.start_at <= now and (self.end_at is None or now < self.end_at)
+
+
 class UnitStatus(BaseModel):
     unit_key: str
     name: str
@@ -91,7 +139,12 @@ class UnitStatus(BaseModel):
     age_s: float | None = None  # seconds since snapshot.ts
     call: Literal["cool", "heat", "fan", "idle", "unknown"] = "unknown"
     last_change_at: datetime | None = None  # last control_action we wrote (status verified/sent)
-    manual_override_until: datetime | None = None  # back-off after someone changed it by hand
+    # A person's hold is running: the controller stands aside until it ends (no time limit).
+    person_hold: PersonHold | None = None
+    # Someone pressed Resume (thermostat, ecobee app, or this app's "Resume schedule"): the
+    # ecobee schedule runs until this time (resume_backoff_hours from when it was first seen).
+    resume_backoff_until: datetime | None = None
+    resume_seen_at: datetime | None = None
 
 
 class HouseState(BaseModel):
@@ -108,6 +161,9 @@ class HouseState(BaseModel):
     occupancy: OccupancySettings
     policy: PolicyParams
     policy_version_id: int | None = None
+    # Announced and running utility events (all units), and what to do around them.
+    utility_events: list[UtilityEventState] = Field(default_factory=list)
+    utility: UtilityEventSettings = Field(default_factory=UtilityEventSettings)
 
 
 class UnitTarget(BaseModel):
@@ -115,12 +171,17 @@ class UnitTarget(BaseModel):
     heat_f: float
     cool_f: float
     rule: Literal[
-        "comfort", "sleep", "linked_floors", "house_setback", "recovery", "precool", "independent", "hold_off"
+        "comfort", "sleep", "linked_floors", "house_setback", "recovery", "precool", "independent", "hold_off",
+        "event_prep",
     ]
     reason: str  # one human sentence, e.g. "Main floor empty, Toy Room occupied: main 1°F under upstairs"
     priority_room: str | None = None
     # 'program' = no hold needed (the ecobee schedule already matches); controller resumes or leaves it.
     desired: Literal["hold", "program"] = "hold"
+    # The latest moment a hold written for this target may end ('event_prep': the utility
+    # event's start minus precondition_end_gap_min). The controller picks holdHours so the
+    # hold ends by then (it lapses on its own, never resumed), or writes nothing.
+    hold_end_by: datetime | None = None
 
 
 def plan(state: HouseState) -> list[UnitTarget]:

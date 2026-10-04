@@ -31,6 +31,7 @@ export interface ApiTypes {
   EcobeeLoginResult?: EcobeeLoginResult
   EcobeeMapBody?: EcobeeMapBody
   EcobeeMfaBody?: EcobeeMfaBody
+  EcobeeOriginal?: EcobeeOriginal
   EcobeeSetup?: EcobeeSetup
   EcobeeThermostatOut?: EcobeeThermostatOut
   ExperimentAnalysis?: ExperimentAnalysis
@@ -39,6 +40,8 @@ export interface ApiTypes {
   ExperimentDetail?: ExperimentDetail
   ExperimentOut?: ExperimentOut
   GuardResult?: GuardResult
+  HandbackInfo?: HandbackInfo
+  HandbackStep?: HandbackStep
   HardLimits?: HardLimits
   Health?: Health
   HoldInfo?: HoldInfo
@@ -62,6 +65,7 @@ export interface ApiTypes {
   OccupancySettings?: OccupancySettings
   OutdoorPoint?: OutdoorPoint
   PasswordBody?: PasswordBody
+  PersonHold?: PersonHold
   PlanOut?: PlanOut
   PlanRow?: PlanRow
   PolicyParams?: PolicyParams
@@ -89,15 +93,20 @@ export interface ApiTypes {
   SimPoint?: SimPoint
   SimulateBody?: SimulateBody
   SimulateOut?: SimulateOut
+  SkipEventBody?: SkipEventBody
   SleepWindow?: SleepWindow
   SourceBody?: SourceBody
   SourceInfo?: SourceInfo
   SourceSettings?: SourceSettings
+  ThermostatEvent?: ThermostatEvent
   UnitBody?: UnitBody
   UnitComfort?: UnitComfort
   UnitLive?: UnitLive
   UnitOut?: UnitOut
   UnitTarget?: UnitTarget
+  UtilityEventOut?: UtilityEventOut
+  UtilityEventSettings?: UtilityEventSettings
+  UtilityInfo?: UtilityInfo
   Waterfall?: Waterfall
   WaterfallItem?: WaterfallItem
   WeatherNow?: WeatherNow
@@ -366,8 +375,9 @@ export interface ControlSettings {
   }
   hold_hours: number
   limits: HardLimits
-  manual_backoff_hours: number
+  manual_hold_reminder_hours: number
   mode: 'off' | 'suggest' | 'act'
+  resume_backoff_hours: number
   schedule: Schedule
 }
 /**
@@ -553,6 +563,20 @@ export interface EcobeeMfaBody {
   code: string
 }
 /**
+ * A unit's ecobee settings as they were before the controller first changed them, so
+ * "Hand back to ecobee" can restore them. Captured once per unit (first ecobee snapshot,
+ * and again just before any first write that would change one of them if still missing).
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "EcobeeOriginal".
+ */
+export interface EcobeeOriginal {
+  auto_away: boolean | null
+  captured_at: string
+  follow_me: boolean | null
+  home_sensors: string[] | null
+}
+/**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "EcobeeSetup".
  */
@@ -569,6 +593,8 @@ export interface EcobeeSetup {
  * via the `definition` "EcobeeThermostatOut".
  */
 export interface EcobeeThermostatOut {
+  dr_accept: string | null
+  enrolled: boolean | null
   identifier: string
   last_seen_at: string
   model_number: string | null
@@ -577,6 +603,20 @@ export interface EcobeeThermostatOut {
     [k: string]: unknown
   }[]
   unit_key: string | null
+  utility: UtilityInfo | null
+}
+/**
+ * The utility ecobee associates the thermostat with (includeUtility). Its presence, or a
+ * demand-response event, is how the app tells the owner a thermostat is enrolled.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "UtilityInfo".
+ */
+export interface UtilityInfo {
+  email: string | null
+  name: string
+  phone: string | null
+  web: string | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -653,6 +693,48 @@ export interface GuardResult {
   violations: string[]
 }
 /**
+ * What "Hand back to ecobee" restores (GET) and, after a run, what it did.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "HandbackInfo".
+ */
+export interface HandbackInfo {
+  last_job: JobOut | null
+  mode: 'off' | 'suggest' | 'act'
+  original: {
+    [k: string]: EcobeeOriginal
+  }
+  steps: HandbackStep[]
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "JobOut".
+ */
+export interface JobOut {
+  created_at: string
+  error: string | null
+  finished_at: string | null
+  id: number
+  kind: string
+  params: {
+    [k: string]: unknown
+  }
+  result: {
+    [k: string]: unknown
+  } | null
+  status: 'queued' | 'running' | 'done' | 'failed'
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "HandbackStep".
+ */
+export interface HandbackStep {
+  detail: string
+  ok: boolean
+  unit_key: string | null
+  what: string
+}
+/**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "Health".
  */
@@ -662,16 +744,24 @@ export interface Health {
   version: string
 }
 /**
+ * What overrides the thermostat's schedule right now (the top running ecobee event).
+ *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "HoldInfo".
  */
 export interface HoldInfo {
   climate_ref: string | null
   cool_f: number | null
+  cool_offset_f: number | null
   end: string | null
+  event_name: string | null
   heat_f: number | null
+  heat_offset_f: number | null
   hold_type: string | null
+  is_optional: boolean | null
+  is_relative: boolean
   kind: 'temperature' | 'climate'
+  link_ref: string | null
   set_by_us: boolean
   start: string | null
 }
@@ -800,15 +890,43 @@ export interface UnitLive {
   duty_last_hour_pct: number | null
   heat_sp_f: number | null
   hold: HoldInfo | null
+  hold_label: string | null
+  hold_owner:
+    ('controller' | 'person' | 'app' | 'utility' | 'vacation' | 'ecobee_auto' | 'unknown_event') | null
   hvac_mode: string | null
   maxed_minutes_today: number
   name: string
+  person_hold: PersonHold | null
+  resume_backoff_until: string | null
   running: string[]
   target: UnitTarget | null
   today_runtime_min: number
   unit_key: string
+  upcoming_events: ThermostatEvent[]
+  utility_event: UtilityEventOut | null
   zone_humidity: number | null
   zone_temp_f: number | null
+}
+/**
+ * A hold a person set. It always wins: the controller writes nothing to the unit while
+ * it runs, however long that is (``climate.state`` detects it; guardrails blocks on it).
+ *
+ * ``by``: 'app' = the owner's hold from this app's hold form; 'thermostat' = anything else a
+ * person did (at the wall, in the ecobee app, Apple Home, Siri: ecobee does not say which).
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "PersonHold".
+ */
+export interface PersonHold {
+  by: 'thermostat' | 'app'
+  climate_ref: string | null
+  cool_f: number | null
+  detection_id: number | null
+  first_seen: string
+  heat_f: number | null
+  hold_type: string | null
+  since: string
+  until: string | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -818,6 +936,7 @@ export interface UnitTarget {
   cool_f: number
   desired: 'hold' | 'program'
   heat_f: number
+  hold_end_by: string | null
   priority_room: string | null
   reason: string
   rule:
@@ -829,7 +948,67 @@ export interface UnitTarget {
     | 'precool'
     | 'independent'
     | 'hold_off'
+    | 'event_prep'
   unit_key: string
+}
+/**
+ * A demand-response or vacation event on a thermostat, running or scheduled ahead
+ * (ecobee lists announced utility events before they start). Times are UTC.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "ThermostatEvent".
+ */
+export interface ThermostatEvent {
+  cool_f: number | null
+  cool_offset_f: number | null
+  duty_cycle_pct: number | null
+  end: string | null
+  event_type: string
+  heat_f: number | null
+  heat_offset_f: number | null
+  is_cool_off: boolean
+  is_heat_off: boolean
+  is_optional: boolean | null
+  is_relative: boolean
+  link_ref: string | null
+  name: string | null
+  running: boolean
+  start: string | null
+}
+/**
+ * A utility energy-saving (demand-response) event on one thermostat.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "UtilityEventOut".
+ */
+export interface UtilityEventOut {
+  can_skip: boolean
+  change_label: string
+  cool_f: number | null
+  cool_offset_f: number | null
+  duty_cycle_pct: number | null
+  end_at: string | null
+  ended_at: string | null
+  event_key: string
+  event_type: string
+  first_seen_at: string
+  heat_f: number | null
+  heat_offset_f: number | null
+  id: number
+  is_optional: boolean | null
+  is_relative: boolean
+  name: string | null
+  prep_label: string | null
+  skip: ('requested' | 'done' | 'failed' | 'refused') | null
+  skip_by: ('owner' | 'rule') | null
+  skip_done_at: string | null
+  skip_reason: string | null
+  skip_requested_at: string | null
+  start_at: string | null
+  started_at: string | null
+  status: 'announced' | 'running' | 'ended' | 'cancelled' | 'opted_out'
+  unit_key: string
+  unit_name: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -883,24 +1062,6 @@ export interface IntradayPoint {
   heat_sp_f: number | null
   ts: string
   zone_temp_f: number | null
-}
-/**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "JobOut".
- */
-export interface JobOut {
-  created_at: string
-  error: string | null
-  finished_at: string | null
-  id: number
-  kind: string
-  params: {
-    [k: string]: unknown
-  }
-  result: {
-    [k: string]: unknown
-  } | null
-  status: 'queued' | 'running' | 'done' | 'failed'
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1251,6 +1412,31 @@ export interface SettingsOut {
      */
     [k: string]: [unknown, unknown]
   }
+  utility_events: UtilityEventSettings
+}
+/**
+ * What the app does around utility energy-saving (demand-response) events.
+ *
+ * The app never counteracts an event while staying in it: during a running event the
+ * controller stands down. The only ways out are honest opt-outs (ecobee records them and
+ * the utility sees them): the owner's "Skip this event", or a skip rule below. Pre-
+ * conditioning happens only BEFORE an announced event, and its hold always ends at least
+ * ``precondition_end_gap_min`` before the event starts, so the event is applied to the
+ * normal setpoint, never to a lowered (or raised) one.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "UtilityEventSettings".
+ */
+export interface UtilityEventSettings {
+  alerts: boolean
+  auto_skip: boolean
+  precondition: boolean
+  precondition_degrees_f: number
+  precondition_end_gap_min: number
+  precondition_hours: number
+  skip_above_f: number | null
+  skip_below_f: number | null
+  skip_when_asleep: boolean
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1261,6 +1447,7 @@ export interface SettingsUpdate {
   control?: ControlSettings | null
   location?: LocationSettings | null
   occupancy?: OccupancySettings | null
+  utility_events?: UtilityEventSettings | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1331,6 +1518,13 @@ export interface SimulateOut {
   units: {
     [k: string]: SimPoint[]
   }
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "SkipEventBody".
+ */
+export interface SkipEventBody {
+  all_units?: boolean
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema

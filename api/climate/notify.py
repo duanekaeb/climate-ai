@@ -32,9 +32,13 @@ _PUSH_TAG = {"warn": "warning", "error": "rotating_light"}
 _TRANSPORT: httpx.BaseTransport | None = None
 
 
-def raise_alert(session: Session, kind: str, level: str, title: str, body: str = "", dedupe_key: str | None = None) -> int | None:
+def raise_alert(
+    session: Session, kind: str, level: str, title: str, body: str = "", dedupe_key: str | None = None,
+    push_info: bool = False,
+) -> int | None:
     """Insert an alert unless an open one has the same dedupe_key; publish 'alert'; send a
-    push for warn/error (best effort, never raises). Returns the id or None if deduped."""
+    push for warn/error, and for info when ``push_info`` (news the owner asked to hear about,
+    e.g. a utility event announced). Best effort, never raises. Returns the id or None if deduped."""
     if level not in LEVELS:
         raise ValueError(f"alert level must be one of {LEVELS}, not {level!r}")
     stmt = insert(Alert).values(level=level, kind=kind, title=title, body=body, dedupe_key=dedupe_key)
@@ -47,9 +51,9 @@ def raise_alert(session: Session, kind: str, level: str, title: str, body: str =
     if alert_id is None:
         return None
     publish(session, "alert", alert_id)
-    if level in _PUSH_PRIORITY:
-        tags = [_PUSH_TAG[level], kind.split(":", 1)[0]]
-        if push(title, body, priority=_PUSH_PRIORITY[level], tags=tags):
+    if level in _PUSH_PRIORITY or (push_info and level == "info"):
+        tags = [_PUSH_TAG.get(level, "information_source"), kind.split(":", 1)[0]]
+        if push(title, body, priority=_PUSH_PRIORITY.get(level, "default"), tags=tags):
             session.execute(update(Alert).where(Alert.id == alert_id).values(notified_at=func.now()))
     return alert_id
 

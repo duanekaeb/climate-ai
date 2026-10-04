@@ -1174,9 +1174,9 @@
     "limits": {
      "$ref": "#/$defs/HardLimits"
     },
-    "manual_backoff_hours": {
-     "default": 4.0,
-     "maximum": 24,
+    "manual_hold_reminder_hours": {
+     "default": 0.0,
+     "maximum": 72,
      "minimum": 0,
      "type": "number"
     },
@@ -1189,6 +1189,12 @@
      ],
      "type": "string"
     },
+    "resume_backoff_hours": {
+     "default": 4.0,
+     "maximum": 24,
+     "minimum": 0,
+     "type": "number"
+    },
     "schedule": {
      "$ref": "#/$defs/Schedule"
     }
@@ -1198,8 +1204,9 @@
     "comfort",
     "hold_hours",
     "limits",
-    "manual_backoff_hours",
+    "manual_hold_reminder_hours",
     "mode",
+    "resume_backoff_hours",
     "schedule"
    ],
    "title": "ControlSettings",
@@ -1688,6 +1695,59 @@
    "title": "EcobeeMfaBody",
    "type": "object"
   },
+  "EcobeeOriginal": {
+   "description": "A unit's ecobee settings as they were before the controller first changed them, so\n\"Hand back to ecobee\" can restore them. Captured once per unit (first ecobee snapshot,\nand again just before any first write that would change one of them if still missing).",
+   "properties": {
+    "auto_away": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "captured_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "follow_me": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "home_sensors": {
+     "anyOf": [
+      {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "auto_away",
+    "captured_at",
+    "follow_me",
+    "home_sensors"
+   ],
+   "title": "EcobeeOriginal",
+   "type": "object"
+  },
   "EcobeeSetup": {
    "properties": {
     "last_error": {
@@ -1741,6 +1801,28 @@
   },
   "EcobeeThermostatOut": {
    "properties": {
+    "dr_accept": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "enrolled": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "identifier": {
      "type": "string"
     },
@@ -1777,15 +1859,29 @@
        "type": "null"
       }
      ]
+    },
+    "utility": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/UtilityInfo"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     }
    },
    "required": [
+    "dr_accept",
+    "enrolled",
     "identifier",
     "last_seen_at",
     "model_number",
     "name",
     "sensors",
-    "unit_key"
+    "unit_key",
+    "utility"
    ],
    "title": "EcobeeThermostatOut",
    "type": "object"
@@ -2102,6 +2198,83 @@
    "title": "GuardResult",
    "type": "object"
   },
+  "HandbackInfo": {
+   "description": "What \"Hand back to ecobee\" restores (GET) and, after a run, what it did.",
+   "properties": {
+    "last_job": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/JobOut"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "mode": {
+     "enum": [
+      "off",
+      "suggest",
+      "act"
+     ],
+     "type": "string"
+    },
+    "original": {
+     "additionalProperties": {
+      "$ref": "#/$defs/EcobeeOriginal"
+     },
+     "type": "object"
+    },
+    "steps": {
+     "items": {
+      "$ref": "#/$defs/HandbackStep"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "last_job",
+    "mode",
+    "original",
+    "steps"
+   ],
+   "title": "HandbackInfo",
+   "type": "object"
+  },
+  "HandbackStep": {
+   "properties": {
+    "detail": {
+     "default": "",
+     "type": "string"
+    },
+    "ok": {
+     "type": "boolean"
+    },
+    "unit_key": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "what": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "detail",
+    "ok",
+    "unit_key",
+    "what"
+   ],
+   "title": "HandbackStep",
+   "type": "object"
+  },
   "HardLimits": {
    "description": "Enforced in code on every write, whoever asked for it. Owner-editable only.",
    "properties": {
@@ -2187,6 +2360,7 @@
    "type": "object"
   },
   "HoldInfo": {
+   "description": "What overrides the thermostat's schedule right now (the top running ecobee event).",
    "properties": {
     "climate_ref": {
      "anyOf": [
@@ -2210,6 +2384,17 @@
      ],
      "default": null
     },
+    "cool_offset_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "end": {
      "anyOf": [
       {
@@ -2222,7 +2407,29 @@
      ],
      "default": null
     },
+    "event_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "heat_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "heat_offset_f": {
      "anyOf": [
       {
        "type": "number"
@@ -2244,6 +2451,21 @@
      ],
      "default": null
     },
+    "is_optional": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "is_relative": {
+     "default": false,
+     "type": "boolean"
+    },
     "kind": {
      "default": "temperature",
      "enum": [
@@ -2251,6 +2473,17 @@
       "climate"
      ],
      "type": "string"
+    },
+    "link_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     },
     "set_by_us": {
      "default": false,
@@ -2272,10 +2505,16 @@
    "required": [
     "climate_ref",
     "cool_f",
+    "cool_offset_f",
     "end",
+    "event_name",
     "heat_f",
+    "heat_offset_f",
     "hold_type",
+    "is_optional",
+    "is_relative",
     "kind",
+    "link_ref",
     "set_by_us",
     "start"
    ],
@@ -3238,6 +3477,107 @@
     "password"
    ],
    "title": "PasswordBody",
+   "type": "object"
+  },
+  "PersonHold": {
+   "description": "A hold a person set. It always wins: the controller writes nothing to the unit while\nit runs, however long that is (``climate.state`` detects it; guardrails blocks on it).\n\n``by``: 'app' = the owner's hold from this app's hold form; 'thermostat' = anything else a\nperson did (at the wall, in the ecobee app, Apple Home, Siri: ecobee does not say which).",
+   "properties": {
+    "by": {
+     "default": "thermostat",
+     "enum": [
+      "thermostat",
+      "app"
+     ],
+     "type": "string"
+    },
+    "climate_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "cool_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "detection_id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "first_seen": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "heat_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "hold_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "since": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "until": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "by",
+    "climate_ref",
+    "cool_f",
+    "detection_id",
+    "first_seen",
+    "heat_f",
+    "hold_type",
+    "since",
+    "until"
+   ],
+   "title": "PersonHold",
    "type": "object"
   },
   "PlanOut": {
@@ -4397,6 +4737,9 @@
       "type": "array"
      },
      "type": "object"
+    },
+    "utility_events": {
+     "$ref": "#/$defs/UtilityEventSettings"
     }
    },
    "required": [
@@ -4407,7 +4750,8 @@
     "owner_only_params",
     "policy",
     "policy_version_id",
-    "signoff_ranges"
+    "signoff_ranges",
+    "utility_events"
    ],
    "title": "SettingsOut",
    "type": "object"
@@ -4451,6 +4795,17 @@
      "anyOf": [
       {
        "$ref": "#/$defs/OccupancySettings"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "utility_events": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/UtilityEventSettings"
       },
       {
        "type": "null"
@@ -4593,6 +4948,16 @@
    "title": "SimulateOut",
    "type": "object"
   },
+  "SkipEventBody": {
+   "properties": {
+    "all_units": {
+     "default": true,
+     "type": "boolean"
+    }
+   },
+   "title": "SkipEventBody",
+   "type": "object"
+  },
   "SleepWindow": {
    "properties": {
     "days": {
@@ -4732,6 +5097,161 @@
    "title": "SourceSettings",
    "type": "object"
   },
+  "ThermostatEvent": {
+   "description": "A demand-response or vacation event on a thermostat, running or scheduled ahead\n(ecobee lists announced utility events before they start). Times are UTC.",
+   "properties": {
+    "cool_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "cool_offset_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "duty_cycle_pct": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "end": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "event_type": {
+     "type": "string"
+    },
+    "heat_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "heat_offset_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "is_cool_off": {
+     "default": false,
+     "type": "boolean"
+    },
+    "is_heat_off": {
+     "default": false,
+     "type": "boolean"
+    },
+    "is_optional": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "is_relative": {
+     "default": false,
+     "type": "boolean"
+    },
+    "link_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "running": {
+     "default": false,
+     "type": "boolean"
+    },
+    "start": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "cool_f",
+    "cool_offset_f",
+    "duty_cycle_pct",
+    "end",
+    "event_type",
+    "heat_f",
+    "heat_offset_f",
+    "is_cool_off",
+    "is_heat_off",
+    "is_optional",
+    "is_relative",
+    "link_ref",
+    "name",
+    "running",
+    "start"
+   ],
+   "title": "ThermostatEvent",
+   "type": "object"
+  },
   "UnitBody": {
    "properties": {
     "unit_key": {
@@ -4847,6 +5367,37 @@
      ],
      "default": null
     },
+    "hold_label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "hold_owner": {
+     "anyOf": [
+      {
+       "enum": [
+        "controller",
+        "person",
+        "app",
+        "utility",
+        "vacation",
+        "ecobee_auto",
+        "unknown_event"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "hvac_mode": {
      "anyOf": [
       {
@@ -4864,6 +5415,29 @@
     },
     "name": {
      "type": "string"
+    },
+    "person_hold": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/PersonHold"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "resume_backoff_until": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     },
     "running": {
      "items": {
@@ -4888,6 +5462,23 @@
     },
     "unit_key": {
      "type": "string"
+    },
+    "upcoming_events": {
+     "items": {
+      "$ref": "#/$defs/ThermostatEvent"
+     },
+     "type": "array"
+    },
+    "utility_event": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/UtilityEventOut"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     },
     "zone_humidity": {
      "anyOf": [
@@ -4921,13 +5512,19 @@
     "duty_last_hour_pct",
     "heat_sp_f",
     "hold",
+    "hold_label",
+    "hold_owner",
     "hvac_mode",
     "maxed_minutes_today",
     "name",
+    "person_hold",
+    "resume_backoff_until",
     "running",
     "target",
     "today_runtime_min",
     "unit_key",
+    "upcoming_events",
+    "utility_event",
     "zone_humidity",
     "zone_temp_f"
    ],
@@ -5008,6 +5605,18 @@
     "heat_f": {
      "type": "number"
     },
+    "hold_end_by": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "priority_room": {
      "anyOf": [
       {
@@ -5031,7 +5640,8 @@
       "recovery",
       "precool",
       "independent",
-      "hold_off"
+      "hold_off",
+      "event_prep"
      ],
      "type": "string"
     },
@@ -5043,12 +5653,418 @@
     "cool_f",
     "desired",
     "heat_f",
+    "hold_end_by",
     "priority_room",
     "reason",
     "rule",
     "unit_key"
    ],
    "title": "UnitTarget",
+   "type": "object"
+  },
+  "UtilityEventOut": {
+   "description": "A utility energy-saving (demand-response) event on one thermostat.",
+   "properties": {
+    "can_skip": {
+     "type": "boolean"
+    },
+    "change_label": {
+     "type": "string"
+    },
+    "cool_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "cool_offset_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "duty_cycle_pct": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "end_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ended_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "event_key": {
+     "type": "string"
+    },
+    "event_type": {
+     "type": "string"
+    },
+    "first_seen_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "heat_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "heat_offset_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "id": {
+     "type": "integer"
+    },
+    "is_optional": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "is_relative": {
+     "default": false,
+     "type": "boolean"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "prep_label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "skip": {
+     "anyOf": [
+      {
+       "enum": [
+        "requested",
+        "done",
+        "failed",
+        "refused"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "skip_by": {
+     "anyOf": [
+      {
+       "enum": [
+        "owner",
+        "rule"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "skip_done_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "skip_reason": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "skip_requested_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "start_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "started_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "enum": [
+      "announced",
+      "running",
+      "ended",
+      "cancelled",
+      "opted_out"
+     ],
+     "type": "string"
+    },
+    "unit_key": {
+     "type": "string"
+    },
+    "unit_name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "can_skip",
+    "change_label",
+    "cool_f",
+    "cool_offset_f",
+    "duty_cycle_pct",
+    "end_at",
+    "ended_at",
+    "event_key",
+    "event_type",
+    "first_seen_at",
+    "heat_f",
+    "heat_offset_f",
+    "id",
+    "is_optional",
+    "is_relative",
+    "name",
+    "prep_label",
+    "skip",
+    "skip_by",
+    "skip_done_at",
+    "skip_reason",
+    "skip_requested_at",
+    "start_at",
+    "started_at",
+    "status",
+    "unit_key",
+    "unit_name"
+   ],
+   "title": "UtilityEventOut",
+   "type": "object"
+  },
+  "UtilityEventSettings": {
+   "description": "What the app does around utility energy-saving (demand-response) events.\n\nThe app never counteracts an event while staying in it: during a running event the\ncontroller stands down. The only ways out are honest opt-outs (ecobee records them and\nthe utility sees them): the owner's \"Skip this event\", or a skip rule below. Pre-\nconditioning happens only BEFORE an announced event, and its hold always ends at least\n``precondition_end_gap_min`` before the event starts, so the event is applied to the\nnormal setpoint, never to a lowered (or raised) one.",
+   "properties": {
+    "alerts": {
+     "default": true,
+     "type": "boolean"
+    },
+    "auto_skip": {
+     "default": false,
+     "type": "boolean"
+    },
+    "precondition": {
+     "default": false,
+     "type": "boolean"
+    },
+    "precondition_degrees_f": {
+     "default": 2.0,
+     "maximum": 3.0,
+     "minimum": 0.5,
+     "type": "number"
+    },
+    "precondition_end_gap_min": {
+     "default": 10,
+     "maximum": 60,
+     "minimum": 10,
+     "type": "integer"
+    },
+    "precondition_hours": {
+     "default": 2,
+     "maximum": 2,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "skip_above_f": {
+     "anyOf": [
+      {
+       "maximum": 90,
+       "minimum": 72,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "skip_below_f": {
+     "anyOf": [
+      {
+       "maximum": 70,
+       "minimum": 55,
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "skip_when_asleep": {
+     "default": true,
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "alerts",
+    "auto_skip",
+    "precondition",
+    "precondition_degrees_f",
+    "precondition_end_gap_min",
+    "precondition_hours",
+    "skip_above_f",
+    "skip_below_f",
+    "skip_when_asleep"
+   ],
+   "title": "UtilityEventSettings",
+   "type": "object"
+  },
+  "UtilityInfo": {
+   "description": "The utility ecobee associates the thermostat with (includeUtility). Its presence, or a\ndemand-response event, is how the app tells the owner a thermostat is enrolled.",
+   "properties": {
+    "email": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "name": {
+     "type": "string"
+    },
+    "phone": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "web": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "email",
+    "name",
+    "phone",
+    "web"
+   ],
+   "title": "UtilityInfo",
    "type": "object"
   },
   "Waterfall": {
@@ -5436,6 +6452,9 @@
   "EcobeeMfaBody": {
    "$ref": "#/$defs/EcobeeMfaBody"
   },
+  "EcobeeOriginal": {
+   "$ref": "#/$defs/EcobeeOriginal"
+  },
   "EcobeeSetup": {
    "$ref": "#/$defs/EcobeeSetup"
   },
@@ -5459,6 +6478,12 @@
   },
   "GuardResult": {
    "$ref": "#/$defs/GuardResult"
+  },
+  "HandbackInfo": {
+   "$ref": "#/$defs/HandbackInfo"
+  },
+  "HandbackStep": {
+   "$ref": "#/$defs/HandbackStep"
   },
   "HardLimits": {
    "$ref": "#/$defs/HardLimits"
@@ -5528,6 +6553,9 @@
   },
   "PasswordBody": {
    "$ref": "#/$defs/PasswordBody"
+  },
+  "PersonHold": {
+   "$ref": "#/$defs/PersonHold"
   },
   "PlanOut": {
    "$ref": "#/$defs/PlanOut"
@@ -5610,6 +6638,9 @@
   "SimulateOut": {
    "$ref": "#/$defs/SimulateOut"
   },
+  "SkipEventBody": {
+   "$ref": "#/$defs/SkipEventBody"
+  },
   "SleepWindow": {
    "$ref": "#/$defs/SleepWindow"
   },
@@ -5621,6 +6652,9 @@
   },
   "SourceSettings": {
    "$ref": "#/$defs/SourceSettings"
+  },
+  "ThermostatEvent": {
+   "$ref": "#/$defs/ThermostatEvent"
   },
   "UnitBody": {
    "$ref": "#/$defs/UnitBody"
@@ -5636,6 +6670,15 @@
   },
   "UnitTarget": {
    "$ref": "#/$defs/UnitTarget"
+  },
+  "UtilityEventOut": {
+   "$ref": "#/$defs/UtilityEventOut"
+  },
+  "UtilityEventSettings": {
+   "$ref": "#/$defs/UtilityEventSettings"
+  },
+  "UtilityInfo": {
+   "$ref": "#/$defs/UtilityInfo"
   },
   "Waterfall": {
    "$ref": "#/$defs/Waterfall"

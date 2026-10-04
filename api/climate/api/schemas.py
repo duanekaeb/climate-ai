@@ -15,14 +15,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from climate.control.guardrails import GuardResult
-from climate.control.policy import PolicyParams, RoomStatus, UnitTarget
-from climate.sources.base import HoldInfo
+from climate.control.policy import PersonHold, PolicyParams, RoomStatus, UnitTarget
+from climate.sources.base import HoldInfo, ThermostatEvent, UtilityInfo
 from climate.store.app_settings import (
     AgentSettings,
     ControlSettings,
+    EcobeeOriginal,
     LocationSettings,
     OccupancySettings,
     SourceSettings,
+    UtilityEventSettings,
 )
 
 OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com"
@@ -84,6 +86,42 @@ class ControllerInfo(BaseModel):
     policy: PolicyParams
 
 
+HoldOwner = Literal["controller", "person", "app", "utility", "vacation", "ecobee_auto", "unknown_event"]
+
+
+class UtilityEventOut(BaseModel):
+    """A utility energy-saving (demand-response) event on one thermostat."""
+
+    id: int
+    unit_key: str
+    unit_name: str
+    event_key: str  # the same event on several thermostats shares this
+    event_type: str
+    name: str | None = None
+    status: Literal["announced", "running", "ended", "cancelled", "opted_out"]
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    first_seen_at: datetime
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    heat_f: float | None = None
+    cool_f: float | None = None
+    is_relative: bool = False
+    heat_offset_f: float | None = None
+    cool_offset_f: float | None = None
+    is_optional: bool | None = None  # False = mandatory (cannot be skipped)
+    duty_cycle_pct: int | None = None
+    change_label: str  # e.g. "cooling +2°F", "cooling set to 78°F", "AC off"
+    skip: Literal["requested", "done", "failed", "refused"] | None = None
+    skip_by: Literal["owner", "rule"] | None = None
+    skip_reason: str | None = None
+    skip_requested_at: datetime | None = None
+    skip_done_at: datetime | None = None
+    can_skip: bool  # announced/running, not mandatory, no skip done or pending
+    # "Pre-cooling 2°F until 2:50 PM, ending before the event starts" while event_prep runs.
+    prep_label: str | None = None
+
+
 class UnitLive(BaseModel):
     unit_key: str
     name: str
@@ -96,6 +134,16 @@ class UnitLive(BaseModel):
     cool_sp_f: float | None = None
     climate_ref: str | None = None
     hold: HoldInfo | None = None
+    # Who the running hold belongs to, and one line for the card, in house time, e.g.
+    # "On your hold since 2:10 PM (until you change it)", "Utility event until 6:00 PM
+    # (cooling +2°F)", "Vacation until Oct 12", "Smart Away", "Our hold until 3:40 PM".
+    hold_owner: HoldOwner | None = None
+    hold_label: str | None = None
+    person_hold: PersonHold | None = None  # set while a person's hold runs (it always wins)
+    # After someone pressed Resume: the ecobee schedule runs until then.
+    resume_backoff_until: datetime | None = None
+    utility_event: UtilityEventOut | None = None  # running, else the next announced one
+    upcoming_events: list[ThermostatEvent] = Field(default_factory=list)  # vacations / events ahead
     target: UnitTarget | None = None  # what the policy wants right now
     age_s: float | None = None
     connected: bool = False
@@ -432,6 +480,7 @@ class SettingsOut(BaseModel):
     occupancy: OccupancySettings
     location: LocationSettings
     agent: AgentSettings
+    utility_events: UtilityEventSettings
     policy: PolicyParams
     policy_version_id: int | None
     signoff_ranges: dict[str, tuple[float, float]]
@@ -443,6 +492,12 @@ class SettingsUpdate(BaseModel):
     occupancy: OccupancySettings | None = None
     location: LocationSettings | None = None
     agent: AgentSettings | None = None
+    utility_events: UtilityEventSettings | None = None
+
+
+class SkipEventBody(BaseModel):
+    # Skip this event on every thermostat it reaches (the same event_key), or only this one.
+    all_units: bool = True
 
 
 class ModeBody(BaseModel):
@@ -604,6 +659,22 @@ class JobOut(BaseModel):
     finished_at: datetime | None = None
 
 
+class HandbackStep(BaseModel):
+    unit_key: str | None = None
+    what: str  # "Resumed our hold", "Smart Away back on", "Home sensors restored", "Controller off"
+    ok: bool
+    detail: str = ""
+
+
+class HandbackInfo(BaseModel):
+    """What "Hand back to ecobee" restores (GET) and, after a run, what it did."""
+
+    original: dict[str, EcobeeOriginal]  # per unit, as captured before our first change
+    mode: Literal["off", "suggest", "act"]
+    last_job: JobOut | None = None
+    steps: list[HandbackStep] = Field(default_factory=list)  # from the last finished job
+
+
 class BacktestBody(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)  # partial PolicyParams
     days: int = Field(default=28, ge=7, le=120)
@@ -742,6 +813,12 @@ class EcobeeThermostatOut(BaseModel):
     unit_key: str | None
     sensors: list[dict[str, Any]]
     last_seen_at: datetime
+    # Utility enrollment: the utility ecobee associates the thermostat with, if any, and its
+    # demand-response acceptance setting (always / askMe / customerSelect / defaultAccept /
+    # defaultDecline / never; None = not reported).
+    utility: UtilityInfo | None = None
+    dr_accept: str | None = None
+    enrolled: bool | None = None  # True: utility listed or a utility event seen; None = unknown
 
 
 class EcobeeSetup(BaseModel):

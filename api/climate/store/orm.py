@@ -1,4 +1,4 @@
-"""ORM mapping of the schema in ``migrations/001_init.sql``.
+"""ORM mapping of the schema in ``migrations/*.sql`` (001_init plus later migrations).
 
 The SQL file is authoritative; ``tests/test_schema.py`` checks this mapping against it.
 Identity columns are mapped with ``Identity()`` so inserts let Postgres assign ids.
@@ -227,6 +227,38 @@ class ControlAction(Base):
     error: Mapped[str | None] = mapped_column(Text)
     policy_version_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("policy_versions.id"))
     completed_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class UtilityEvent(Base):
+    """A utility demand-response event on one thermostat (migration 003)."""
+
+    __tablename__ = "utility_events"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    unit_key: Mapped[str] = mapped_column(Text, ForeignKey("units.key"))
+    event_key: Mapped[str] = mapped_column(Text)
+    event_type: Mapped[str] = mapped_column(Text, default="demandResponse")
+    name: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    start_at: Mapped[datetime | None] = mapped_column(TS)
+    end_at: Mapped[datetime | None] = mapped_column(TS)
+    first_seen_at: Mapped[datetime] = mapped_column(TS)
+    last_seen_at: Mapped[datetime] = mapped_column(TS)
+    started_at: Mapped[datetime | None] = mapped_column(TS)
+    ended_at: Mapped[datetime | None] = mapped_column(TS)
+    heat_f: Mapped[float | None] = mapped_column(REAL)
+    cool_f: Mapped[float | None] = mapped_column(REAL)
+    is_relative: Mapped[bool] = mapped_column(Boolean, default=False)
+    heat_offset_f: Mapped[float | None] = mapped_column(REAL)
+    cool_offset_f: Mapped[float | None] = mapped_column(REAL)
+    is_optional: Mapped[bool | None] = mapped_column(Boolean)
+    duty_cycle_pct: Mapped[int | None] = mapped_column(Integer)
+    skip: Mapped[str | None] = mapped_column(Text)
+    skip_by: Mapped[str | None] = mapped_column(Text)
+    skip_reason: Mapped[str | None] = mapped_column(Text)
+    skip_requested_at: Mapped[datetime | None] = mapped_column(TS)
+    skip_done_at: Mapped[datetime | None] = mapped_column(TS)
+    skip_action_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("control_actions.id"))
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
 
 # --- experiments -----------------------------------------------------------------------
