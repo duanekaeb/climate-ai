@@ -250,7 +250,8 @@ async def test_unsensored_rooms_never_get_temperatures_and_essential_has_no_occu
                 assert reading.humidity is not None
             else:
                 assert reading.humidity is None and reading.occupied is not None
-        assert snap.settings == {"autoAway": True, "followMeComfort": False, "heatCoolMinDelta": 3.0}
+        assert {k: snap.settings[k] for k in ("autoAway", "followMeComfort", "heatCoolMinDelta")} == {"autoAway": True, "followMeComfort": False, "heatCoolMinDelta": 3.0}
+        assert snap.settings["program_heat_f"] < snap.settings["program_cool_f"]
     for r in rows:
         assert not {SENSOR_ROOM[k] for k in r.sensor_temps} & UNSENSORED
         if r.unit_key == "up":
