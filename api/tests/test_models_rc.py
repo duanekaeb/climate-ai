@@ -430,7 +430,7 @@ def test_models_use_each_units_stage1_heating_metric(db):
     assert heat["up"] == pytest.approx(150 / 300)  # furnace: aux IS the heat
     assert heat["bed"] == pytest.approx(30 / 300)  # unknown, reports compressor heat -> heat pump
 
-    # Recent runtime: cooling 120 s/slot (bed) vs heating 60 + 150 + 30 = 240 by the metric
-    # (greatest() said 240 + 150 + 210 = 600). Make cooling win only under the right metric.
+    # Recent heating per slot is 60 + 150 + 30 = 240 s by the metric (greatest() said
+    # 240 + 150 + 210 = 600); with 250 s of cooling, cooling wins only under the right metric.
     db.execute(text("UPDATE runtime_5m SET comp_cool1 = 250 WHERE unit_key = 'bed'"))
     assert bt._choose_mode(db, s, end.date(), recorded=False, now=end) == "cool"

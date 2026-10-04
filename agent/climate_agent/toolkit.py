@@ -18,9 +18,9 @@ import math
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from datetime import date as Date
-from datetime import datetime, timezone
-from functools import lru_cache
+from functools import cache
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -170,10 +170,10 @@ def parse_ts(value: Any) -> datetime | None:
     if not value:
         return None
     try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(value))
     except ValueError:
         return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def row_date(row: dict[str, Any]) -> str:
@@ -322,9 +322,9 @@ class Toolkit:
         src = s.get("source") or {}
         ctl = s.get("controller") or {}
         lines = [
-            f"Now {now.astimezone(tz).strftime('%Y-%m-%d %H:%M') if now else '?'} ({s.get('tz')}). "
+            (f"Now {now.astimezone(tz).strftime('%Y-%m-%d %H:%M') if now else '?'} ({s.get('tz')}). "
             f"Source {src.get('kind')} ({'ok' if src.get('ok') else 'NOT OK: ' + clip(src.get('detail'), 80)}). "
-            f"Controller {ctl.get('mode')}, policy v{ctl.get('policy_version_id')}.",
+            f"Controller {ctl.get('mode')}, policy v{ctl.get('policy_version_id')}."),
             f"House: {'EMPTY' if s.get('house_empty') else 'occupied'} ({clip(s.get('house_empty_reason'), 100) or 'no reason given'}).",
         ]
         w = s.get("weather")
@@ -621,8 +621,8 @@ class Toolkit:
         c = await self.api.get("/analytics/coupling", {"days": days})
         lines = [
             f"Floor coupling, last {c.get('days')} days ({c.get('n_hours')} hours):",
-            f"Upstairs runtime {num(c.get('coef_min_per_degf'), 2, signed=True)} min/hour per °F the main floor sits above upstairs, "
-            f"{pair_interval(c.get('ci90'), 2)}.",
+            (f"Upstairs runtime {num(c.get('coef_min_per_degf'), 2, signed=True)} min/hour per °F the main floor sits above upstairs, "
+            f"{pair_interval(c.get('ci90'), 2)}."),
             f"Placebo (bed wing, should be ~0): {num(c.get('placebo_coef'), 2, signed=True)}, {pair_interval(c.get('placebo_ci90'), 2)}.",
         ]
         if c.get("interpretation"):
@@ -673,8 +673,8 @@ class Toolkit:
         lines = [
             f"Natural experiments (warm main-floor afternoons), last {n.get('days')} days: {len(events)} events.",
             f"Estimate: {num(n.get('estimate_min_per_event'), 0, ' min', signed=True)} upstairs runtime per event, {pair_interval(n.get('ci90'), 0, ' min')}.",
-            f"Checks (both should be ~0): placebo with fake event times {num(n.get('placebo_estimate'), 0, ' min', signed=True)}; "
-            f"bed wing {num(n.get('bed_wing_estimate'), 0, ' min', signed=True)}.",
+            (f"Checks (both should be ~0): placebo with fake event times {num(n.get('placebo_estimate'), 0, ' min', signed=True)}; "
+            f"bed wing {num(n.get('bed_wing_estimate'), 0, ' min', signed=True)}."),
         ]
         rows = [
             f"{row_date(e)} main floated {num(e.get('main_floor_float_f'), 1, '°F', signed=True)}, up {minutes(e.get('up_runtime_min'))} vs {minutes(e.get('expected_up_runtime_min'))} expected"
@@ -719,13 +719,13 @@ class Toolkit:
                 anomalies.append(a)
         first, last = rows[-1].get("ts"), rows[0].get("ts")
         lines = [
-            f"Control actions: the newest {len(rows)} (asked for up to {limit}), "
-            f"{await self.local(first)} to {await self.local(last)} local time.",
+            (f"Control actions: the newest {len(rows)} (asked for up to {limit}), "
+            f"{await self.local(first)} to {await self.local(last)} local time."),
             "By unit and status: " + "; ".join(
                 f"{key} " + ", ".join(f"{st} {n}" for st, n in sorted(c.items())) for key, c in sorted(by_unit.items())
             ) + ".",
-            f"Read-back failures {readback_failed}; blocked by guardrails (not sent) {blocked}; other failures {failed}; "
-            f"skipped {skipped}.",
+            (f"Read-back failures {readback_failed}; blocked by guardrails (not sent) {blocked}; other failures {failed}; "
+            f"skipped {skipped}."),
         ]
         if anomalies:
             lines.append(f"Anomalies (failed, read-back mismatch or skipped; newest first, {len(anomalies)}):")
@@ -824,10 +824,10 @@ class Toolkit:
             "Claude may sign off model-queued changes only inside: "
             + ", ".join(f"{k} {num(v[0], 1)}–{num(v[1], 1)}" for k, v in ranges.items() if isinstance(v, (list, tuple)) and len(v) == 2)
             + f". Owner-only: {', '.join(s.get('owner_only_params') or [])}.",
-            f"Hard limits (owner-only): heat {temp(lim.get('min_heat_f'), 0)}–{temp(lim.get('max_heat_f'), 0)}, "
+            (f"Hard limits (owner-only): heat {temp(lim.get('min_heat_f'), 0)}–{temp(lim.get('max_heat_f'), 0)}, "
             f"cool {temp(lim.get('min_cool_f'), 0)}–{temp(lim.get('max_cool_f'), 0)}, deadband ≥ {num(lim.get('min_deadband_f'), 1, '°F')}, "
             f"≤ {num(lim.get('max_step_f'), 1, '°F')} per change, ≥ {lim.get('min_minutes_between_changes')} min between changes, "
-            f"holds {lim.get('min_hold_hours')}–{lim.get('max_hold_hours')} h, indoor RH ≤ {pct(lim.get('max_indoor_rh'), 0)}.",
+            f"holds {lim.get('min_hold_hours')}–{lim.get('max_hold_hours')} h, indoor RH ≤ {pct(lim.get('max_indoor_rh'), 0)}."),
         ]
         bands = []
         for unit, c in (ctl.get("comfort") or {}).items():
@@ -875,9 +875,9 @@ class Toolkit:
                 f"day {c.get('day')} (info {num(c.get('info_fraction'), 2)}, alpha spent {num(c.get('alpha_spent'), 3)}, z* {num(c.get('z_crit'), 2)})"
                 for c in e.get("checkpoints") or []
             ),
-            f"Analysis: {a.get('days_observed')} days observed, effect {pct(a.get('effect_pct'), 1, signed=True)} "
+            (f"Analysis: {a.get('days_observed')} days observed, effect {pct(a.get('effect_pct'), 1, signed=True)} "
             f"({interval(a.get('ci_low_pct'), a.get('ci_high_pct'), 1, '%')}), checkpoint reached {a.get('checkpoint_reached') or 'none'}, "
-            f"decision {a.get('decision')}.",
+            f"decision {a.get('decision')}."),
         ]
         if a.get("note"):
             lines.append(f"Note: {clip(a.get('note'), 300)}")
@@ -913,8 +913,8 @@ class Toolkit:
         b = await self.api.post("/models/backtest", {"params": clean, "days": days}, timeout_s=COMPUTE_TIMEOUT_S)
         lines = [
             f"Backtest over {b.get('days')} days with the {b.get('model')} model, candidate {compact(clean, 200)}:",
-            f"Runtime current {minutes(b.get('current_runtime_min'))} vs candidate {minutes(b.get('candidate_runtime_min'))}: "
-            f"{pct(b.get('delta_pct'), 1, signed=True)} ({pair_interval(b.get('ci90_pct'), 1, '%')}).",
+            (f"Runtime current {minutes(b.get('current_runtime_min'))} vs candidate {minutes(b.get('candidate_runtime_min'))}: "
+            f"{pct(b.get('delta_pct'), 1, signed=True)} ({pair_interval(b.get('ci90_pct'), 1, '%')})."),
             f"Comfort violations: current {minutes(b.get('comfort_violation_min_current'))}, candidate {minutes(b.get('comfort_violation_min_candidate'))}.",
             f"Beats the model's own uncertainty: {'YES' if b.get('beats_model_uncertainty') else 'NO (not worth a real test day)'}.",
         ]
@@ -932,8 +932,8 @@ class Toolkit:
         if date is not None:
             body["date"] = date.isoformat()
         s = await self.api.post("/models/simulate", body, timeout_s=COMPUTE_TIMEOUT_S)
-        lines = [f"Simulation of {row_date(s)} with the {s.get('model')} model{' and ' + compact(clean, 150) if clean else ' (current policy)'}: "
-                 f"total runtime {minutes(s.get('total_runtime_min'))}."]
+        lines = [(f"Simulation of {row_date(s)} with the {s.get('model')} model{' and ' + compact(clean, 150) if clean else ' (current policy)'}: "
+                 f"total runtime {minutes(s.get('total_runtime_min'))}.")]
         for unit, pts in (s.get("units") or {}).items():
             st = stats(p.get("temp_f") for p in pts)
             run_min = sum(float(p.get("runtime_s") or 0) for p in pts) / 60.0
@@ -1213,7 +1213,7 @@ def tool_parameters(spec: ToolSpec) -> list[inspect.Parameter]:
     return [p for name, p in sig.parameters.items() if name != "self"]
 
 
-@lru_cache(maxsize=None)
+@cache
 def args_model(name: str) -> type[BaseModel]:
     """A pydantic model of the tool's arguments (unknown keys rejected)."""
     spec = TOOLS_BY_NAME[name]
@@ -1243,7 +1243,7 @@ def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
     return walk(schema)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _input_schema_json(name: str) -> str:
     schema = args_model(name).model_json_schema()
     schema = _inline_refs(schema)
@@ -1259,11 +1259,11 @@ def input_schema(name: str) -> dict[str, Any]:
 
 
 __all__ = [
-    "ArmIn",
     "OPEN_METEO_ATTRIBUTION",
     "POLICY_PARAM_TYPES",
     "TOOLS",
     "TOOLS_BY_NAME",
+    "ArmIn",
     "ToolInputError",
     "ToolResult",
     "ToolSpec",

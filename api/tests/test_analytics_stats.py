@@ -71,7 +71,7 @@ def test_drift_false_alarm_rate_in_a_shoulder_season():
         train, recent = _shoulder(rng)
         fit = baseline.fit_baseline(train, "cool")
         assert fit is not None
-        unit, why = metrics.drift_check(fit, recent)
+        unit, _ = metrics.drift_check(fit, recent)
         if unit is None:
             continue
         checked += 1

@@ -94,6 +94,7 @@ web/src/api/schema.json && cd web && npm run gen:types`).
 | POST | `/auth/setup` | public, only while no password is set | `PasswordBody` → `AuthState` (sets cookie) |
 | POST | `/auth/login` | public (throttled) | `PasswordBody` → `AuthState` |
 | POST | `/auth/logout` | public | → `AuthState` |
+| POST | `/auth/logout-everywhere` | owner | → `AuthState` (invalidates every owner session; so does a password change) |
 | GET | `/status` | reader | → `HouseStatus` |
 | WS | `/ws` | owner cookie or agent token | server → `WsEvent` |
 | GET | `/rooms/{room_key}/history?hours=24` | reader | → `RoomHistory` |
@@ -119,7 +120,7 @@ web/src/api/schema.json && cd web && npm run gen:types`).
 | POST | `/changes` | writer | `ProposePolicyBody` → `ChangeOut` (proposed_by = owner or claude) |
 | POST | `/changes/{id}/decision` | writer | `DecisionBody` → `ChangeOut` (403 if this role may not decide it) |
 | GET | `/experiments` | reader | → `ExperimentOut[]` |
-| GET | `/experiments/power?effect_pct=10&alpha=0.1&power=0.8` | reader | → `PowerOut` |
+| GET | `/experiments/power?effect_pct=10&alpha=0.1&power=0.8&block_days=2` | reader | → `PowerOut` |
 | GET | `/experiments/{id}` | reader | → `ExperimentDetail` |
 | POST | `/experiments` | writer | `ProposeExperimentBody` → `ExperimentOut` |
 | POST | `/experiments/{id}/decision` | owner | `ExperimentDecisionBody` → `ExperimentOut` |

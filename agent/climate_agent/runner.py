@@ -30,7 +30,7 @@ import re
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -201,7 +201,7 @@ def system_prompt_for(kind: str) -> str:
 def user_prompt_for(run: Mapping[str, Any], now: datetime) -> str:
     kind = run.get("kind")
     run_id = run.get("id")
-    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stamp = now.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
     extra = str(run.get("prompt") or "").strip()
     if kind == "signin_check":
         return "Sign-in check: reply with the single word OK."
@@ -226,7 +226,7 @@ def user_prompt_for(run: Mapping[str, Any], now: datetime) -> str:
 
 def resume_prompt_for(run: Mapping[str, Any], now: datetime, why: str) -> str:
     """The user turn that continues a resumed session (the original task is in its history)."""
-    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stamp = now.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
     return (
         f"(Run #{run.get('id')} resumed at {stamp}: {why}.) Carry on with the original task from where it "
         "stopped and finish it. Anything you fetched before may be out of date; re-check what you rely on."
@@ -334,7 +334,7 @@ def _not_before(info: RateLimitInfo | None, now: datetime) -> datetime:
     if info is not None:
         for stamp in (info.resets_at, info.overage_resets_at):
             if isinstance(stamp, (int, float)) and stamp > 0:
-                when = datetime.fromtimestamp(stamp, tz=timezone.utc)
+                when = datetime.fromtimestamp(stamp, tz=UTC)
                 if when > now:
                     return when + timedelta(minutes=1)
     return now + DEFAULT_DEFER
@@ -469,7 +469,7 @@ def _verify_signin_options(options: ClaudeAgentOptions) -> None:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ---------------------------------------------------------------------------------------

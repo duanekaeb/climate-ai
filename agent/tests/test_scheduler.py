@@ -5,18 +5,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
+from test_runner import FakeQuery, auth_error, init, rate_limit, result_message, usage_limit_error
 
+from climate_agent import runner as runner_mod
 from climate_agent import scheduler as scheduler_mod
 from climate_agent.config import AgentConfig, StartupRefused, add_one_year, check_startup, idle_reason
 from climate_agent.scheduler import Scheduler
-from climate_agent import runner as runner_mod
-from test_runner import FakeQuery, auth_error, init, rate_limit, result_message, usage_limit_error
 
-NOW = datetime(2026, 10, 4, 8, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 4, 8, 30, tzinfo=UTC)
 GOOD_ENV = {"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth", "CLIMATE_AGENT_TOKEN": "agent-token"}
 
 

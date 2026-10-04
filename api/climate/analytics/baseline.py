@@ -196,7 +196,8 @@ def fit_baseline(days: list[DayRow], mode: str) -> BaselineFit | None:
     if tie_bps.size > 1:
         kept = ("kept the smallest non-negative intercept that passes NMBE" if nmbe_ok.size
                 else "none passes NMBE, so kept the smallest non-negative intercept")
-        notes.append(f"90% balance-point set {tie_bps.min():.0f}-{tie_bps.max():.0f}°F ({tie_bps.size} candidates); {kept}")
+        notes.append(f"90% balance-point set {tie_bps.min():.0f}-{tie_bps.max():.0f}°F "
+                     f"({tie_bps.size} candidates); {kept}")
     return BaselineFit(
         unit_key=rows[0].unit_key,
         mode=mode,
@@ -381,7 +382,9 @@ def residual_stats(fits: Iterable[tuple[BaselineFit, float]]) -> ResidualStats |
             n = len(common)
             sigma = math.sqrt(float((r * r).sum()) / max(n - p, 1))
             ords = np.array([k.toordinal() for k in common])
-            return ResidualStats(sigma, _clip_rho(_lag1(ords, r)), n, p, float(yv.mean()), fitted=yv - r, resid=r)
+            return ResidualStats(
+                sigma, _clip_rho(_lag1(ords, r)), n, p, float(yv.mean()), fitted=yv - r, resid=r
+            )
     sigma = math.sqrt(sum((w * f.resid_std_s) ** 2 for f, w in fits))
     return ResidualStats(
         sigma_s=sigma,

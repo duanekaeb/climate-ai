@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -18,6 +18,7 @@ from claude_agent_sdk import (
     SystemMessage,
     TextBlock,
 )
+from conftest import change
 
 from climate_agent import runner as runner_mod
 from climate_agent.runner import (
@@ -32,9 +33,8 @@ from climate_agent.runner import (
 )
 from climate_agent.toolkit import TOOLS, Toolkit
 from climate_agent.tools import create_house_server
-from conftest import change
 
-NOW = datetime(2026, 10, 4, 8, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 4, 8, 30, tzinfo=UTC)
 NIGHTLY = {"id": 42, "kind": "nightly", "prompt": "", "trigger": None}
 
 

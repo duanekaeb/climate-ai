@@ -197,6 +197,15 @@ The Home/Sleep/Away target setpoints are **never written**: they permanently edi
 schedule. Every write is logged in `control_actions` with the channel `homekit`, the reason,
 before/after values and the read-back.
 
+When HomeKit is used: only as the fallback while the ecobee cloud is failing (the circuit
+breaker opens after three failed polls and stays open 15 minutes), and never in simulator mode.
+Because a HomeKit hold can only pick a comfort setting, the service first **reads** that
+setting's Home/Sleep/Away targets and refuses the hold if they fall outside your hard limits.
+A failed fallback write is not retried for 30 minutes; queued requests expire after 10
+minutes and a request stuck "sent" (service restarted mid-write) is failed after 15. While the
+cloud is down the service also writes a HomeKit-based snapshot of each unit, so the Live page
+and the controller keep current temperatures.
+
 ## 8. Unpair or reset
 
 **Normal way:** Setup → HomeKit → **Unpair**. The thermostat must be reachable: the service

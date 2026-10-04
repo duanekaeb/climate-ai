@@ -78,11 +78,11 @@ const errors = computed(() => {
 const effectOk = computed(() => Number.isFinite(effectPct.value) && effectPct.value >= 1 && effectPct.value <= 50)
 let powerTimer: number | undefined
 watch(
-  [effectPct, alpha],
-  ([e, a]) => {
+  [effectPct, alpha, blockDays],
+  ([e, a, b]) => {
     window.clearTimeout(powerTimer)
-    if (!effectOk.value || !(a > 0 && a < 0.5)) return
-    powerTimer = window.setTimeout(() => void store.loadProposalPower(e, a, 0.8), 300)
+    if (!effectOk.value || !(a > 0 && a < 0.5) || !(b >= 1 && b <= 7)) return
+    powerTimer = window.setTimeout(() => void store.loadProposalPower(e, a, 0.8, b), 300)
   },
   { immediate: true },
 )

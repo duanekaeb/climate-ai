@@ -7,12 +7,12 @@ import asyncio
 from typing import Any
 
 import pytest
+from conftest import SAVINGS
 from mcp.server.mcpserver.exceptions import ToolError
 
 from climate_agent.mcp_server import BearerAuth, api_token, build_http_app, build_server, parse_hostport
 from climate_agent.toolkit import TOOLS, Toolkit
 from climate_agent.tools import allowed_tool_names, build_tools
-from conftest import SAVINGS
 
 
 def test_registers_every_tool(make_api):

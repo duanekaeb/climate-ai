@@ -6,9 +6,9 @@ import asyncio
 from typing import Any
 
 import httpx
-
-from climate_agent.toolkit import TOOLS, POLICY_PARAM_TYPES, Toolkit, input_schema
 from conftest import SAVINGS, SETTINGS, STATUS, change
+
+from climate_agent.toolkit import POLICY_PARAM_TYPES, TOOLS, Toolkit, input_schema
 
 
 def call(api: Any, name: str, args: dict[str, Any] | None = None, run_id: int | None = None):

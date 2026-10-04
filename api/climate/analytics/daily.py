@@ -218,11 +218,6 @@ def heat_metrics(session: Session) -> dict[str, bool]:
     return out
 
 
-def clear_heat_metrics_cache() -> None:
-    with _heat_lock:
-        _heat_cache.clear()
-
-
 def unit_weights(session: Session) -> dict[str, float]:
     return {k: float(w) for k, w in session.execute(text("SELECT key, power_weight FROM units ORDER BY sort, key"))}
 

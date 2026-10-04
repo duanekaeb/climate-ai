@@ -32,9 +32,9 @@ export const useExperiments = defineStore('experiments', () => {
     )
   }
 
-  function loadProposalPower(effectPct: number, alpha: number, powerTarget = 0.8) {
-    return loadInto(proposalPower, `${effectPct}|${alpha}|${powerTarget}`, () =>
-      api.get<PowerOut>('/experiments/power', { effect_pct: effectPct, alpha, power: powerTarget }),
+  function loadProposalPower(effectPct: number, alpha: number, powerTarget = 0.8, blockDays = 2) {
+    return loadInto(proposalPower, `${effectPct}|${alpha}|${powerTarget}|${blockDays}`, () =>
+      api.get<PowerOut>('/experiments/power', { effect_pct: effectPct, alpha, power: powerTarget, block_days: blockDays }),
     )
   }
 

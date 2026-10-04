@@ -82,7 +82,7 @@ def _experiment(status="proposed") -> int:
 def test_power_route_is_not_swallowed_by_the_id_route(owner, monkeypatch):
     seen = {}
 
-    def fake_power(session, effect_pct, alpha=0.1, power_=0.8):
+    def fake_power(session, effect_pct, alpha=0.1, power_=0.8, block_days=2):
         seen.update(effect_pct=effect_pct, alpha=alpha, power=power_)
         return PowerOut(effect_pct=effect_pct, alpha=alpha, power=power_, resid_cv=0.2, days_per_arm=20,
                         total_days=40, note="ok")

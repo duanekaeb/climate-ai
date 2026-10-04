@@ -24,7 +24,7 @@ import logging
 import signal
 import sys
 from collections.abc import Callable, Mapping
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import claude_agent_sdk
@@ -52,7 +52,7 @@ def cli_version() -> str | None:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _wait(stop: asyncio.Event, seconds: float) -> None:
@@ -341,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         "climate agent %s (claude-agent-sdk %s, CLI %s): %r",
         __version__, claude_agent_sdk.__version__, cli_version(), config,
     )
-    warning = config.token_warning(date.today())
+    warning = config.token_warning(datetime.now(UTC).date())
     if warning:
         log.warning(warning)
     if config.token_created is None:

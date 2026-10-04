@@ -4,9 +4,14 @@ The metric is the daily house residual: actual stage-1 runtime summed over the u
 by ``units.power_weight``) minus what each unit's weather baseline expected for that day's mode
 over the same 5-minute slots (``expected_covered_seconds``: a day with 95% of its slots is
 compared with 95% of the full-day expectation, never the whole of it). Weather is thereby
-removed day by day, and the switchback's randomization handles everything else. The effect is reported as the difference in mean residual (treatment arm minus the first,
+removed day by day, and the switchback's randomization handles everything else.
+The effect is reported as the difference in mean residual (treatment arm minus the first,
 control arm) as a percentage of mean expected runtime: negative means the treatment used LESS
 runtime than the control under the same weather.
+
+Each pre-planned checkpoint is judged once, by the nightly run after its last day has left the
+late-data refill window, and its verdict is stored on the experiment (``freeze_checkpoints``);
+``analyze`` reports stored verdicts and never recomputes them.
 """
 
 from __future__ import annotations
@@ -384,7 +389,8 @@ def _verdict(ctx: _Context, i: int, cp: Checkpoint, now: datetime) -> dict[str, 
         note = f"{at}, the final look: {ctx.describe(lk)} {verdict}"
     else:
         decision = "continue"
-        worse = " The treatment used significantly MORE runtime; consider stopping it." if lk.lo_pct > 0 else ""
+        worse = (" The treatment used significantly MORE runtime; consider stopping it."
+                 if lk.lo_pct > 0 else "")
         note = (f"{at}: {ctx.describe(lk)} The interval includes zero or favours the control, so it does not "
                 f"clear this checkpoint's bar; the test continues.{worse}")
     return {
@@ -426,7 +432,8 @@ def freeze_checkpoints(session: Session, now: datetime) -> int:
         stored = {str(k): v for k, v in (result.get("checkpoints") or {}).items()}
         ctx: _Context | None = None
         log = list(result.get("log", []))
-        for i, cp in enumerate(Checkpoint.model_validate(c) for c in (exp.design or {}).get("checkpoints", [])):
+        planned = [Checkpoint.model_validate(c) for c in (exp.design or {}).get("checkpoints", [])]
+        for i, cp in enumerate(planned):
             k = str(i + 1)
             if k in stored:
                 if stored[k].get("decision") in FINAL_DECISIONS:
@@ -438,7 +445,9 @@ def freeze_checkpoints(session: Session, now: datetime) -> int:
             ctx = ctx or _context(session, exp, today)
             v = _verdict(ctx, i + 1, cp, now)
             stored[k] = v
-            log.append({"at": now.isoformat(), "event": "checkpoint", "checkpoint": i + 1, "decision": v["decision"]})
+            log.append(
+                {"at": now.isoformat(), "event": "checkpoint", "checkpoint": i + 1, "decision": v["decision"]}
+            )
             stored_n += 1
             if v["decision"] in FINAL_DECISIONS:
                 break
@@ -541,14 +550,15 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
                 f"{_fmt_pct(v['ci_high_pct'])}; fixed {str(v.get('at') or '')[:10]}), so the test continues. "
             )
             if v["ci_low_pct"] > 0:
-                lead += "At that checkpoint the treatment used significantly MORE runtime; consider stopping it. "
+                lead += ("At that checkpoint the treatment used significantly MORE runtime; "
+                         "consider stopping it. ")
     if pending is not None:
         i, cp = pending
-        which = "the final look" if i == n_cp else f"{i} of {n_cp}"
+        which = "The final checkpoint" if i == n_cp else f"Checkpoint {i} of {n_cp}"
         lead += (
-            f"Checkpoint {which} (day {cp.day}) is reached; its verdict is fixed in the nightly run on "
-            f"{ctx.freeze_day(cp).isoformat()}, once its last day is past the {RECENT_REFILL_DAYS}-day window "
-            "in which late runtime reports can still change it. "
+            f"{which} (day {cp.day}) is reached; its verdict is fixed in the nightly run on "
+            f"{ctx.freeze_day(cp).isoformat()}, once its last day is past the "
+            f"{RECENT_REFILL_DAYS}-day window in which late runtime reports can still change it. "
         )
     info = ctx.look(None, stats.norm.isf(INFORMATIONAL_ALPHA / 2))
     if info is None:

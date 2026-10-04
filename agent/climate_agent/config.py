@@ -181,13 +181,13 @@ def ensure_empty_dir(path: Path) -> Path:
 
 
 __all__ = [
-    "AgentConfig",
-    "idle_reason",
     "BILLING_ENV_VARS",
+    "AgentConfig",
     "ConfigError",
     "StartupRefused",
     "add_one_year",
     "check_startup",
     "ensure_empty_dir",
+    "idle_reason",
     "startup_problems",
 ]
