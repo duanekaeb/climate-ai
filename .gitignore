@@ -10,7 +10,6 @@ __pycache__/
 web/node_modules/
 web/dist/
 web/dev-dist/
-web/src/api/schema.json
 
 # Secrets and local state: never commit
 .env

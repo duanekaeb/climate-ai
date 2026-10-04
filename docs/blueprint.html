@@ -1503,6 +1503,19 @@ options = ClaudeAgentOptions(
     </div>
   </div>
 
+  <h3 style="margin:36px 0 14px">Pairing HomeKit, step by step</h3>
+  <div class="card">
+    <p>No Apple device, Apple Home, Homebridge or Home Assistant. The home server becomes each thermostat's HomeKit controller, and each SmartSensor shows up as an extra device behind the thermostat it's linked to. Three pairings in all: Hallway, Toy Room and Bedroom.</p>
+    <ol>
+      <li><b>Network.</b> Run the server on Linux, on the same network (LAN/VLAN) as the thermostats, because discovery uses mDNS. Give each thermostat a fixed address (a DHCP reservation).</li>
+      <li><b>Free each thermostat from Apple Home.</b> A thermostat pairs with one controller at a time. On the thermostat, choose "Disconnect from HomeKit" or "Reset HomeKit" (the menu path varies by model; confirm it on the device). Anyone using Siri for the thermostats loses that.</li>
+      <li><b>Start the HomeKit service</b> (<code>docker compose --profile homekit up -d</code>). The app's Setup page lists thermostats that are ready to pair.</li>
+      <li><b>Pair in Setup.</b> Pick the unit and press Pair. The thermostat shows a fresh 8-digit code; type it in (XXX-XX-XXX). The pairing keys are saved, encrypted, in the database before anything else happens.</li>
+      <li><b>Check the sensors.</b> They map to rooms by name. Newer SmartSensors report occupancy and motion and push them within seconds. ecobee's "seconds since last motion" counters can't push, so they're read every minute.</li>
+    </ol>
+    <p class="muted" style="font-size:13px">Checked against the aiohomekit 4.0.1 source and its test accessory, not yet on a real ecobee. Two traps the app avoids: the library's <code>aiohomekitctl pair</code> command reports success but loses the keys (the thermostat then needs a HomeKit reset), and the Home/Sleep/Away setpoint fields permanently edit the schedule, so the app never writes them. Full steps: <code>docs/HOMEKIT.md</code>.</p>
+  </div>
+
   <h3 style="margin:36px 0 14px">"Can we wire straight to the device?"</h3>
   <div class="table-wrap">
     <table class="t">
@@ -1576,6 +1589,18 @@ options = ClaudeAgentOptions(
     <p class="eyebrow">Architecture</p>
     <h2 id="h-build">What runs where</h2>
     <p>Everything runs on one small home server with Docker Compose: a mini PC, a NAS, or a Raspberry Pi 5. The stack is the one you already use at work, FastAPI with SQLAlchemy and Vue 3 with TypeScript, so nothing here is new to you.</p>
+  </div>
+
+  <div class="card" style="margin-bottom:18px">
+    <span class="pill good" style="margin-bottom:8px">Built · October 4, 2026</span>
+    <h4>The app exists now, in the climate-ai repository</h4>
+    <ul>
+      <li>All of the services below run with Docker Compose. Start it with <code>docker compose up -d --build</code>; it comes up on a simulated house, so every screen works before any credentials are added.</li>
+      <li>Connecting the real thermostats is a Setup page in the app: ecobee sign-in with MFA, then HomeKit pairing with the code each thermostat shows.</li>
+      <li>The controller starts in Suggest mode: it plans and logs, but writes nothing until you switch it to Act.</li>
+      <li>Claude signs in with your subscription token from <code>claude setup-token</code>.</li>
+      <li>Steps: <code>docs/DEPLOY.md</code> (nginx, HTTPS, Tailscale, iPhone app) and <code>docs/HOMEKIT.md</code>.</li>
+    </ul>
   </div>
 
   <div class="arch">

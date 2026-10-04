@@ -8,8 +8,11 @@ every limit; Claude Opus 5.5, running on the owner's own Claude subscription thr
 Agent SDK, reviews the results a few times a day, explains them and proposes experiments, but
 is never in the control path.
 
-<!-- Screenshots: add images under docs/img/ and link them here (Live, Rooms, Did it work?). -->
-_Screenshots: coming soon._
+Screenshots from the built-in simulated house (no credentials needed):
+
+| Live | Floor coupling | Rooms (phone) |
+|---|---|---|
+| [![Live](docs/img/live.png)](docs/img/live.png) | [![Floor coupling](docs/img/coupling.png)](docs/img/coupling.png) | [![Rooms](docs/img/rooms-phone.png)](docs/img/rooms-phone.png) |
 
 ## Quickstart (simulator, no credentials needed)
 

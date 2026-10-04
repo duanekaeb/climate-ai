@@ -1,0 +1,5661 @@
+{
+ "$defs": {
+  "AgentFinishBody": {
+   "properties": {
+    "error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "model": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "not_before": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "num_turns": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "result_text": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "session_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "enum": [
+      "completed",
+      "failed",
+      "deferred"
+     ],
+     "type": "string"
+    },
+    "terminal_reason": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "usage": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "status"
+   ],
+   "title": "AgentFinishBody",
+   "type": "object"
+  },
+  "AgentHeartbeatBody": {
+   "properties": {
+    "cli_version": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "detail": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "sdk_version": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "signed_in": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "token_expires_at": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "title": "AgentHeartbeatBody",
+   "type": "object"
+  },
+  "AgentInfo": {
+   "properties": {
+    "enabled": {
+     "type": "boolean"
+    },
+    "last_beat_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "last_run": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/AgentRunOut"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "next_nightly_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "sdk_version": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "settings": {
+     "$ref": "#/$defs/AgentSettings"
+    },
+    "signed_in": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "token_expires_at": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "token_warning": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "triggered_today": {
+     "default": 0,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "enabled",
+    "last_beat_at",
+    "last_run",
+    "next_nightly_at",
+    "sdk_version",
+    "settings",
+    "signed_in",
+    "token_expires_at",
+    "token_warning",
+    "triggered_today"
+   ],
+   "title": "AgentInfo",
+   "type": "object"
+  },
+  "AgentRunOut": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "finished_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "id": {
+     "type": "integer"
+    },
+    "kind": {
+     "enum": [
+      "nightly",
+      "weekly",
+      "triggered",
+      "chat",
+      "signin_check"
+     ],
+     "type": "string"
+    },
+    "model": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "not_before": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "num_turns": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "prompt": {
+     "default": "",
+     "type": "string"
+    },
+    "requested_by": {
+     "type": "string"
+    },
+    "result_text": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "session_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "started_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "enum": [
+      "queued",
+      "running",
+      "completed",
+      "failed",
+      "deferred",
+      "cancelled"
+     ],
+     "type": "string"
+    },
+    "terminal_reason": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "trigger": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "created_at",
+    "error",
+    "finished_at",
+    "id",
+    "kind",
+    "model",
+    "not_before",
+    "num_turns",
+    "prompt",
+    "requested_by",
+    "result_text",
+    "session_id",
+    "started_at",
+    "status",
+    "terminal_reason",
+    "trigger"
+   ],
+   "title": "AgentRunOut",
+   "type": "object"
+  },
+  "AgentSettings": {
+   "properties": {
+    "enabled": {
+     "default": true,
+     "type": "boolean"
+    },
+    "max_triggered_per_day": {
+     "default": 3,
+     "maximum": 3,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "nightly_time": {
+     "default": "03:30",
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    },
+    "weekly_day": {
+     "default": 6,
+     "maximum": 6,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "weekly_time": {
+     "default": "05:00",
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    }
+   },
+   "required": [
+    "enabled",
+    "max_triggered_per_day",
+    "nightly_time",
+    "weekly_day",
+    "weekly_time"
+   ],
+   "title": "AgentSettings",
+   "type": "object"
+  },
+  "AlertOut": {
+   "properties": {
+    "body": {
+     "type": "string"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "level": {
+     "enum": [
+      "info",
+      "warn",
+      "error"
+     ],
+     "type": "string"
+    },
+    "resolved_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "title": {
+     "type": "string"
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    }
+   },
+   "required": [
+    "body",
+    "id",
+    "kind",
+    "level",
+    "resolved_at",
+    "title",
+    "ts"
+   ],
+   "title": "AlertOut",
+   "type": "object"
+  },
+  "ArmIn": {
+   "properties": {
+    "key": {
+     "pattern": "^[a-z0-9_]{1,24}$",
+     "type": "string"
+    },
+    "label": {
+     "type": "string"
+    },
+    "params": {
+     "additionalProperties": true,
+     "type": "object"
+    }
+   },
+   "required": [
+    "key",
+    "label",
+    "params"
+   ],
+   "title": "ArmIn",
+   "type": "object"
+  },
+  "AskBody": {
+   "properties": {
+    "question": {
+     "maxLength": 4000,
+     "minLength": 2,
+     "type": "string"
+    }
+   },
+   "required": [
+    "question"
+   ],
+   "title": "AskBody",
+   "type": "object"
+  },
+  "AuthState": {
+   "properties": {
+    "authenticated": {
+     "type": "boolean"
+    },
+    "password_set": {
+     "type": "boolean"
+    },
+    "role": {
+     "anyOf": [
+      {
+       "enum": [
+        "owner",
+        "agent"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "authenticated",
+    "password_set",
+    "role"
+   ],
+   "title": "AuthState",
+   "type": "object"
+  },
+  "BacktestBody": {
+   "properties": {
+    "days": {
+     "default": 28,
+     "maximum": 120,
+     "minimum": 7,
+     "type": "integer"
+    },
+    "params": {
+     "additionalProperties": true,
+     "type": "object"
+    }
+   },
+   "title": "BacktestBody",
+   "type": "object"
+  },
+  "BacktestOut": {
+   "properties": {
+    "beats_model_uncertainty": {
+     "type": "boolean"
+    },
+    "candidate_runtime_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "ci90_pct": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "comfort_violation_min_candidate": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "comfort_violation_min_current": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "current_runtime_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "days": {
+     "type": "integer"
+    },
+    "delta_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "model": {
+     "enum": [
+      "rc",
+      "rule_of_thumb"
+     ],
+     "type": "string"
+    },
+    "note": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "beats_model_uncertainty",
+    "candidate_runtime_min",
+    "ci90_pct",
+    "comfort_violation_min_candidate",
+    "comfort_violation_min_current",
+    "current_runtime_min",
+    "days",
+    "delta_pct",
+    "model",
+    "note"
+   ],
+   "title": "BacktestOut",
+   "type": "object"
+  },
+  "BaselineOut": {
+   "properties": {
+    "balance_point_f": {
+     "type": "number"
+    },
+    "cvrmse": {
+     "type": "number"
+    },
+    "fitted_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "intercept_min": {
+     "type": "number"
+    },
+    "mode": {
+     "enum": [
+      "cool",
+      "heat"
+     ],
+     "type": "string"
+    },
+    "n_days": {
+     "type": "integer"
+    },
+    "nmbe": {
+     "type": "number"
+    },
+    "passes": {
+     "type": "boolean"
+    },
+    "r2": {
+     "type": "number"
+    },
+    "slope_min_per_dd": {
+     "type": "number"
+    },
+    "train_end": {
+     "format": "date",
+     "type": "string"
+    },
+    "train_start": {
+     "format": "date",
+     "type": "string"
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "balance_point_f",
+    "cvrmse",
+    "fitted_at",
+    "intercept_min",
+    "mode",
+    "n_days",
+    "nmbe",
+    "passes",
+    "r2",
+    "slope_min_per_dd",
+    "train_end",
+    "train_start",
+    "unit_key"
+   ],
+   "title": "BaselineOut",
+   "type": "object"
+  },
+  "ChangeOut": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "decided_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "decided_by": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "decision_reason": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "gates": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "kind": {
+     "enum": [
+      "policy",
+      "model",
+      "experiment"
+     ],
+     "type": "string"
+    },
+    "needs": {
+     "enum": [
+      "nothing",
+      "claude",
+      "owner"
+     ],
+     "type": "string"
+    },
+    "payload": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "proposed_by": {
+     "enum": [
+      "model",
+      "claude",
+      "owner"
+     ],
+     "type": "string"
+    },
+    "rationale": {
+     "type": "string"
+    },
+    "shadow_start": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "type": "string"
+    },
+    "title": {
+     "type": "string"
+    },
+    "trial_end": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "trial_start": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "created_at",
+    "decided_at",
+    "decided_by",
+    "decision_reason",
+    "gates",
+    "id",
+    "kind",
+    "needs",
+    "payload",
+    "proposed_by",
+    "rationale",
+    "shadow_start",
+    "status",
+    "title",
+    "trial_end",
+    "trial_start"
+   ],
+   "title": "ChangeOut",
+   "type": "object"
+  },
+  "Checkpoint": {
+   "properties": {
+    "alpha_spent": {
+     "type": "number"
+    },
+    "day": {
+     "type": "integer"
+    },
+    "info_fraction": {
+     "type": "number"
+    },
+    "z_crit": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "alpha_spent",
+    "day",
+    "info_fraction",
+    "z_crit"
+   ],
+   "title": "Checkpoint",
+   "type": "object"
+  },
+  "ComfortBand": {
+   "description": "Setpoints for one period. heat_f < cool_f by at least the thermostat's min delta.",
+   "properties": {
+    "cool_f": {
+     "maximum": 92,
+     "minimum": 65,
+     "type": "number"
+    },
+    "heat_f": {
+     "maximum": 80,
+     "minimum": 45,
+     "type": "number"
+    }
+   },
+   "required": [
+    "cool_f",
+    "heat_f"
+   ],
+   "title": "ComfortBand",
+   "type": "object"
+  },
+  "ComfortRow": {
+   "properties": {
+    "in_band_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "occupied_min": {
+     "type": "number"
+    },
+    "room_key": {
+     "type": "string"
+    },
+    "worst_excursion_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "in_band_pct",
+    "occupied_min",
+    "room_key",
+    "worst_excursion_f"
+   ],
+   "title": "ComfortRow",
+   "type": "object"
+  },
+  "ControlActionOut": {
+   "properties": {
+    "action": {
+     "type": "string"
+    },
+    "actor": {
+     "type": "string"
+    },
+    "before": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "channel": {
+     "type": "string"
+    },
+    "completed_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "id": {
+     "type": "integer"
+    },
+    "mode": {
+     "type": "string"
+    },
+    "readback": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "readback_ok": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "reason": {
+     "type": "string"
+    },
+    "request": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "rule": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "type": "string"
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "action",
+    "actor",
+    "before",
+    "channel",
+    "completed_at",
+    "error",
+    "id",
+    "mode",
+    "readback",
+    "readback_ok",
+    "reason",
+    "request",
+    "rule",
+    "status",
+    "ts",
+    "unit_key"
+   ],
+   "title": "ControlActionOut",
+   "type": "object"
+  },
+  "ControlSettings": {
+   "properties": {
+    "act_units": {
+     "default": [
+      "main",
+      "up",
+      "bed"
+     ],
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "comfort": {
+     "additionalProperties": {
+      "$ref": "#/$defs/UnitComfort"
+     },
+     "type": "object"
+    },
+    "hold_hours": {
+     "default": 2,
+     "maximum": 2,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "limits": {
+     "$ref": "#/$defs/HardLimits"
+    },
+    "manual_backoff_hours": {
+     "default": 4.0,
+     "maximum": 24,
+     "minimum": 0,
+     "type": "number"
+    },
+    "mode": {
+     "default": "suggest",
+     "enum": [
+      "off",
+      "suggest",
+      "act"
+     ],
+     "type": "string"
+    },
+    "schedule": {
+     "$ref": "#/$defs/Schedule"
+    }
+   },
+   "required": [
+    "act_units",
+    "comfort",
+    "hold_hours",
+    "limits",
+    "manual_backoff_hours",
+    "mode",
+    "schedule"
+   ],
+   "title": "ControlSettings",
+   "type": "object"
+  },
+  "ControllerInfo": {
+   "properties": {
+    "last_tick_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "mode": {
+     "enum": [
+      "off",
+      "suggest",
+      "act"
+     ],
+     "type": "string"
+    },
+    "policy": {
+     "$ref": "#/$defs/PolicyParams"
+    },
+    "policy_version_id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "last_tick_at",
+    "mode",
+    "policy",
+    "policy_version_id"
+   ],
+   "title": "ControllerInfo",
+   "type": "object"
+  },
+  "Coupling": {
+   "properties": {
+    "ci90": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "coef_min_per_degf": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "days": {
+     "type": "integer"
+    },
+    "interpretation": {
+     "type": "string"
+    },
+    "n_hours": {
+     "type": "integer"
+    },
+    "placebo_ci90": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "placebo_coef": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "points": {
+     "items": {
+      "$ref": "#/$defs/CouplingPoint"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "ci90",
+    "coef_min_per_degf",
+    "days",
+    "interpretation",
+    "n_hours",
+    "placebo_ci90",
+    "placebo_coef",
+    "points"
+   ],
+   "title": "Coupling",
+   "type": "object"
+  },
+  "CouplingPoint": {
+   "properties": {
+    "main_minus_up_f": {
+     "type": "number"
+    },
+    "outdoor_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "shortwave_wm2": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "up_duty_pct": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "main_minus_up_f",
+    "outdoor_f",
+    "shortwave_wm2",
+    "ts",
+    "up_duty_pct"
+   ],
+   "title": "CouplingPoint",
+   "type": "object"
+  },
+  "DailyRuntime": {
+   "properties": {
+    "aux_min": {
+     "type": "number"
+    },
+    "cdd65": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "cool_min": {
+     "type": "number"
+    },
+    "date": {
+     "format": "date",
+     "type": "string"
+    },
+    "expected_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "fan_min": {
+     "type": "number"
+    },
+    "hdd65": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "heat_min": {
+     "type": "number"
+    },
+    "maxed_min": {
+     "default": 0.0,
+     "type": "number"
+    },
+    "mode": {
+     "anyOf": [
+      {
+       "enum": [
+        "cool",
+        "heat"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "outdoor_max_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "outdoor_mean_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "aux_min",
+    "cdd65",
+    "cool_min",
+    "date",
+    "expected_min",
+    "fan_min",
+    "hdd65",
+    "heat_min",
+    "maxed_min",
+    "mode",
+    "outdoor_max_f",
+    "outdoor_mean_f",
+    "unit_key"
+   ],
+   "title": "DailyRuntime",
+   "type": "object"
+  },
+  "DecisionBody": {
+   "properties": {
+    "decision": {
+     "enum": [
+      "approve",
+      "hold",
+      "reject"
+     ],
+     "type": "string"
+    },
+    "reason": {
+     "maxLength": 2000,
+     "minLength": 3,
+     "type": "string"
+    }
+   },
+   "required": [
+    "decision",
+    "reason"
+   ],
+   "title": "DecisionBody",
+   "type": "object"
+  },
+  "DeviceBody": {
+   "properties": {
+    "device_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "device_id"
+   ],
+   "title": "DeviceBody",
+   "type": "object"
+  },
+  "DriftReport": {
+   "properties": {
+    "note": {
+     "type": "string"
+    },
+    "units": {
+     "items": {
+      "$ref": "#/$defs/DriftUnit"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "note",
+    "units"
+   ],
+   "title": "DriftReport",
+   "type": "object"
+  },
+  "DriftUnit": {
+   "properties": {
+    "drifting": {
+     "type": "boolean"
+    },
+    "mode": {
+     "enum": [
+      "cool",
+      "heat"
+     ],
+     "type": "string"
+    },
+    "recent_days": {
+     "type": "integer"
+    },
+    "resid_mean_pct": {
+     "type": "number"
+    },
+    "unit_key": {
+     "type": "string"
+    },
+    "z": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "drifting",
+    "mode",
+    "recent_days",
+    "resid_mean_pct",
+    "unit_key",
+    "z"
+   ],
+   "title": "DriftUnit",
+   "type": "object"
+  },
+  "EcobeeLoginBody": {
+   "properties": {
+    "email": {
+     "maxLength": 320,
+     "minLength": 3,
+     "type": "string"
+    },
+    "password": {
+     "maxLength": 500,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "email",
+    "password"
+   ],
+   "title": "EcobeeLoginBody",
+   "type": "object"
+  },
+  "EcobeeLoginResult": {
+   "properties": {
+    "error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "mfa_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "enum": [
+      "signed_in",
+      "mfa_required",
+      "error"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "error",
+    "mfa_type",
+    "status"
+   ],
+   "title": "EcobeeLoginResult",
+   "type": "object"
+  },
+  "EcobeeMapBody": {
+   "properties": {
+    "identifier": {
+     "type": "string"
+    },
+    "unit_key": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "identifier",
+    "unit_key"
+   ],
+   "title": "EcobeeMapBody",
+   "type": "object"
+  },
+  "EcobeeMfaBody": {
+   "properties": {
+    "code": {
+     "pattern": "^\\d{4,8}$",
+     "type": "string"
+    }
+   },
+   "required": [
+    "code"
+   ],
+   "title": "EcobeeMfaBody",
+   "type": "object"
+  },
+  "EcobeeSetup": {
+   "properties": {
+    "last_error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "mfa_pending": {
+     "type": "boolean"
+    },
+    "mfa_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "signed_in": {
+     "type": "boolean"
+    },
+    "thermostats": {
+     "items": {
+      "$ref": "#/$defs/EcobeeThermostatOut"
+     },
+     "type": "array"
+    },
+    "web_client_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "last_error",
+    "mfa_pending",
+    "mfa_type",
+    "signed_in",
+    "thermostats",
+    "web_client_id"
+   ],
+   "title": "EcobeeSetup",
+   "type": "object"
+  },
+  "EcobeeThermostatOut": {
+   "properties": {
+    "identifier": {
+     "type": "string"
+    },
+    "last_seen_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "model_number": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "name": {
+     "type": "string"
+    },
+    "sensors": {
+     "items": {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "unit_key": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "identifier",
+    "last_seen_at",
+    "model_number",
+    "name",
+    "sensors",
+    "unit_key"
+   ],
+   "title": "EcobeeThermostatOut",
+   "type": "object"
+  },
+  "ExperimentAnalysis": {
+   "properties": {
+    "checkpoint_reached": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "ci_high_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "ci_low_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "days_observed": {
+     "type": "integer"
+    },
+    "decision": {
+     "enum": [
+      "continue",
+      "stop_win",
+      "stop_futile",
+      "inconclusive",
+      "not_started"
+     ],
+     "type": "string"
+    },
+    "effect_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "note": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "checkpoint_reached",
+    "ci_high_pct",
+    "ci_low_pct",
+    "days_observed",
+    "decision",
+    "effect_pct",
+    "note"
+   ],
+   "title": "ExperimentAnalysis",
+   "type": "object"
+  },
+  "ExperimentDayOut": {
+   "properties": {
+    "actual_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "arm": {
+     "type": "string"
+    },
+    "day": {
+     "format": "date",
+     "type": "string"
+    },
+    "expected_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "included": {
+     "type": "boolean"
+    },
+    "residual_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "actual_min",
+    "arm",
+    "day",
+    "expected_min",
+    "included",
+    "residual_min"
+   ],
+   "title": "ExperimentDayOut",
+   "type": "object"
+  },
+  "ExperimentDecisionBody": {
+   "properties": {
+    "decision": {
+     "enum": [
+      "approve",
+      "reject",
+      "stop"
+     ],
+     "type": "string"
+    },
+    "reason": {
+     "maxLength": 2000,
+     "minLength": 3,
+     "type": "string"
+    }
+   },
+   "required": [
+    "decision",
+    "reason"
+   ],
+   "title": "ExperimentDecisionBody",
+   "type": "object"
+  },
+  "ExperimentDetail": {
+   "properties": {
+    "analysis": {
+     "$ref": "#/$defs/ExperimentAnalysis"
+    },
+    "experiment": {
+     "$ref": "#/$defs/ExperimentOut"
+    },
+    "schedule": {
+     "items": {
+      "$ref": "#/$defs/ExperimentDayOut"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "analysis",
+    "experiment",
+    "schedule"
+   ],
+   "title": "ExperimentDetail",
+   "type": "object"
+  },
+  "ExperimentOut": {
+   "properties": {
+    "alpha": {
+     "type": "number"
+    },
+    "arms": {
+     "items": {
+      "$ref": "#/$defs/ArmIn"
+     },
+     "type": "array"
+    },
+    "block_days": {
+     "type": "integer"
+    },
+    "checkpoints": {
+     "items": {
+      "$ref": "#/$defs/Checkpoint"
+     },
+     "type": "array"
+    },
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "end_date": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "hypothesis": {
+     "type": "string"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "metric": {
+     "type": "string"
+    },
+    "n_days": {
+     "type": "integer"
+    },
+    "name": {
+     "type": "string"
+    },
+    "proposed_by": {
+     "type": "string"
+    },
+    "start_date": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "enum": [
+      "proposed",
+      "approved",
+      "running",
+      "stopped",
+      "completed",
+      "rejected"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "alpha",
+    "arms",
+    "block_days",
+    "checkpoints",
+    "created_at",
+    "end_date",
+    "hypothesis",
+    "id",
+    "metric",
+    "n_days",
+    "name",
+    "proposed_by",
+    "start_date",
+    "status"
+   ],
+   "title": "ExperimentOut",
+   "type": "object"
+  },
+  "GuardResult": {
+   "properties": {
+    "blocked_reason": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "clamped": {
+     "default": false,
+     "type": "boolean"
+    },
+    "cool_f": {
+     "type": "number"
+    },
+    "heat_f": {
+     "type": "number"
+    },
+    "ok": {
+     "type": "boolean"
+    },
+    "violations": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "blocked_reason",
+    "clamped",
+    "cool_f",
+    "heat_f",
+    "ok",
+    "violations"
+   ],
+   "title": "GuardResult",
+   "type": "object"
+  },
+  "HardLimits": {
+   "description": "Enforced in code on every write, whoever asked for it. Owner-editable only.",
+   "properties": {
+    "max_cool_f": {
+     "default": 84.0,
+     "type": "number"
+    },
+    "max_heat_f": {
+     "default": 74.0,
+     "type": "number"
+    },
+    "max_hold_hours": {
+     "default": 2,
+     "type": "integer"
+    },
+    "max_indoor_rh": {
+     "default": 58.0,
+     "type": "number"
+    },
+    "max_step_f": {
+     "default": 2.0,
+     "type": "number"
+    },
+    "min_cool_f": {
+     "default": 70.0,
+     "type": "number"
+    },
+    "min_deadband_f": {
+     "default": 3.0,
+     "type": "number"
+    },
+    "min_heat_f": {
+     "default": 60.0,
+     "type": "number"
+    },
+    "min_hold_hours": {
+     "default": 1,
+     "type": "integer"
+    },
+    "min_minutes_between_changes": {
+     "default": 30,
+     "type": "integer"
+    },
+    "min_run_minutes": {
+     "default": 5,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "max_cool_f",
+    "max_heat_f",
+    "max_hold_hours",
+    "max_indoor_rh",
+    "max_step_f",
+    "min_cool_f",
+    "min_deadband_f",
+    "min_heat_f",
+    "min_hold_hours",
+    "min_minutes_between_changes",
+    "min_run_minutes"
+   ],
+   "title": "HardLimits",
+   "type": "object"
+  },
+  "Health": {
+   "properties": {
+    "db": {
+     "type": "boolean"
+    },
+    "ok": {
+     "type": "boolean"
+    },
+    "version": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "db",
+    "ok",
+    "version"
+   ],
+   "title": "Health",
+   "type": "object"
+  },
+  "HoldInfo": {
+   "properties": {
+    "climate_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "cool_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "end": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "heat_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "hold_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "kind": {
+     "default": "temperature",
+     "enum": [
+      "temperature",
+      "climate"
+     ],
+     "type": "string"
+    },
+    "set_by_us": {
+     "default": false,
+     "type": "boolean"
+    },
+    "start": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "climate_ref",
+    "cool_f",
+    "end",
+    "heat_f",
+    "hold_type",
+    "kind",
+    "set_by_us",
+    "start"
+   ],
+   "title": "HoldInfo",
+   "type": "object"
+  },
+  "HomekitCodeBody": {
+   "properties": {
+    "code": {
+     "pattern": "^\\d{3}-\\d{2}-\\d{3}$",
+     "type": "string"
+    },
+    "device_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "device_id",
+    "code"
+   ],
+   "title": "HomekitCodeBody",
+   "type": "object"
+  },
+  "HomekitDeviceOut": {
+   "properties": {
+    "accessories": {
+     "anyOf": [
+      {
+       "items": {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "address": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "alias": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "device_id": {
+     "type": "string"
+    },
+    "last_seen_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "model": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "name": {
+     "type": "string"
+    },
+    "online": {
+     "type": "boolean"
+    },
+    "pairing_error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "pairing_state": {
+     "type": "string"
+    },
+    "unit_key": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "unpaired": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "accessories",
+    "address",
+    "alias",
+    "device_id",
+    "last_seen_at",
+    "model",
+    "name",
+    "online",
+    "pairing_error",
+    "pairing_state",
+    "unit_key",
+    "unpaired"
+   ],
+   "title": "HomekitDeviceOut",
+   "type": "object"
+  },
+  "HomekitInfo": {
+   "properties": {
+    "enabled": {
+     "type": "boolean"
+    },
+    "last_beat_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "online": {
+     "type": "boolean"
+    },
+    "paired": {
+     "default": 0,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "enabled",
+    "last_beat_at",
+    "online",
+    "paired"
+   ],
+   "title": "HomekitInfo",
+   "type": "object"
+  },
+  "HomekitPairBody": {
+   "properties": {
+    "alias": {
+     "pattern": "^[a-z][a-z0-9_]{1,23}$",
+     "type": "string"
+    },
+    "device_id": {
+     "type": "string"
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "device_id",
+    "alias",
+    "unit_key"
+   ],
+   "title": "HomekitPairBody",
+   "type": "object"
+  },
+  "HomekitSetup": {
+   "properties": {
+    "devices": {
+     "items": {
+      "$ref": "#/$defs/HomekitDeviceOut"
+     },
+     "type": "array"
+    },
+    "enabled": {
+     "type": "boolean"
+    },
+    "service_online": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "devices",
+    "enabled",
+    "service_online"
+   ],
+   "title": "HomekitSetup",
+   "type": "object"
+  },
+  "HouseStatus": {
+   "properties": {
+    "agent": {
+     "$ref": "#/$defs/AgentInfo"
+    },
+    "alerts": {
+     "items": {
+      "$ref": "#/$defs/AlertOut"
+     },
+     "type": "array"
+    },
+    "controller": {
+     "$ref": "#/$defs/ControllerInfo"
+    },
+    "homekit": {
+     "$ref": "#/$defs/HomekitInfo"
+    },
+    "house_empty": {
+     "type": "boolean"
+    },
+    "house_empty_reason": {
+     "type": "string"
+    },
+    "location_confirmed": {
+     "type": "boolean"
+    },
+    "now": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "rooms": {
+     "items": {
+      "$ref": "#/$defs/RoomStatus"
+     },
+     "type": "array"
+    },
+    "source": {
+     "$ref": "#/$defs/SourceInfo"
+    },
+    "tz": {
+     "type": "string"
+    },
+    "units": {
+     "items": {
+      "$ref": "#/$defs/UnitLive"
+     },
+     "type": "array"
+    },
+    "weather": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/WeatherNow"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "agent",
+    "alerts",
+    "controller",
+    "homekit",
+    "house_empty",
+    "house_empty_reason",
+    "location_confirmed",
+    "now",
+    "rooms",
+    "source",
+    "tz",
+    "units",
+    "weather"
+   ],
+   "title": "HouseStatus",
+   "type": "object"
+  },
+  "Intraday": {
+   "properties": {
+    "date": {
+     "format": "date",
+     "type": "string"
+    },
+    "outdoor": {
+     "items": {
+      "$ref": "#/$defs/OutdoorPoint"
+     },
+     "type": "array"
+    },
+    "units": {
+     "items": {
+      "$ref": "#/$defs/IntradayUnit"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "date",
+    "outdoor",
+    "units"
+   ],
+   "title": "Intraday",
+   "type": "object"
+  },
+  "IntradayPoint": {
+   "properties": {
+    "aux_s": {
+     "default": 0,
+     "type": "integer"
+    },
+    "cool_s": {
+     "default": 0,
+     "type": "integer"
+    },
+    "cool_sp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "fan_s": {
+     "default": 0,
+     "type": "integer"
+    },
+    "heat_s": {
+     "default": 0,
+     "type": "integer"
+    },
+    "heat_sp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "zone_temp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "aux_s",
+    "cool_s",
+    "cool_sp_f",
+    "fan_s",
+    "heat_s",
+    "heat_sp_f",
+    "ts",
+    "zone_temp_f"
+   ],
+   "title": "IntradayPoint",
+   "type": "object"
+  },
+  "IntradayUnit": {
+   "properties": {
+    "points": {
+     "items": {
+      "$ref": "#/$defs/IntradayPoint"
+     },
+     "type": "array"
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "points",
+    "unit_key"
+   ],
+   "title": "IntradayUnit",
+   "type": "object"
+  },
+  "JobOut": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "error": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "finished_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "id": {
+     "type": "integer"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "params": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "result": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "status": {
+     "enum": [
+      "queued",
+      "running",
+      "done",
+      "failed"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "created_at",
+    "error",
+    "finished_at",
+    "id",
+    "kind",
+    "params",
+    "result",
+    "status"
+   ],
+   "title": "JobOut",
+   "type": "object"
+  },
+  "LocationSettings": {
+   "properties": {
+    "confirmed": {
+     "default": false,
+     "type": "boolean"
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "lat": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "lon": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "tz": {
+     "default": "America/Chicago",
+     "type": "string"
+    },
+    "zip": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "confirmed",
+    "label",
+    "lat",
+    "lon",
+    "tz",
+    "zip"
+   ],
+   "title": "LocationSettings",
+   "type": "object"
+  },
+  "LoginBody": {
+   "description": "Signing in. No minimum here: CLIMATE_OWNER_PASSWORD may predate the 8-character rule.",
+   "properties": {
+    "password": {
+     "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "password"
+   ],
+   "title": "LoginBody",
+   "type": "object"
+  },
+  "ManualHoldBody": {
+   "properties": {
+    "cool_f": {
+     "type": "number"
+    },
+    "heat_f": {
+     "type": "number"
+    },
+    "hours": {
+     "default": 2,
+     "maximum": 2,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "unit_key",
+    "heat_f",
+    "cool_f"
+   ],
+   "title": "ManualHoldBody",
+   "type": "object"
+  },
+  "ModeBody": {
+   "properties": {
+    "mode": {
+     "enum": [
+      "off",
+      "suggest",
+      "act"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "mode"
+   ],
+   "title": "ModeBody",
+   "type": "object"
+  },
+  "ModelFitOut": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "kind": {
+     "enum": [
+      "baseline",
+      "rc",
+      "room_offsets",
+      "occupancy_priors"
+     ],
+     "type": "string"
+    },
+    "metrics": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "mode": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "params": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "status": {
+     "type": "string"
+    },
+    "train_end": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "train_start": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "unit_key": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "created_at",
+    "id",
+    "kind",
+    "metrics",
+    "mode",
+    "notes",
+    "params",
+    "status",
+    "train_end",
+    "train_start",
+    "unit_key"
+   ],
+   "title": "ModelFitOut",
+   "type": "object"
+  },
+  "NaturalEvent": {
+   "properties": {
+    "date": {
+     "format": "date",
+     "type": "string"
+    },
+    "expected_up_runtime_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "main_floor_float_f": {
+     "type": "number"
+    },
+    "up_runtime_min": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "date",
+    "expected_up_runtime_min",
+    "main_floor_float_f",
+    "up_runtime_min"
+   ],
+   "title": "NaturalEvent",
+   "type": "object"
+  },
+  "NaturalExperiments": {
+   "properties": {
+    "bed_wing_ci90": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "bed_wing_estimate": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "ci90": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "controls_ok": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "days": {
+     "type": "integer"
+    },
+    "estimate_min_per_event": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "events": {
+     "items": {
+      "$ref": "#/$defs/NaturalEvent"
+     },
+     "type": "array"
+    },
+    "note": {
+     "type": "string"
+    },
+    "placebo_ci90": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "placebo_estimate": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "bed_wing_ci90",
+    "bed_wing_estimate",
+    "ci90",
+    "controls_ok",
+    "days",
+    "estimate_min_per_event",
+    "events",
+    "note",
+    "placebo_ci90",
+    "placebo_estimate"
+   ],
+   "title": "NaturalExperiments",
+   "type": "object"
+  },
+  "OccupancySettings": {
+   "properties": {
+    "empty_after_min": {
+     "default": 30,
+     "maximum": 240,
+     "minimum": 5,
+     "type": "integer"
+    },
+    "house_empty_after_min": {
+     "default": 45,
+     "maximum": 480,
+     "minimum": 15,
+     "type": "integer"
+    },
+    "phones_away": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "phones_updated_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "sleep_windows": {
+     "additionalProperties": {
+      "items": {
+       "$ref": "#/$defs/SleepWindow"
+      },
+      "type": "array"
+     },
+     "type": "object"
+    }
+   },
+   "required": [
+    "empty_after_min",
+    "house_empty_after_min",
+    "phones_away",
+    "phones_updated_at",
+    "sleep_windows"
+   ],
+   "title": "OccupancySettings",
+   "type": "object"
+  },
+  "OutdoorPoint": {
+   "properties": {
+    "temp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    }
+   },
+   "required": [
+    "temp_f",
+    "ts"
+   ],
+   "title": "OutdoorPoint",
+   "type": "object"
+  },
+  "PasswordBody": {
+   "description": "Choosing a password (first-run setup).",
+   "properties": {
+    "password": {
+     "maxLength": 200,
+     "minLength": 8,
+     "type": "string"
+    }
+   },
+   "required": [
+    "password"
+   ],
+   "title": "PasswordBody",
+   "type": "object"
+  },
+  "PlanOut": {
+   "properties": {
+    "at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "mode": {
+     "enum": [
+      "off",
+      "suggest",
+      "act"
+     ],
+     "type": "string"
+    },
+    "rows": {
+     "items": {
+      "$ref": "#/$defs/PlanRow"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "at",
+    "mode",
+    "rows"
+   ],
+   "title": "PlanOut",
+   "type": "object"
+  },
+  "PlanRow": {
+   "properties": {
+    "current_cool_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "current_heat_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "guard": {
+     "$ref": "#/$defs/GuardResult"
+    },
+    "target": {
+     "$ref": "#/$defs/UnitTarget"
+    },
+    "would_write": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "current_cool_f",
+    "current_heat_f",
+    "guard",
+    "target",
+    "would_write"
+   ],
+   "title": "PlanRow",
+   "type": "object"
+  },
+  "PolicyParams": {
+   "description": "Tunable policy. Defaults are the blueprint's starting values.",
+   "properties": {
+    "bed_wing_independent": {
+     "default": true,
+     "type": "boolean"
+    },
+    "linked_floors_enabled": {
+     "default": true,
+     "type": "boolean"
+    },
+    "linked_heat_gap_f": {
+     "default": 2.0,
+     "maximum": 6.0,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "linked_offset_f": {
+     "default": 1.0,
+     "maximum": 4.0,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "precool_degrees_f": {
+     "default": 1.0,
+     "maximum": 3.0,
+     "minimum": 0.0,
+     "type": "number"
+    },
+    "precool_enabled": {
+     "default": false,
+     "type": "boolean"
+    },
+    "precool_min_forecast_high_f": {
+     "default": 90.0,
+     "maximum": 115.0,
+     "minimum": 70.0,
+     "type": "number"
+    },
+    "precool_start_hour": {
+     "default": 13,
+     "maximum": 18,
+     "minimum": 8,
+     "type": "integer"
+    },
+    "recovery_lead_min": {
+     "default": 20,
+     "maximum": 60,
+     "minimum": 0,
+     "type": "integer"
+    },
+    "setback_gap_f": {
+     "default": 2.0,
+     "maximum": 4.0,
+     "minimum": 0.0,
+     "type": "number"
+    }
+   },
+   "required": [
+    "bed_wing_independent",
+    "linked_floors_enabled",
+    "linked_heat_gap_f",
+    "linked_offset_f",
+    "precool_degrees_f",
+    "precool_enabled",
+    "precool_min_forecast_high_f",
+    "precool_start_hour",
+    "recovery_lead_min",
+    "setback_gap_f"
+   ],
+   "title": "PolicyParams",
+   "type": "object"
+  },
+  "PowerOut": {
+   "properties": {
+    "alpha": {
+     "type": "number"
+    },
+    "days_per_arm": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "effect_pct": {
+     "type": "number"
+    },
+    "note": {
+     "type": "string"
+    },
+    "power": {
+     "type": "number"
+    },
+    "resid_cv": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "total_days": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "alpha",
+    "days_per_arm",
+    "effect_pct",
+    "note",
+    "power",
+    "resid_cv",
+    "total_days"
+   ],
+   "title": "PowerOut",
+   "type": "object"
+  },
+  "PresenceBody": {
+   "properties": {
+    "phones_away": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   },
+   "required": [
+    "phones_away"
+   ],
+   "title": "PresenceBody",
+   "type": "object"
+  },
+  "ProposeExperimentBody": {
+   "properties": {
+    "alpha": {
+     "default": 0.1,
+     "exclusiveMaximum": 0.5,
+     "exclusiveMinimum": 0,
+     "type": "number"
+    },
+    "arms": {
+     "items": {
+      "$ref": "#/$defs/ArmIn"
+     },
+     "maxItems": 3,
+     "minItems": 2,
+     "type": "array"
+    },
+    "block_days": {
+     "default": 2,
+     "maximum": 7,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "hypothesis": {
+     "maxLength": 2000,
+     "minLength": 3,
+     "type": "string"
+    },
+    "n_checkpoints": {
+     "default": 3,
+     "maximum": 3,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "n_days": {
+     "default": 28,
+     "maximum": 180,
+     "minimum": 6,
+     "type": "integer"
+    },
+    "name": {
+     "maxLength": 120,
+     "minLength": 3,
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "hypothesis",
+    "arms"
+   ],
+   "title": "ProposeExperimentBody",
+   "type": "object"
+  },
+  "ProposePolicyBody": {
+   "properties": {
+    "params": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "rationale": {
+     "default": "",
+     "maxLength": 4000,
+     "type": "string"
+    },
+    "title": {
+     "maxLength": 200,
+     "minLength": 3,
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "params"
+   ],
+   "title": "ProposePolicyBody",
+   "type": "object"
+  },
+  "PublishReportBody": {
+   "properties": {
+    "agent_run_id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "body_md": {
+     "maxLength": 40000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "data": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "kind": {
+     "enum": [
+      "daily",
+      "weekly",
+      "nightly",
+      "anomaly",
+      "note"
+     ],
+     "type": "string"
+    },
+    "period_end": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "period_start": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "title": {
+     "maxLength": 200,
+     "minLength": 3,
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind",
+    "title",
+    "body_md"
+   ],
+   "title": "PublishReportBody",
+   "type": "object"
+  },
+  "ReportOut": {
+   "properties": {
+    "agent_run_id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "author": {
+     "enum": [
+      "system",
+      "claude"
+     ],
+     "type": "string"
+    },
+    "body_md": {
+     "type": "string"
+    },
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "data": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "kind": {
+     "enum": [
+      "daily",
+      "weekly",
+      "nightly",
+      "anomaly",
+      "note"
+     ],
+     "type": "string"
+    },
+    "period_end": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "period_start": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "title": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "agent_run_id",
+    "author",
+    "body_md",
+    "created_at",
+    "data",
+    "id",
+    "kind",
+    "period_end",
+    "period_start",
+    "title"
+   ],
+   "title": "ReportOut",
+   "type": "object"
+  },
+  "RoomHistory": {
+   "properties": {
+    "hours": {
+     "type": "integer"
+    },
+    "points": {
+     "items": {
+      "$ref": "#/$defs/RoomPoint"
+     },
+     "type": "array"
+    },
+    "room_key": {
+     "type": "string"
+    },
+    "setpoints": {
+     "items": {
+      "$ref": "#/$defs/SetpointPoint"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "hours",
+    "points",
+    "room_key",
+    "setpoints"
+   ],
+   "title": "RoomHistory",
+   "type": "object"
+  },
+  "RoomOut": {
+   "properties": {
+    "floor": {
+     "type": "string"
+    },
+    "has_comfort_target": {
+     "type": "boolean"
+    },
+    "has_sensor": {
+     "type": "boolean"
+    },
+    "is_sleep_room": {
+     "type": "boolean"
+    },
+    "key": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "notes": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "floor",
+    "has_comfort_target",
+    "has_sensor",
+    "is_sleep_room",
+    "key",
+    "name",
+    "notes",
+    "unit_key"
+   ],
+   "title": "RoomOut",
+   "type": "object"
+  },
+  "RoomPoint": {
+   "properties": {
+    "occupied": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "state": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "temp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    }
+   },
+   "required": [
+    "occupied",
+    "state",
+    "temp_f",
+    "ts"
+   ],
+   "title": "RoomPoint",
+   "type": "object"
+  },
+  "RoomStatus": {
+   "properties": {
+    "confidence": {
+     "default": 0.0,
+     "type": "number"
+    },
+    "floor": {
+     "type": "string"
+    },
+    "has_comfort_target": {
+     "type": "boolean"
+    },
+    "has_sensor": {
+     "type": "boolean"
+    },
+    "humidity": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "is_priority": {
+     "default": false,
+     "type": "boolean"
+    },
+    "is_sleep_room": {
+     "type": "boolean"
+    },
+    "name": {
+     "type": "string"
+    },
+    "offset_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "reason": {
+     "default": "",
+     "type": "string"
+    },
+    "room_key": {
+     "type": "string"
+    },
+    "seconds_since_motion": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "sensor_keys": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "since": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "stale": {
+     "default": false,
+     "type": "boolean"
+    },
+    "state": {
+     "default": "unknown",
+     "enum": [
+      "occupied",
+      "asleep",
+      "empty",
+      "unknown",
+      "no_target"
+     ],
+     "type": "string"
+    },
+    "temp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "confidence",
+    "floor",
+    "has_comfort_target",
+    "has_sensor",
+    "humidity",
+    "is_priority",
+    "is_sleep_room",
+    "name",
+    "offset_f",
+    "reason",
+    "room_key",
+    "seconds_since_motion",
+    "sensor_keys",
+    "since",
+    "stale",
+    "state",
+    "temp_f",
+    "unit_key"
+   ],
+   "title": "RoomStatus",
+   "type": "object"
+  },
+  "RunBody": {
+   "properties": {
+    "kind": {
+     "enum": [
+      "nightly",
+      "weekly"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind"
+   ],
+   "title": "RunBody",
+   "type": "object"
+  },
+  "Savings": {
+   "properties": {
+    "actual_min": {
+     "type": "number"
+    },
+    "baseline_ok": {
+     "type": "boolean"
+    },
+    "by_unit": {
+     "items": {
+      "$ref": "#/$defs/SavingsByUnit"
+     },
+     "type": "array"
+    },
+    "ci90_high_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "ci90_low_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "days": {
+     "items": {
+      "$ref": "#/$defs/SavingsDay"
+     },
+     "type": "array"
+    },
+    "end": {
+     "format": "date",
+     "type": "string"
+    },
+    "expected_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "n_days": {
+     "type": "integer"
+    },
+    "note": {
+     "type": "string"
+    },
+    "savings_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "savings_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "start": {
+     "format": "date",
+     "type": "string"
+    }
+   },
+   "required": [
+    "actual_min",
+    "baseline_ok",
+    "by_unit",
+    "ci90_high_pct",
+    "ci90_low_pct",
+    "days",
+    "end",
+    "expected_min",
+    "n_days",
+    "note",
+    "savings_min",
+    "savings_pct",
+    "start"
+   ],
+   "title": "Savings",
+   "type": "object"
+  },
+  "SavingsByUnit": {
+   "properties": {
+    "actual_min": {
+     "type": "number"
+    },
+    "expected_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "savings_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "actual_min",
+    "expected_min",
+    "savings_pct",
+    "unit_key"
+   ],
+   "title": "SavingsByUnit",
+   "type": "object"
+  },
+  "SavingsDay": {
+   "properties": {
+    "actual_min": {
+     "type": "number"
+    },
+    "date": {
+     "format": "date",
+     "type": "string"
+    },
+    "expected_min": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "outdoor_mean_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "actual_min",
+    "date",
+    "expected_min",
+    "outdoor_mean_f"
+   ],
+   "title": "SavingsDay",
+   "type": "object"
+  },
+  "Schedule": {
+   "description": "Household rhythm used for room priorities (blueprint \u00a73). Days: Monday=0 .. Sunday=6.",
+   "properties": {
+    "evening_start": {
+     "default": "17:00",
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    },
+    "office_days": {
+     "default": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "items": {
+      "type": "integer"
+     },
+     "type": "array"
+    },
+    "office_end": {
+     "default": "17:00",
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    },
+    "office_start": {
+     "default": "08:00",
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    },
+    "school_days": {
+     "default": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "items": {
+      "type": "integer"
+     },
+     "type": "array"
+    },
+    "school_end": {
+     "default": "15:00",
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    },
+    "school_start": {
+     "default": "08:00",
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    }
+   },
+   "required": [
+    "evening_start",
+    "office_days",
+    "office_end",
+    "office_start",
+    "school_days",
+    "school_end",
+    "school_start"
+   ],
+   "title": "Schedule",
+   "type": "object"
+  },
+  "SensorMapBody": {
+   "properties": {
+    "ecobee_sensor_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "homekit_aid": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "sensor_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "sensor_key"
+   ],
+   "title": "SensorMapBody",
+   "type": "object"
+  },
+  "SensorOut": {
+   "properties": {
+    "ecobee_sensor_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "has_humidity": {
+     "type": "boolean"
+    },
+    "has_occupancy": {
+     "type": "boolean"
+    },
+    "homekit_aid": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "key": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "room_key": {
+     "type": "string"
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ecobee_sensor_id",
+    "has_humidity",
+    "has_occupancy",
+    "homekit_aid",
+    "key",
+    "kind",
+    "name",
+    "room_key",
+    "unit_key"
+   ],
+   "title": "SensorOut",
+   "type": "object"
+  },
+  "SetpointPoint": {
+   "properties": {
+    "cool_sp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "heat_sp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    }
+   },
+   "required": [
+    "cool_sp_f",
+    "heat_sp_f",
+    "ts"
+   ],
+   "title": "SetpointPoint",
+   "type": "object"
+  },
+  "SettingsOut": {
+   "properties": {
+    "agent": {
+     "$ref": "#/$defs/AgentSettings"
+    },
+    "control": {
+     "$ref": "#/$defs/ControlSettings"
+    },
+    "location": {
+     "$ref": "#/$defs/LocationSettings"
+    },
+    "occupancy": {
+     "$ref": "#/$defs/OccupancySettings"
+    },
+    "owner_only_params": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "policy": {
+     "$ref": "#/$defs/PolicyParams"
+    },
+    "policy_version_id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "signoff_ranges": {
+     "additionalProperties": {
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "number"
+       }
+      ],
+      "type": "array"
+     },
+     "type": "object"
+    }
+   },
+   "required": [
+    "agent",
+    "control",
+    "location",
+    "occupancy",
+    "owner_only_params",
+    "policy",
+    "policy_version_id",
+    "signoff_ranges"
+   ],
+   "title": "SettingsOut",
+   "type": "object"
+  },
+  "SettingsUpdate": {
+   "properties": {
+    "agent": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/AgentSettings"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "control": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/ControlSettings"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "location": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/LocationSettings"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "occupancy": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/OccupancySettings"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "title": "SettingsUpdate",
+   "type": "object"
+  },
+  "SetupState": {
+   "properties": {
+    "ecobee": {
+     "$ref": "#/$defs/EcobeeSetup"
+    },
+    "homekit": {
+     "$ref": "#/$defs/HomekitSetup"
+    },
+    "location": {
+     "$ref": "#/$defs/LocationSettings"
+    },
+    "rooms": {
+     "items": {
+      "$ref": "#/$defs/RoomOut"
+     },
+     "type": "array"
+    },
+    "secrets_ok": {
+     "type": "boolean"
+    },
+    "sensors": {
+     "items": {
+      "$ref": "#/$defs/SensorOut"
+     },
+     "type": "array"
+    },
+    "source": {
+     "$ref": "#/$defs/SourceSettings"
+    },
+    "units": {
+     "items": {
+      "$ref": "#/$defs/UnitOut"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "ecobee",
+    "homekit",
+    "location",
+    "rooms",
+    "secrets_ok",
+    "sensors",
+    "source",
+    "units"
+   ],
+   "title": "SetupState",
+   "type": "object"
+  },
+  "SimPoint": {
+   "properties": {
+    "runtime_s": {
+     "type": "number"
+    },
+    "temp_f": {
+     "type": "number"
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    }
+   },
+   "required": [
+    "runtime_s",
+    "temp_f",
+    "ts"
+   ],
+   "title": "SimPoint",
+   "type": "object"
+  },
+  "SimulateBody": {
+   "properties": {
+    "date": {
+     "anyOf": [
+      {
+       "format": "date",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "params": {
+     "additionalProperties": true,
+     "type": "object"
+    }
+   },
+   "title": "SimulateBody",
+   "type": "object"
+  },
+  "SimulateOut": {
+   "properties": {
+    "date": {
+     "format": "date",
+     "type": "string"
+    },
+    "model": {
+     "enum": [
+      "rc",
+      "rule_of_thumb"
+     ],
+     "type": "string"
+    },
+    "note": {
+     "type": "string"
+    },
+    "total_runtime_min": {
+     "type": "number"
+    },
+    "units": {
+     "additionalProperties": {
+      "items": {
+       "$ref": "#/$defs/SimPoint"
+      },
+      "type": "array"
+     },
+     "type": "object"
+    }
+   },
+   "required": [
+    "date",
+    "model",
+    "note",
+    "total_runtime_min",
+    "units"
+   ],
+   "title": "SimulateOut",
+   "type": "object"
+  },
+  "SleepWindow": {
+   "properties": {
+    "days": {
+     "default": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+     ],
+     "items": {
+      "type": "integer"
+     },
+     "type": "array"
+    },
+    "end": {
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    },
+    "start": {
+     "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+     "type": "string"
+    }
+   },
+   "required": [
+    "days",
+    "end",
+    "start"
+   ],
+   "title": "SleepWindow",
+   "type": "object"
+  },
+  "SourceBody": {
+   "properties": {
+    "homekit_enabled": {
+     "default": false,
+     "type": "boolean"
+    },
+    "kind": {
+     "enum": [
+      "simulator",
+      "ecobee"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind"
+   ],
+   "title": "SourceBody",
+   "type": "object"
+  },
+  "SourceInfo": {
+   "properties": {
+    "detail": {
+     "default": "",
+     "type": "string"
+    },
+    "kind": {
+     "enum": [
+      "simulator",
+      "ecobee"
+     ],
+     "type": "string"
+    },
+    "last_success_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ok": {
+     "type": "boolean"
+    },
+    "signed_in": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "detail",
+    "kind",
+    "last_success_at",
+    "ok",
+    "signed_in"
+   ],
+   "title": "SourceInfo",
+   "type": "object"
+  },
+  "SourceSettings": {
+   "properties": {
+    "cloud_circuit_open_until": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "homekit_enabled": {
+     "default": false,
+     "type": "boolean"
+    },
+    "kind": {
+     "default": "simulator",
+     "enum": [
+      "simulator",
+      "ecobee"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "cloud_circuit_open_until",
+    "homekit_enabled",
+    "kind"
+   ],
+   "title": "SourceSettings",
+   "type": "object"
+  },
+  "UnitBody": {
+   "properties": {
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "unit_key"
+   ],
+   "title": "UnitBody",
+   "type": "object"
+  },
+  "UnitComfort": {
+   "properties": {
+    "away": {
+     "$ref": "#/$defs/ComfortBand"
+    },
+    "day": {
+     "$ref": "#/$defs/ComfortBand"
+    },
+    "night": {
+     "$ref": "#/$defs/ComfortBand"
+    }
+   },
+   "required": [
+    "away",
+    "day",
+    "night"
+   ],
+   "title": "UnitComfort",
+   "type": "object"
+  },
+  "UnitLive": {
+   "properties": {
+    "age_s": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "call": {
+     "default": "unknown",
+     "enum": [
+      "cool",
+      "heat",
+      "fan",
+      "idle",
+      "unknown"
+     ],
+     "type": "string"
+    },
+    "climate_ref": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "connected": {
+     "default": false,
+     "type": "boolean"
+    },
+    "cool_sp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "duty_last_hour_pct": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "heat_sp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "hold": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/HoldInfo"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "hvac_mode": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "maxed_minutes_today": {
+     "default": 0.0,
+     "type": "number"
+    },
+    "name": {
+     "type": "string"
+    },
+    "running": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "target": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/UnitTarget"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "today_runtime_min": {
+     "default": 0.0,
+     "type": "number"
+    },
+    "unit_key": {
+     "type": "string"
+    },
+    "zone_humidity": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "zone_temp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "age_s",
+    "call",
+    "climate_ref",
+    "connected",
+    "cool_sp_f",
+    "duty_last_hour_pct",
+    "heat_sp_f",
+    "hold",
+    "hvac_mode",
+    "maxed_minutes_today",
+    "name",
+    "running",
+    "target",
+    "today_runtime_min",
+    "unit_key",
+    "zone_humidity",
+    "zone_temp_f"
+   ],
+   "title": "UnitLive",
+   "type": "object"
+  },
+  "UnitOut": {
+   "properties": {
+    "ecobee_identifier": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "equipment": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "homekit_device_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "key": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "thermostat_model": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "thermostat_room_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ecobee_identifier",
+    "equipment",
+    "homekit_device_id",
+    "key",
+    "name",
+    "thermostat_model",
+    "thermostat_room_key"
+   ],
+   "title": "UnitOut",
+   "type": "object"
+  },
+  "UnitTarget": {
+   "properties": {
+    "cool_f": {
+     "type": "number"
+    },
+    "desired": {
+     "default": "hold",
+     "enum": [
+      "hold",
+      "program"
+     ],
+     "type": "string"
+    },
+    "heat_f": {
+     "type": "number"
+    },
+    "priority_room": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "reason": {
+     "type": "string"
+    },
+    "rule": {
+     "enum": [
+      "comfort",
+      "sleep",
+      "linked_floors",
+      "house_setback",
+      "recovery",
+      "precool",
+      "independent",
+      "hold_off"
+     ],
+     "type": "string"
+    },
+    "unit_key": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "cool_f",
+    "desired",
+    "heat_f",
+    "priority_room",
+    "reason",
+    "rule",
+    "unit_key"
+   ],
+   "title": "UnitTarget",
+   "type": "object"
+  },
+  "Waterfall": {
+   "properties": {
+    "items": {
+     "items": {
+      "$ref": "#/$defs/WaterfallItem"
+     },
+     "type": "array"
+    },
+    "note": {
+     "type": "string"
+    },
+    "prev_week_start": {
+     "format": "date",
+     "type": "string"
+    },
+    "strategy_ci90_min": {
+     "anyOf": [
+      {
+       "maxItems": 2,
+       "minItems": 2,
+       "prefixItems": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "week_start": {
+     "format": "date",
+     "type": "string"
+    }
+   },
+   "required": [
+    "items",
+    "note",
+    "prev_week_start",
+    "strategy_ci90_min",
+    "week_start"
+   ],
+   "title": "Waterfall",
+   "type": "object"
+  },
+  "WaterfallItem": {
+   "properties": {
+    "kind": {
+     "enum": [
+      "total",
+      "delta"
+     ],
+     "type": "string"
+    },
+    "label": {
+     "type": "string"
+    },
+    "minutes": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "kind",
+    "label",
+    "minutes"
+   ],
+   "title": "WaterfallItem",
+   "type": "object"
+  },
+  "WeatherNow": {
+   "properties": {
+    "attribution": {
+     "default": "Weather data by Open-Meteo.com",
+     "type": "string"
+    },
+    "cloud_cover": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "forecast_high_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "forecast_low_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "rh": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "shortwave_wm2": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "source": {
+     "type": "string"
+    },
+    "temp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "attribution",
+    "cloud_cover",
+    "forecast_high_f",
+    "forecast_low_f",
+    "rh",
+    "shortwave_wm2",
+    "source",
+    "temp_f"
+   ],
+   "title": "WeatherNow",
+   "type": "object"
+  },
+  "WeatherOut": {
+   "properties": {
+    "attribution": {
+     "default": "Weather data by Open-Meteo.com",
+     "type": "string"
+    },
+    "points": {
+     "items": {
+      "$ref": "#/$defs/WeatherPoint"
+     },
+     "type": "array"
+    },
+    "source": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "attribution",
+    "points",
+    "source"
+   ],
+   "title": "WeatherOut",
+   "type": "object"
+  },
+  "WeatherPoint": {
+   "properties": {
+    "cloud_cover": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "kind": {
+     "enum": [
+      "observed",
+      "forecast"
+     ],
+     "type": "string"
+    },
+    "rh": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "shortwave_wm2": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "temp_f": {
+     "anyOf": [
+      {
+       "type": "number"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    }
+   },
+   "required": [
+    "cloud_cover",
+    "kind",
+    "rh",
+    "shortwave_wm2",
+    "temp_f",
+    "ts"
+   ],
+   "title": "WeatherPoint",
+   "type": "object"
+  },
+  "WsEvent": {
+   "description": "Pushed on /api/ws. Clients refetch what changed; payloads stay tiny.",
+   "properties": {
+    "id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "type": {
+     "enum": [
+      "status",
+      "action",
+      "agent_run",
+      "alert",
+      "homekit",
+      "change",
+      "report",
+      "ping"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "type"
+   ],
+   "title": "WsEvent",
+   "type": "object"
+  }
+ },
+ "additionalProperties": false,
+ "properties": {
+  "AgentFinishBody": {
+   "$ref": "#/$defs/AgentFinishBody"
+  },
+  "AgentHeartbeatBody": {
+   "$ref": "#/$defs/AgentHeartbeatBody"
+  },
+  "AgentInfo": {
+   "$ref": "#/$defs/AgentInfo"
+  },
+  "AgentRunOut": {
+   "$ref": "#/$defs/AgentRunOut"
+  },
+  "AgentSettings": {
+   "$ref": "#/$defs/AgentSettings"
+  },
+  "AlertOut": {
+   "$ref": "#/$defs/AlertOut"
+  },
+  "ArmIn": {
+   "$ref": "#/$defs/ArmIn"
+  },
+  "AskBody": {
+   "$ref": "#/$defs/AskBody"
+  },
+  "AuthState": {
+   "$ref": "#/$defs/AuthState"
+  },
+  "BacktestBody": {
+   "$ref": "#/$defs/BacktestBody"
+  },
+  "BacktestOut": {
+   "$ref": "#/$defs/BacktestOut"
+  },
+  "BaselineOut": {
+   "$ref": "#/$defs/BaselineOut"
+  },
+  "ChangeOut": {
+   "$ref": "#/$defs/ChangeOut"
+  },
+  "Checkpoint": {
+   "$ref": "#/$defs/Checkpoint"
+  },
+  "ComfortBand": {
+   "$ref": "#/$defs/ComfortBand"
+  },
+  "ComfortRow": {
+   "$ref": "#/$defs/ComfortRow"
+  },
+  "ControlActionOut": {
+   "$ref": "#/$defs/ControlActionOut"
+  },
+  "ControlSettings": {
+   "$ref": "#/$defs/ControlSettings"
+  },
+  "ControllerInfo": {
+   "$ref": "#/$defs/ControllerInfo"
+  },
+  "Coupling": {
+   "$ref": "#/$defs/Coupling"
+  },
+  "CouplingPoint": {
+   "$ref": "#/$defs/CouplingPoint"
+  },
+  "DailyRuntime": {
+   "$ref": "#/$defs/DailyRuntime"
+  },
+  "DecisionBody": {
+   "$ref": "#/$defs/DecisionBody"
+  },
+  "DeviceBody": {
+   "$ref": "#/$defs/DeviceBody"
+  },
+  "DriftReport": {
+   "$ref": "#/$defs/DriftReport"
+  },
+  "DriftUnit": {
+   "$ref": "#/$defs/DriftUnit"
+  },
+  "EcobeeLoginBody": {
+   "$ref": "#/$defs/EcobeeLoginBody"
+  },
+  "EcobeeLoginResult": {
+   "$ref": "#/$defs/EcobeeLoginResult"
+  },
+  "EcobeeMapBody": {
+   "$ref": "#/$defs/EcobeeMapBody"
+  },
+  "EcobeeMfaBody": {
+   "$ref": "#/$defs/EcobeeMfaBody"
+  },
+  "EcobeeSetup": {
+   "$ref": "#/$defs/EcobeeSetup"
+  },
+  "EcobeeThermostatOut": {
+   "$ref": "#/$defs/EcobeeThermostatOut"
+  },
+  "ExperimentAnalysis": {
+   "$ref": "#/$defs/ExperimentAnalysis"
+  },
+  "ExperimentDayOut": {
+   "$ref": "#/$defs/ExperimentDayOut"
+  },
+  "ExperimentDecisionBody": {
+   "$ref": "#/$defs/ExperimentDecisionBody"
+  },
+  "ExperimentDetail": {
+   "$ref": "#/$defs/ExperimentDetail"
+  },
+  "ExperimentOut": {
+   "$ref": "#/$defs/ExperimentOut"
+  },
+  "GuardResult": {
+   "$ref": "#/$defs/GuardResult"
+  },
+  "HardLimits": {
+   "$ref": "#/$defs/HardLimits"
+  },
+  "Health": {
+   "$ref": "#/$defs/Health"
+  },
+  "HoldInfo": {
+   "$ref": "#/$defs/HoldInfo"
+  },
+  "HomekitCodeBody": {
+   "$ref": "#/$defs/HomekitCodeBody"
+  },
+  "HomekitDeviceOut": {
+   "$ref": "#/$defs/HomekitDeviceOut"
+  },
+  "HomekitInfo": {
+   "$ref": "#/$defs/HomekitInfo"
+  },
+  "HomekitPairBody": {
+   "$ref": "#/$defs/HomekitPairBody"
+  },
+  "HomekitSetup": {
+   "$ref": "#/$defs/HomekitSetup"
+  },
+  "HouseStatus": {
+   "$ref": "#/$defs/HouseStatus"
+  },
+  "Intraday": {
+   "$ref": "#/$defs/Intraday"
+  },
+  "IntradayPoint": {
+   "$ref": "#/$defs/IntradayPoint"
+  },
+  "IntradayUnit": {
+   "$ref": "#/$defs/IntradayUnit"
+  },
+  "JobOut": {
+   "$ref": "#/$defs/JobOut"
+  },
+  "LocationSettings": {
+   "$ref": "#/$defs/LocationSettings"
+  },
+  "LoginBody": {
+   "$ref": "#/$defs/LoginBody"
+  },
+  "ManualHoldBody": {
+   "$ref": "#/$defs/ManualHoldBody"
+  },
+  "ModeBody": {
+   "$ref": "#/$defs/ModeBody"
+  },
+  "ModelFitOut": {
+   "$ref": "#/$defs/ModelFitOut"
+  },
+  "NaturalEvent": {
+   "$ref": "#/$defs/NaturalEvent"
+  },
+  "NaturalExperiments": {
+   "$ref": "#/$defs/NaturalExperiments"
+  },
+  "OccupancySettings": {
+   "$ref": "#/$defs/OccupancySettings"
+  },
+  "OutdoorPoint": {
+   "$ref": "#/$defs/OutdoorPoint"
+  },
+  "PasswordBody": {
+   "$ref": "#/$defs/PasswordBody"
+  },
+  "PlanOut": {
+   "$ref": "#/$defs/PlanOut"
+  },
+  "PlanRow": {
+   "$ref": "#/$defs/PlanRow"
+  },
+  "PolicyParams": {
+   "$ref": "#/$defs/PolicyParams"
+  },
+  "PowerOut": {
+   "$ref": "#/$defs/PowerOut"
+  },
+  "PresenceBody": {
+   "$ref": "#/$defs/PresenceBody"
+  },
+  "ProposeExperimentBody": {
+   "$ref": "#/$defs/ProposeExperimentBody"
+  },
+  "ProposePolicyBody": {
+   "$ref": "#/$defs/ProposePolicyBody"
+  },
+  "PublishReportBody": {
+   "$ref": "#/$defs/PublishReportBody"
+  },
+  "ReportOut": {
+   "$ref": "#/$defs/ReportOut"
+  },
+  "RoomHistory": {
+   "$ref": "#/$defs/RoomHistory"
+  },
+  "RoomOut": {
+   "$ref": "#/$defs/RoomOut"
+  },
+  "RoomPoint": {
+   "$ref": "#/$defs/RoomPoint"
+  },
+  "RoomStatus": {
+   "$ref": "#/$defs/RoomStatus"
+  },
+  "RunBody": {
+   "$ref": "#/$defs/RunBody"
+  },
+  "Savings": {
+   "$ref": "#/$defs/Savings"
+  },
+  "SavingsByUnit": {
+   "$ref": "#/$defs/SavingsByUnit"
+  },
+  "SavingsDay": {
+   "$ref": "#/$defs/SavingsDay"
+  },
+  "Schedule": {
+   "$ref": "#/$defs/Schedule"
+  },
+  "SensorMapBody": {
+   "$ref": "#/$defs/SensorMapBody"
+  },
+  "SensorOut": {
+   "$ref": "#/$defs/SensorOut"
+  },
+  "SetpointPoint": {
+   "$ref": "#/$defs/SetpointPoint"
+  },
+  "SettingsOut": {
+   "$ref": "#/$defs/SettingsOut"
+  },
+  "SettingsUpdate": {
+   "$ref": "#/$defs/SettingsUpdate"
+  },
+  "SetupState": {
+   "$ref": "#/$defs/SetupState"
+  },
+  "SimPoint": {
+   "$ref": "#/$defs/SimPoint"
+  },
+  "SimulateBody": {
+   "$ref": "#/$defs/SimulateBody"
+  },
+  "SimulateOut": {
+   "$ref": "#/$defs/SimulateOut"
+  },
+  "SleepWindow": {
+   "$ref": "#/$defs/SleepWindow"
+  },
+  "SourceBody": {
+   "$ref": "#/$defs/SourceBody"
+  },
+  "SourceInfo": {
+   "$ref": "#/$defs/SourceInfo"
+  },
+  "SourceSettings": {
+   "$ref": "#/$defs/SourceSettings"
+  },
+  "UnitBody": {
+   "$ref": "#/$defs/UnitBody"
+  },
+  "UnitComfort": {
+   "$ref": "#/$defs/UnitComfort"
+  },
+  "UnitLive": {
+   "$ref": "#/$defs/UnitLive"
+  },
+  "UnitOut": {
+   "$ref": "#/$defs/UnitOut"
+  },
+  "UnitTarget": {
+   "$ref": "#/$defs/UnitTarget"
+  },
+  "Waterfall": {
+   "$ref": "#/$defs/Waterfall"
+  },
+  "WaterfallItem": {
+   "$ref": "#/$defs/WaterfallItem"
+  },
+  "WeatherNow": {
+   "$ref": "#/$defs/WeatherNow"
+  },
+  "WeatherOut": {
+   "$ref": "#/$defs/WeatherOut"
+  },
+  "WeatherPoint": {
+   "$ref": "#/$defs/WeatherPoint"
+  },
+  "WsEvent": {
+   "$ref": "#/$defs/WsEvent"
+  }
+ },
+ "title": "ApiTypes",
+ "type": "object"
+}
