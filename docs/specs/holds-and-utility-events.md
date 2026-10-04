@@ -78,8 +78,16 @@ setting (`VENDOR_ECOBEE_CURRENT_MODE`) but no ecobee holds. If it differs from w
 HomeKit write set (before that write's `until`), or the HomeKit target temperatures change away
 from ours, someone picked it by hand: the homekit service records a person hold for the unit
 (same `MANUAL_KIND` detection row, `by='thermostat'`, `until` = None) so the controller stands
-aside; it ends when the cloud returns and shows the real hold state. Document the limits in
-`docs/HOMEKIT.md`.
+aside; it ends when the cloud returns and shows the real hold state, and never comes back in a
+later outage (HomeKit snapshots carry `settings['homekit_since']`; older rows are ignored). The
+service reads a unit fresh before claiming a controller row for it, fails controller rows once the
+mode is no longer `act`, and runs the owner's Back to automatic / Resume schedule (queued on
+channel `homekit` during the fallback) as a clear-hold. Limits: `docs/HOMEKIT.md`.
+
+**Pre-cooled holds never run into an event.** Besides `event_prep`, the hot-day pre-cool rule
+(rule 4) is capped to end before the unit's next announced utility event, and the controller
+pulls back such a hold of its own (a resume, allowed inside the rate limit) when an event is
+announced or moved to start before it ends.
 
 ## 2. Utility events (demand response)
 
@@ -103,10 +111,18 @@ stands down; the only ways out are opt-outs ecobee records.
   templates or past ones). `UnitSnapshot.utility` from `includeUtility` (None when the name is
   empty). `settings['drAccept']` in the curated settings. `ecobee_thermostats.settings` also stores
   `utility` (dict or null) and `drAccept` for Setup.
-- `opt_out_event(unit_key, reason)`: fresh GET; refuse unless the top running event is
-  `demandResponse`; refuse (request `refused=True`, error says mandatory) when `isOptional` is
-  False; post `resumeProgram` `resumeAll=false`; read back that no DR event runs (twice, like
-  holds). Never touches a plain hold underneath. `resume_program` keeps refusing events.
+- `opt_out_event(unit_key, reason, *, link_ref, name, start)`: fresh GET; refuse unless the top
+  running event is `demandResponse`; refuse (`other_event`) when it is a different event than the
+  one being skipped (linkRef, else name + start); refuse (request `refused=True`, error says
+  mandatory) when `isOptional` is False; post `resumeProgram` `resumeAll=false`; read back that
+  THIS event no longer runs (twice, retrying a failed read). Never touches a plain hold
+  underneath. `resume_program` refuses events, except that the owner's forced resume (Back to
+  automatic / Resume schedule) also clears a Quick Save or Smart Away/Home.
+- Controller writes never replace what a person did since the last poll: `set_hold` (with
+  `HoldRequest.by_owner` false) and `update_sensor_sets` decide on a fresh read and post nothing
+  over a person's hold or Quick Save (`refused`, `not_ours`; the controller logs it as that
+  person's hold) or over vacation / utility / unknown events (`refused`, `event`). The owner's
+  holds skip the person check.
 - `apply_settings(unit_key, settings, reason)`: `updateThermostat` with only `autoAway` and/or
   `followMeComfort` for that one thermostat, read back. For hand-back.
 - Simulator: events too. `Simulator.inject_event(unit_key, ThermostatEvent)` and CLI
@@ -137,7 +153,8 @@ stands down; the only ways out are opt-outs ecobee records.
 - Owner: `POST /api/utility-events/{id}/skip` (`SkipEventBody.all_units`, default every row with
   the same `event_key`) → `skip='requested'`, `skip_by='owner'`, `skip_reason='Skipped from the app'`.
   409 when the controller is off, the event is mandatory, over, or already skipped. `POST
-  /api/utility-events/{id}/unskip` clears a still-`requested` skip.
+  /api/utility-events/{id}/unskip` clears a still-`requested` skip and its attempt count (409
+  once the opt-out is being sent: ecobee would record it anyway).
 - Rules (`utility_events.auto_skip`), evaluated from the house state for events running or
   starting within 5 minutes: `skip_when_asleep` (a room on that unit is `asleep`), `skip_above_f`
   (an occupied/asleep room's temperature ≥ it while cooling), `skip_below_f` (≤ it while heating).
@@ -196,7 +213,11 @@ wherever days are chosen. Reports say how many days were excluded and why.
   `jobs` row `kind='handback'` (409 while one is queued/running) → worker runs
   `controller.hand_back(source, now)`:
   1. `control.mode = 'off'` first (updated_by owner), publish status. The worker's
-     `keep_settings` does nothing in `off`, so it will not switch Smart Away off again.
+     `keep_settings` does nothing in `off`, so it will not switch Smart Away off again. The job
+     holds the worker's control lock (shared with the tick, queued owner actions and the settings
+     check), and the tick re-reads the mode before each write, so nothing the controller decided
+     earlier lands afterwards. Then the thermostats are read fresh (falling back to the last poll,
+     and saying so) before steps 2-4.
   2. Each unit whose running hold is ours: `resume_program` (not forced) → logged, actor `owner`,
      rule `handback`.
   3. Home sensor set back to the original (when captured and different) via `update_sensor_sets`.
@@ -216,8 +237,9 @@ wherever days are chosen. Reports say how many days were excluded and why.
   (until you change it)" / "Your hold from the app until 4:00 PM" / "Utility event until 6:00 PM
   (cooling +2°F)" / "Vacation until Oct 12, 9:00 AM" / "Smart Away" / "Quick Save" / "Our hold until
   3:40 PM" / "Unrecognised ecobee event: today".
-- `GET /api/utility-events?days=30`, skip/unskip as above; `UtilityEventOut.prep_label` from the
-  current plan.
+- `GET /api/utility-events?days=30`, skip/unskip as above; `UtilityEventOut.prep_label` is the
+  plan's pre-cooling sentence only while the controller is doing it (a conditional "Nothing is
+  written." sentence in Suggest mode). `PUT /api/control/settings` never changes the mode.
 - `SettingsOut/SettingsUpdate.utility_events`; Setup's `EcobeeThermostatOut.utility`, `dr_accept`,
   `enrolled`.
 - Web: Live unit cards show the label and, on a person hold, **Back to automatic** and **Resume

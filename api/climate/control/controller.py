@@ -424,10 +424,10 @@ def _evaluate(
 def _prep_pull_back(
     state: HouseState, unit: UnitStatus, ends: datetime | None, ours_rule: str | None, now: datetime,
 ) -> str | None:
-    """Our pre-conditioning hold (rule 'event_prep', ends at ``ends``) would still run when the
-    unit's next utility event starts (later than that event's start minus
+    """Our lowered hold (rule 'event_prep', or the hot-day 'precool'; ends at ``ends``) would
+    still run when the unit's next utility event starts (later than that event's start minus
     precondition_end_gap_min, + 5 min): the note for pulling it back now; else None."""
-    if ours_rule != "event_prep" or ends is None:
+    if ours_rule not in ("event_prep", "precool") or ends is None:
         return None
     ev = next_utility_event(state, unit.unit_key)
     if ev is None or ev.start_at is None:
@@ -435,7 +435,8 @@ def _prep_pull_back(
     end_by = ev.start_at - timedelta(minutes=state.utility.precondition_end_gap_min)
     if ends <= end_by + PREP_END_SLACK:
         return None
-    return (f"Our pre-conditioning hold runs until {_clock(ends, state.tz)}, past the start of the utility event at "
+    what = "pre-conditioning" if ours_rule == "event_prep" else "pre-cooling"
+    return (f"Our {what} hold runs until {_clock(ends, state.tz)}, past the start of the utility event at "
             f"{_clock(ev.start_at, state.tz)}; it is released now, so the event applies to the normal setpoint.")
 
 

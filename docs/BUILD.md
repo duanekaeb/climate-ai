@@ -114,18 +114,18 @@ web/src/api/schema.json && cd web && npm run gen:types`).
 | GET | `/analytics/drift` | reader | → `DriftReport` |
 | GET | `/analytics/natural-experiments?days=90` | reader | → `NaturalExperiments` |
 | GET | `/control/settings` | reader | → `SettingsOut` (includes `utility_events`) |
-| PUT | `/control/settings` | owner | `SettingsUpdate` → `SettingsOut` (sections given are validated and stored; `utility_events` under key `utility_events`; an old client's `control.manual_backoff_hours` is read as `resume_backoff_hours`) |
+| PUT | `/control/settings` | owner | `SettingsUpdate` → `SettingsOut` (sections given are validated and stored; `utility_events` under key `utility_events`; an old client's `control.manual_backoff_hours` is read as `resume_backoff_hours`; `control.mode` is ignored and the stored mode kept: only `POST /control/mode` changes it, so a stale form can't switch the controller back on) |
 | POST | `/control/mode` | owner | `ModeBody` → `ControllerInfo` |
 | GET | `/control/plan` | reader | → `PlanOut` |
 | GET | `/control/actions?limit=100&unit_key=` | reader | → `ControlActionOut[]` |
 | POST | `/control/hold` | owner | `ManualHoldBody` → `ControlActionOut` (queued; worker executes). Exactly what was typed within the hard envelope: min/max, the deadband (or the thermostat's `heatCoolMinDelta` when larger), the 0.5°F grid; no step limit, humidity guard, rate limit or back-off |
-| POST | `/control/resume` | owner | `UnitBody` → `ControlActionOut` ("Resume schedule": queued `resume_program`, request kind `resume_schedule`; the ecobee schedule runs and the controller waits `resume_backoff_hours`) |
-| POST | `/control/automatic` | owner | `UnitBody` → `ControlActionOut` ("Back to automatic": queued `resume_program`, request kind `automatic`; the controller steers again at once and any resume back-off ends) |
+| POST | `/control/resume` | owner | `UnitBody` → `ControlActionOut` ("Resume schedule": queued `resume_program`, request kind `resume_schedule`; the ecobee schedule runs and the controller waits `resume_backoff_hours`; while the HomeKit fallback is active it is queued on channel `homekit` and the homekit service clears the hold) |
+| POST | `/control/automatic` | owner | `UnitBody` → `ControlActionOut` ("Back to automatic": queued `resume_program`, request kind `automatic`; the controller steers again at once and any resume back-off ends; also clears a Quick Save or Smart Away; channel `homekit` during the fallback) |
 | GET | `/control/handback` | reader | → `HandbackInfo` (captured originals, mode, latest `handback` job, steps of the last finished one) |
 | POST | `/control/handback` | owner | → `JobOut` (queues a `handback` job; 409 while one is queued or running) |
-| GET | `/utility-events?days=30` | reader | → `UtilityEventOut[]` (open events plus those that started in the last `days`, newest first; `prep_label` from the current plan) |
+| GET | `/utility-events?days=30` | reader | → `UtilityEventOut[]` (open events plus those that started in the last `days`, newest first; `prep_label` is the plan's pre-cooling sentence only while the controller is doing it, a conditional "…Nothing is written." sentence in Suggest mode or on a suggest-only unit, else null) |
 | POST | `/utility-events/{id}/skip` | owner | `SkipEventBody` (optional; `all_units` default true) → `UtilityEventOut` (`skip='requested'` on that event's rows that can be skipped; the worker opts out; 409 when the controller is off or the event is mandatory, over, or already skipped) |
-| POST | `/utility-events/{id}/unskip` | owner | `SkipEventBody` (optional) → `UtilityEventOut` (clears a still-`requested` skip; 409 otherwise) |
+| POST | `/utility-events/{id}/unskip` | owner | `SkipEventBody` (optional) → `UtilityEventOut` (clears a still-`requested` skip and its attempt count; 409 otherwise, and 409 while the opt-out is already being sent to ecobee) |
 | POST | `/control/presence` | owner | `PresenceBody` → `SettingsOut` |
 | GET | `/changes?status=` | reader | → `ChangeOut[]` |
 | POST | `/changes` | writer | `ProposePolicyBody` → `ChangeOut` (proposed_by = owner or claude) |
@@ -211,7 +211,8 @@ wide without horizontal scrolling, and labels rooms without sensors as "no senso
 | `app_settings['heartbeat:homekit'].detail` | `paired`, `online` (counts) |
 | `app_settings['heartbeat:agent'].detail` | `AgentHeartbeatBody` fields (`signed_in`, `sdk_version`, `cli_version`, `token_expires_at`) plus `detail` (`idle`, `last_error`, `busy_run_id`, ...) |
 | `app_settings['ecobee_status']` | `{signed_in_at, last_error, error_at}` (written by the sign-in path; signed-in = the encrypted refresh token exists) |
-| `app_settings['ecobee_holds']` | `{unit_key: {heat_f, cool_f, end, hours, written_at}}`: the last hold we wrote, used to tell our holds from manual ones |
+| `app_settings['ecobee_holds']` | `{unit_key: {heat_f, cool_f, end, hours, written_at, by_owner?, attempt?}}`: the last hold we wrote, used to tell our holds from manual ones; `by_owner` marks the owner's hold from the app (never "ours"); `attempt` `{heat_f, cool_f, end_from, end_to, sent_at}` is a controller write that went out unverified and counts as ours if it landed |
+| `HoldRequest.by_owner` / source refusals | controller writes (`by_owner` false) and sensor-set writes decide on a fresh read and post nothing over a person's hold or Quick Save (`request.refused`, `not_ours`; the controller logs it as that person's hold) or over vacation / utility / unknown events (`request.refused`, `event`); the owner's holds skip the person check. `opt_out_event(unit, reason, link_ref=, name=, start=)` refuses a different event on top (`other_event`) |
 | `app_settings['simulator_state']` | simulator physics state (only in simulator mode) |
 | `app_settings['sim_events']` | `{unit_key: [ThermostatEvent JSON]}`: utility / vacation events injected with `python -m climate.cli sim-event`; the worker's simulator re-reads it every simulated minute |
 | `changes.payload` (policy) | `{"params": {partial PolicyParams}, "base_policy_version_id": int, "current": {...}}` |
@@ -226,7 +227,7 @@ wide without horizontal scrolling, and labels rooms without sensors as "no senso
 | `app_settings['utility_events']` | `UtilityEventSettings` (alerts, skip rules, pre-cooling); edited through `PUT /control/settings` |
 | `app_settings['ecobee_original']` | `{unit_key: EcobeeOriginal}`: each unit's Smart Away, Follow Me and Home sensors before the controller's first change; read by `GET /control/handback` |
 | `jobs` kind `handback` | `params` `{}`, `requested_by` `owner`; `result` `{"steps": [HandbackStep...]}` |
-| `utility_events.skip*` (API writes) | owner skip: `skip='requested'`, `skip_by='owner'`, `skip_reason='Skipped from the app'`, `skip_requested_at`; a new request after `failed` resets `detail.skip_attempts` to 0; unskip clears all four |
+| `utility_events.skip*` (API writes) | owner skip: `skip='requested'`, `skip_by='owner'`, `skip_reason='Skipped from the app'`, `skip_requested_at`; any new request resets `detail.skip_attempts` to 0; unskip clears all four and the attempt count (`rule_requested_at` stays, so a rule asks once) |
 | `ecobee_thermostats.settings` | the curated settings plus `utility` (`UtilityInfo` dict or null) and `drAccept`; Setup's `EcobeeThermostatOut.utility` / `dr_accept` / `enrolled` |
 | `model_fits` kind `rc` | `metrics`: `rmse_1h`, `rmse_24h`, `persistence_rmse_1h/24h`, `bias_*`, `n_points`; `params.unidentified`: `["zone.param", ...]` |
 | `model_fits` kind `room_offsets` | `params.offsets`: `{room_key: {"day": °F, "night": °F}}` |

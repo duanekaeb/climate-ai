@@ -208,7 +208,8 @@ def plan(state: HouseState) -> list[UnitTarget]:
        precool_start_hour lower cool_f by precool_degrees_f on occupied floors.
     5. Bed wing: independent (its own comfort) when bed_wing_independent.
     6. Pre-cool / pre-heat before a utility event (only if ``utility.precondition``): see
-       ``_apply_event_prep``.
+       ``_apply_event_prep``. A rule-4 pre-cool hold also ends before the next utility event
+       (``_cap_precool_before_events``).
     Rooms without a sensor never contribute a temperature; unknown/stale data -> occupied.
 
     Implementation notes (see the helpers below):
@@ -233,6 +234,7 @@ def plan(state: HouseState) -> list[UnitTarget]:
         targets[unit_key] = _plan_unit(ctx, unit_key, targets)
     _apply_recovery(ctx, targets)
     _apply_event_prep(ctx, targets)
+    _cap_precool_before_events(ctx, targets)
     return [_finish(ctx, targets[k]) for k in ctx.unit_keys]
 
 
@@ -610,6 +612,25 @@ def _apply_event_prep(ctx: _Ctx, targets: dict[str, UnitTarget]) -> None:
             "heat_f": heat, "cool_f": cool, "rule": "event_prep", "reason": reason, "desired": "hold",
             "hold_end_by": end_by,
         })
+
+
+def _cap_precool_before_events(ctx: _Ctx, targets: dict[str, UnitTarget]) -> None:
+    """The hot-day pre-cool (rule 4) lowers the cooling setpoint too, so a hold written for it
+    must also end before the unit's next utility event (``precondition_end_gap_min`` before
+    its start), whether or not pre-conditioning is on: no lowered hold of the controller's runs
+    into an event. The controller sizes the hold to fit or writes nothing, and pulls back one
+    that would still run (``controller._prep_pull_back``)."""
+    st = ctx.state
+    for unit_key, target in list(targets.items()):
+        if target.rule != "precool" or target.hold_end_by is not None:
+            continue
+        ev = next_utility_event(st, unit_key)
+        if ev is None or ev.start_at is None:
+            continue
+        end_by = ev.start_at - timedelta(minutes=st.utility.precondition_end_gap_min)
+        reason = (f"{target.reason} This hold ends by {_clock(end_by, st.tz)}, before the utility event at "
+                  f"{_clock(ev.start_at, st.tz)}.")
+        targets[unit_key] = target.model_copy(update={"hold_end_by": end_by, "reason": reason})
 
 
 def next_utility_event(state: HouseState, unit_key: str) -> UtilityEventState | None:

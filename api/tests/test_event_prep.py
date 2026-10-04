@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 import pytest
 
 from climate.control import controller
-from climate.control.policy import UtilityEventState, plan
+from climate.control.policy import PolicyParams, UtilityEventState, plan
 from climate.sources.base import HoldInfo
 from climate.state import load_house_state
 from climate.store.app_settings import UtilityEventSettings, put_setting
-from climate.store.orm import UtilityEvent
+from climate.store.orm import ControlAction, UtilityEvent
 from tests.test_controller_safety import circuit_open
 from tests.test_controller_tick import NOW, FakeSource, actions, put_snapshot, refresh_sensors, setup_house
 from tests.test_policy_plan import at, by_unit, make_state, snap
@@ -304,3 +304,44 @@ async def test_our_hold_past_its_end_waits_for_the_next_snapshot(db):
     assert [h for h in src.holds if h.unit_key == "up"] == [] and src.resumes == []
     plan_row = {r.target.unit_key: r for r in controller.current_plan(db, t)}["up"]
     assert not plan_row.would_write
+
+
+def test_a_hot_day_pre_cool_hold_also_ends_before_the_next_event():
+    """Rule 4 (hot-day pre-cool) lowers the cooling setpoint too: with an event announced its
+    hold must end before the event, whether or not pre-conditioning before events is on."""
+    hot = {"forecast_high_f": 96.0, "forecast_sunny": True,
+           "policy": PolicyParams(precool_enabled=True, precool_degrees_f=1.0, precool_start_hour=13)}
+    off = UtilityEventSettings(precondition=False)
+    up = by_unit(plan(prep_state(at(14), [event(at(15))], utility=off, **hot)))["up"]
+    assert up.rule == "precool" and up.cool_f == 76.0 and up.hold_end_by == at(14, 50)
+    assert up.reason.endswith("This hold ends by 2:50 PM, before the utility event at 3:00 PM.")
+    # no event announced: the rule is unchanged
+    alone = by_unit(plan(prep_state(at(14), [], utility=off, **hot)))["up"]
+    assert alone.rule == "precool" and alone.hold_end_by is None
+
+
+async def test_a_hot_day_pre_cool_hold_of_ours_is_pulled_back_before_an_event(db):
+    """Our hot-day pre-cool hold (rule 'precool') would still run when a newly announced event
+    starts: the controller resumes the schedule now, inside the rate limit, never a new hold."""
+    setup_house(db, act_units=["up"])
+    put_setting(db, "utility_events", UtilityEventSettings(precondition=False))
+    ours = HoldInfo(heat_f=68.0, cool_f=76.0, start=NOW - timedelta(minutes=10), end=NOW + timedelta(minutes=110),
+                    hold_type="holdHours")
+    db.add(ControlAction(ts=NOW - timedelta(minutes=10), unit_key="up", actor="controller", mode="act",
+                         channel="simulator", action="set_hold", status="verified", rule="precool",
+                         reason="Pre-cooling on a hot afternoon.", completed_at=NOW - timedelta(minutes=10),
+                         request={"unit_key": "up", "heat_f": 68.0, "cool_f": 76.0, "hours": 2}))
+    db.add(UtilityEvent(unit_key="up", event_key="link:soon", name="Peak saver", status="announced",
+                        start_at=NOW + timedelta(minutes=40), end_at=NOW + timedelta(hours=3),
+                        first_seen_at=NOW, last_seen_at=NOW, is_relative=True, cool_offset_f=2.0,
+                        is_optional=True, detail={}))
+    db.commit()
+    put_snapshot(db, "up", NOW - timedelta(minutes=1), heat=68.0, cool=76.0, hold=ours)
+    for u in ("main", "bed"):
+        put_snapshot(db, u, NOW - timedelta(minutes=1))
+    refresh_sensors(db, NOW)
+    src = FakeSource()
+    await controller.tick(src, NOW)
+    assert src.resumes == ["up"] and src.forced == [False] and src.holds == []
+    row = actions(db, unit_key="up", action="resume_program")[0]
+    assert "Our pre-cooling hold runs until" in row.reason and "past the start of the utility event" in row.reason

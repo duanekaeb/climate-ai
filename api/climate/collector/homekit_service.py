@@ -374,7 +374,10 @@ def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) ->
     was queued (``hand_change_after``): the controller decided it before it knew. The owner's
     own rows (Back to automatic / Resume schedule while the cloud is down) are the person's
     decision and are never blocked by a hand change; like every owner action they fail while
-    the controller is off (``controller.execute_queued`` does the same on the cloud channel)."""
+    the controller is off (``controller.execute_queued`` does the same on the cloud channel).
+    The controller's rows were queued in 'act' mode; they fail when the mode has changed since
+    (``controller.tick`` re-reads the mode before each cloud write the same way), so a hand-back
+    or a switch to Suggest is never followed by a late HomeKit hold."""
     rows = (
         session.execute(
             select(ControlAction)
@@ -386,7 +389,7 @@ def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) ->
         .all()
     )
     jobs: list[ActionJob] = []
-    mode = _control_mode(session) if any(r.actor == "owner" for r in rows) else None
+    mode = _control_mode(session) if rows else None
     for r in rows:
         if r.ts is not None and now - r.ts > max_age:
             r.status = "failed"
@@ -395,6 +398,11 @@ def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) ->
         elif r.actor == "owner" and mode not in OWNER_MODES:
             r.status = "failed"
             r.error = ("Not sent: the controller is off." if mode == "off"
+                       else "Not sent: the controller's mode could not be read.")
+            r.completed_at = now
+        elif r.actor != "owner" and mode != "act":
+            r.status = "failed"
+            r.error = (f"Not sent: the controller was switched to {mode}." if mode in OWNER_MODES or mode == "off"
                        else "Not sent: the controller's mode could not be read.")
             r.completed_at = now
         elif r.actor != "owner" and (hand := hand_change_after(session, r)) is not None:

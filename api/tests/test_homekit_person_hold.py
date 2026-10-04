@@ -47,6 +47,7 @@ def env(db, tmp_path, monkeypatch):
     clock = Clock()
     put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True,
                                              cloud_circuit_open_until=clock() + timedelta(minutes=15)))
+    put_setting(db, "control", ControlSettings(mode="act"))  # the controller queues HomeKit holds only in act
     db.commit()
     dev = FakeDevice()
     ctl = FakeController([dev])
@@ -634,3 +635,19 @@ def test_reason_wording():
     )
     away = hk.HandChange("comfort", "away", 62.0, 80.0, 2)
     assert svc_mod.hand_change_reason(away, "Upstairs").startswith("Someone picked Away by hand on the upstairs")
+
+
+async def test_the_controllers_homekit_rows_fail_once_the_mode_changed(env):
+    """A controller hold queued in 'act' is not sent after the owner switched to Suggest or
+    handed back to ecobee (mode off) before the service claimed it."""
+    db, dev = env["db"], env["dev"]
+    await paired_and_ready(env)
+    for mode in ("suggest", "off"):
+        put_setting(db, "control", ControlSettings(mode=mode))
+        db.commit()
+        row_id = queue(db, {"kind": "climate_hold", "climate": "away", "unit_key": "main",
+                            "until": (env["clock"]() + timedelta(hours=2)).isoformat()})
+        await env["svc"].execute_actions()
+        row = action(db, row_id)
+        assert (row.status, row.error) == ("failed", f"Not sent: the controller was switched to {mode}.")
+    assert dev.writes == []
