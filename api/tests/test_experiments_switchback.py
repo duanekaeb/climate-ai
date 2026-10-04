@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -32,7 +33,7 @@ def test_checkpoints_spend_exactly_alpha(n_days, k, alpha):
     assert all(c.alpha_spent > 0 for c in cps)
     assert [c.day for c in cps] == sorted({c.day for c in cps})
     z = [c.z_crit for c in cps]
-    assert all(a > b for a, b in zip(z, z[1:]))  # stricter (wider) early
+    assert all(a > b for a, b in itertools.pairwise(z))  # stricter (wider) early
     if k == 1:
         assert z[0] == pytest.approx(stats.norm.isf(alpha / 2))
     # the exact correlated-looks computation leaves no alpha unspent or overspent
@@ -110,10 +111,10 @@ def test_assign_days_is_seeded():
 
 
 def _body(**kw) -> ProposeExperimentBody:
-    base = dict(name="Linked offset 1 vs 2", hypothesis="A 2°F offset cuts upstairs runtime",
-                arms=[ArmIn(key="ctl", label="1°F", params={"linked_offset_f": 1.0}),
+    base = {"name": "Linked offset 1 vs 2", "hypothesis": "A 2°F offset cuts upstairs runtime",
+                "arms": [ArmIn(key="ctl", label="1°F", params={"linked_offset_f": 1.0}),
                       ArmIn(key="trt", label="2°F", params={"linked_offset_f": 2.0})],
-                n_days=28, block_days=2, n_checkpoints=3, alpha=0.10)
+                "n_days": 28, "block_days": 2, "n_checkpoints": 3, "alpha": 0.10}
     base.update(kw)
     return ProposeExperimentBody(**base)
 
@@ -376,7 +377,7 @@ def test_power_monotonic_and_honest(db, monkeypatch):
     monkeypatch.setattr("climate.analytics.baseline.active_fits", lambda s: fits)
     out = {e: analysis.power(db, e) for e in (5.0, 10.0, 15.0, 20.0)}
     days = [out[e].days_per_arm for e in (5.0, 10.0, 15.0, 20.0)]
-    assert all(a > b for a, b in zip(days, days[1:]))
+    assert all(a > b for a, b in itertools.pairwise(days))
     assert out[10.0].resid_cv == pytest.approx(0.15)
     assert out[10.0].total_days == 2 * out[10.0].days_per_arm
     assert 7 <= out[15.0].days_per_arm <= 49  # 10-15% within weeks

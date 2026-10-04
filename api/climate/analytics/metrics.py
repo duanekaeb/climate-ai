@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -145,7 +145,7 @@ def comfort_period(session: Session, t0: datetime, t1: datetime, tz: str) -> lis
     occ = get_setting(session, "occupancy", OccupancySettings)
     z = ZoneInfo(tz)
     g0 = floor_slot(t0.astimezone(UTC)).timestamp()
-    n = max(int(math.ceil((t1.timestamp() - g0) / _SLOT)), 0)
+    n = max(math.ceil((t1.timestamp() - g0) / _SLOT), 0)
     grid = g0 + _SLOT * np.arange(n)
     mids = [datetime.fromtimestamp(g + _SLOT / 2, z) for g in grid]
 
@@ -154,7 +154,7 @@ def comfort_period(session: Session, t0: datetime, t1: datetime, tz: str) -> lis
     n_occ: dict[str, np.ndarray] = defaultdict(lambda: np.zeros(n, dtype=np.int64))
     seen: dict[str, np.ndarray] = defaultdict(lambda: np.zeros(n, dtype=bool))
     for room, t, tf, ao, no in session.execute(_READINGS_SQL, {"t0": datetime.fromtimestamp(g0, UTC), "t1": t1}):
-        i = int(round((t - g0) / _SLOT))
+        i = round((t - g0) / _SLOT)
         if 0 <= i < n:
             seen[room][i] = True
             if tf is not None:

@@ -164,7 +164,7 @@ def _panel(session: Session, t0: datetime, t1: datetime, tz: str, units: list[st
     hr = hourly_runtime(session, t0, t1, tz, units)
     out = hourly_outdoor(session, t0, t1, hr)
     start = math.floor(t0.timestamp() / _HOUR) * _HOUR
-    n = max(int(math.ceil((t1.timestamp() - start) / _HOUR)), 0)
+    n = max(math.ceil((t1.timestamp() - start) / _HOUR), 0)
     hours = start + _HOUR * np.arange(n)
     lh, ld = _local(hours, tz)
 

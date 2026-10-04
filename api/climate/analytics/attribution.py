@@ -36,7 +36,15 @@ from climate.analytics.baseline import (
     pre_period_fits,
     residual_stats,
 )
-from climate.analytics.daily import DayRow, daily_rows, house_tz, is_complete, mode_seconds, unit_order, unit_weights
+from climate.analytics.daily import (
+    DayRow,
+    daily_rows,
+    house_tz,
+    is_complete,
+    mode_seconds,
+    unit_order,
+    unit_weights,
+)
 from climate.api.schemas import Savings, SavingsByUnit, SavingsDay, Waterfall, WaterfallItem
 
 MODE_WORD = {"cool": "cooling", "heat": "heating"}
@@ -172,7 +180,8 @@ def savings(session: Session, start: date, end: date) -> Savings:
         )
         for d in p.days
     ]
-    base = dict(start=start, end=end, n_days=n, actual_min=round(actual_s / 60.0, 1), by_unit=by_unit, days=days)
+    base = {"start": start, "end": end, "n_days": n, "actual_min": round(actual_s / 60.0, 1), "by_unit": by_unit,
+            "days": days}
     skipped = f" {len(p.skipped_days)} day(s) without complete data for every unit were left out." if p.skipped_days else ""
 
     if not p.involved:

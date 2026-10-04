@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from climate.models import backtest as bt
@@ -48,8 +47,8 @@ def write_rc_history(db, model: rc.RCModel, end: datetime, days: int, seed: int 
         local_h = (t.hour - 5) % 24 - 0.5  # preceding-hour mean centred half an hour earlier
         d = min(days + 1, max(0, (t - start).days))
         sw = max(0.0, np.sin((local_h - 6) / 12 * np.pi)) * 900.0 * cloud_by_day[d] if sun_on else 0.0
-        weather.append(dict(ts=t, source="open-meteo", kind="observed", temp_f=80.0, rh=50.0, dewpoint_f=60.0,
-                            cloud_cover=30.0, shortwave_wm2=float(sw), wind_mph=4.0, precip_in=0.0))
+        weather.append({"ts": t, "source": "open-meteo", "kind": "observed", "temp_f": 80.0, "rh": 50.0, "dewpoint_f": 60.0,
+                            "cloud_cover": 30.0, "shortwave_wm2": float(sw), "wind_mph": 4.0, "precip_in": 0.0})
         t += timedelta(hours=1)
     _insert(db, WeatherHour, weather)
     _, sun, _, _ = rc.weather_inputs(db, start, n)  # exactly what the loader will see
@@ -71,10 +70,10 @@ def write_rc_history(db, model: rc.RCModel, end: datetime, days: int, seed: int 
         for j in range(3):
             ts = start + timedelta(minutes=15 * k + 5 * j)
             for z, u in enumerate(rc.ZONES):
-                secs = int(round(on[k, z] * 300))
-                rows.append(dict(ts=ts, unit_key=u, comp_cool1=secs, comp_cool2=0, fan=secs, hvac_mode="cool",
-                                 zone_temp_f=float(T[k, z]), cool_sp_f=float(sp[k, z]), heat_sp_f=68.0,
-                                 outdoor_temp_f=float(t_out[k]), source="test"))
+                secs = round(on[k, z] * 300)
+                rows.append({"ts": ts, "unit_key": u, "comp_cool1": secs, "comp_cool2": 0, "fan": secs, "hvac_mode": "cool",
+                                 "zone_temp_f": float(T[k, z]), "cool_sp_f": float(sp[k, z]), "heat_sp_f": 68.0,
+                                 "outdoor_temp_f": float(t_out[k]), "source": "test"})
     _insert(db, Runtime5m, rows)
     return {"start": start, "n": n}
 
@@ -147,12 +146,12 @@ def test_fit_room_offsets_day_night(db):
         local_h = (t.hour - 5) % 24
         night = local_h >= 21 or local_h < 7
         for u, z in zone.items():
-            rt.append(dict(ts=t, unit_key=u, comp_cool1=120, zone_temp_f=z, cool_sp_f=z, heat_sp_f=68.0,
-                           hvac_mode="cool", source="test"))
+            rt.append({"ts": t, "unit_key": u, "comp_cool1": 120, "zone_temp_f": z, "cool_sp_f": z, "heat_sp_f": 68.0,
+                           "hvac_mode": "cool", "source": "test"})
         for room, (day_off, night_off) in want.items():
             for skey in sensors[room]:
-                rd.append(dict(ts=t, sensor_key=skey, temp_f=zone[unit_of[room]] + (night_off if night else day_off),
-                               source="test"))
+                rd.append({"ts": t, "sensor_key": skey, "temp_f": zone[unit_of[room]] + (night_off if night else day_off),
+                               "source": "test"})
         t += timedelta(minutes=5)
     _insert(db, Runtime5m, rt)
     _insert(db, Reading5m, rd)
@@ -189,10 +188,10 @@ def make_history(db, days: int) -> None:
     t = start - timedelta(hours=2)
     while t < end + timedelta(hours=2):
         lh = (t.hour - 5) % 24
-        weather.append(dict(ts=t, source="open-meteo", kind="observed", temp_f=82 + 11 * np.sin((lh - 10) / 24 * 2 * np.pi),
-                            rh=55.0, dewpoint_f=62.0, cloud_cover=30.0,
-                            shortwave_wm2=float(max(0.0, 800 * np.sin((lh - 6.5) / 12 * np.pi))), wind_mph=5.0,
-                            precip_in=0.0))
+        weather.append({"ts": t, "source": "open-meteo", "kind": "observed", "temp_f": 82 + 11 * np.sin((lh - 10) / 24 * 2 * np.pi),
+                            "rh": 55.0, "dewpoint_f": 62.0, "cloud_cover": 30.0,
+                            "shortwave_wm2": float(max(0.0, 800 * np.sin((lh - 6.5) / 12 * np.pi))), "wind_mph": 5.0,
+                            "precip_in": 0.0})
         t += timedelta(hours=1)
     t = start
     while t < end:
@@ -201,13 +200,13 @@ def make_history(db, days: int) -> None:
         main_empty = 12 <= lh < 18 and t.weekday() < 5
         for u, zone, sp in (("main", 76.0 + (2.0 if main_empty else 0.0), 76.0), ("up", 77.0, 77.0), ("bed", 75.5, 75.0)):
             secs = int(min(300, max(0, (out - 65) * 9 + rng.normal(0, 10))))
-            runtime.append(dict(ts=t, unit_key=u, comp_cool1=secs, fan=secs, hvac_mode="cool",
-                                zone_temp_f=zone + float(rng.normal(0, 0.2)), heat_sp_f=68.0, cool_sp_f=sp,
-                                outdoor_temp_f=float(out), source="test"))
+            runtime.append({"ts": t, "unit_key": u, "comp_cool1": secs, "fan": secs, "hvac_mode": "cool",
+                                "zone_temp_f": zone + float(rng.normal(0, 0.2)), "heat_sp_f": 68.0, "cool_sp_f": sp,
+                                "outdoor_temp_f": float(out), "source": "test"})
         for u, keys in OCC_SENSORS.items():
             occupied = bool(7 <= lh < 22 and not (u == "main" and main_empty))
             for k in keys:
-                readings.append(dict(ts=t, sensor_key=k, temp_f=None, occupied=occupied, source="test"))
+                readings.append({"ts": t, "sensor_key": k, "temp_f": None, "occupied": occupied, "source": "test"})
         t += timedelta(minutes=5)
     _insert(db, WeatherHour, weather)
     _insert(db, Runtime5m, runtime)

@@ -144,11 +144,11 @@ def build_daily_report(session: Session, day: date) -> int:
             verdict = ("inside the range the weather explains" if lo <= house["actual_min"] <= hi else
                        "below the weather-expected range" if house["actual_min"] < lo else
                        "above the weather-expected range")
-            md += [f"House: {_fmt_min(house['actual_min'])} min against {_fmt_min(house['expected_min'])} expected "
-                   f"({_fmt_min(lo)}–{_fmt_min(hi)}), {verdict}. One day proves nothing on its own.", ""]
+            md += [(f"House: {_fmt_min(house['actual_min'])} min against {_fmt_min(house['expected_min'])} expected "
+                    f"({_fmt_min(lo)}–{_fmt_min(hi)}), {verdict}. One day proves nothing on its own."), ""]
         else:
-            md += [f"House: {_fmt_min(house['actual_min'])} min; no weather-normalized comparison today (baselines "
-                   f"come from the {TRAIN_DAYS} days before and need to pass their checks).", ""]
+            md += [(f"House: {_fmt_min(house['actual_min'])} min; no weather-normalized comparison today (baselines "
+                    f"come from the {TRAIN_DAYS} days before and need to pass their checks)."), ""]
 
     if misses:
         parts = []
@@ -157,8 +157,8 @@ def build_daily_report(session: Session, day: date) -> int:
                          f"({c['miss_min']:.0f} min out, worst {c['worst_excursion_f']:.1f}°F past the band)")
         md += [f"**Comfort:** below the {COMFORT_TARGET_PCT:.0f}% target: " + "; ".join(parts) + ".", ""]
     elif any(c["in_band_pct"] is not None for c in comfort_rows):
-        md += [f"**Comfort:** every occupied room with a sensor was in band at least {COMFORT_TARGET_PCT:.0f}% of "
-               "its occupied minutes.", ""]
+        md += [(f"**Comfort:** every occupied room with a sensor was in band at least {COMFORT_TARGET_PCT:.0f}% of "
+                "its occupied minutes."), ""]
     else:
         md += ["**Comfort:** no occupied minutes with a temperature reading to score.", ""]
 

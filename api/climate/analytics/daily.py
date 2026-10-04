@@ -92,7 +92,7 @@ def house_tz(session: Session) -> str:
 
 def expected_slots(d: date, tz: str) -> int:
     start, end = day_bounds_utc(d, tz)
-    return int(round((end - start).total_seconds() / 300.0))
+    return round((end - start).total_seconds() / 300.0)
 
 
 def is_complete(row: DayRow) -> bool:
@@ -268,7 +268,7 @@ def hourly_runtime(
         return HourlyRuntime(np.zeros(0, dtype=object), z, np.zeros(0, dtype=np.int64), z, z, z, z, z, z, z, z, z, z)
     cols = list(zip(*rows, strict=True))
     unit = np.array(cols[0], dtype=object)
-    f = lambda c: np.array([np.nan if v is None else v for v in c], dtype=float)  # noqa: E731
+    f = lambda c: np.array([np.nan if v is None else v for v in c], dtype=float)
     heat1, aux1 = f(cols[4]), f(cols[5])
     comp = np.array([heat_is_comp.get(u, False) for u in cols[0]], dtype=bool)
     return HourlyRuntime(
@@ -328,7 +328,7 @@ def hourly_outdoor(session: Session, t0: datetime, t1: datetime, runtime: Hourly
     pad = timedelta(hours=MAX_INTERP_GAP_H)
     start = math.floor((t0 - pad).timestamp() / _HOUR) * _HOUR
     stop = math.ceil((t1 + pad).timestamp() / _HOUR) * _HOUR
-    n = int(round((stop - start) / _HOUR))
+    n = round((stop - start) / _HOUR)
     temp = np.full(n, np.nan)
     sw = np.full(n, np.nan)
     src = np.full(n, "", dtype=object)

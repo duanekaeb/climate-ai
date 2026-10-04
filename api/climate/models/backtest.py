@@ -54,6 +54,7 @@ ZONES = rc.ZONES
 OCCUPIED_TOL_F = 1.0  # blueprint §3: occupied rooms ≤ 1°F outside their band
 ASLEEP_TOL_F = 0.5  # asleep: ≤ 0.5°F
 MIN_INPUT_FRACTION = 0.9
+WARMUP_SLOTS = 6 * rc.SLOTS_PER_HOUR  # replay spin-up before each day, not counted
 OPEN_METEO_NOTE = " Weather data by Open-Meteo.com."
 # SimulateOut's day field: the contract currently spells it "Date"; accept "date" too.
 _SIM_DAY_FIELD = "date" if "date" in SimulateOut.model_fields else "Date"
@@ -197,6 +198,21 @@ class _Day:
     i0: int
     i1: int
     mode: str
+    j0: int = -1  # where the replay starts: i0 minus the warm-up when the data allows it
+
+
+def _initial_state(s: rc.Series, d: _Day) -> tuple[int, np.ndarray] | None:
+    """Start the replay WARMUP_SLOTS before the day from the recorded temperatures, so by
+    midnight the model house is already running the replayed policy and the day itself is not
+    charged for converging from whatever the real thermostats were doing. Falls back to the
+    day's own first recorded temperatures when the hours before are missing."""
+    j = d.i0 - WARMUP_SLOTS
+    if j >= 0 and np.isfinite(s.t_out[j:d.i0]).mean() >= 0.5:
+        T0 = _start_temp(s, j)
+        if T0 is not None:
+            return j, T0
+    T0 = _start_temp(s, d.i0)
+    return None if T0 is None else (d.i0, T0)
 
 
 def _usable_days(s: rc.Series) -> list[_Day]:
@@ -219,32 +235,35 @@ def _start_temp(s: rc.Series, i0: int) -> np.ndarray | None:
 
 
 def _batch(s: rc.Series, days: list[_Day], sched: Schedule, mode: str) -> tuple[np.ndarray, ...]:
-    """Pad a set of days into (n_max, B, ...) arrays for one batched emulation."""
-    n_max = max(d.i1 - d.i0 for d in days)
+    """Pad a set of days (each from its warm-up start j0 to its end) into (n_max, B, ...)
+    arrays for one batched emulation; ``count`` marks the slots that belong to the day."""
+    n_max = max(d.i1 - d.j0 for d in days)
     B = len(days)
     t_out = np.full((n_max, B), np.nan)
     sun = np.zeros((n_max, B))
     sp = np.full((n_max, B, 3), np.nan)
     lo = np.full((n_max, B, 3), np.nan)
     hi = np.full((n_max, B, 3), np.nan)
+    count = np.zeros((n_max, B), dtype=bool)
     for b, d in enumerate(days):
-        k = d.i1 - d.i0
-        t_out[:k, b] = rc.fill_gaps(s.t_out[d.i0:d.i1])
-        sun[:k, b] = np.nan_to_num(rc.fill_gaps(s.sun[d.i0:d.i1]))
-        sp[:k, b] = (sched.cool if mode == "cool" else sched.heat)[d.i0:d.i1]
-        lo[:k, b], hi[:k, b] = sched.lo[d.i0:d.i1], sched.hi[d.i0:d.i1]
-    return t_out, sun, sp, lo, hi
+        k = d.i1 - d.j0
+        t_out[:k, b] = rc.fill_gaps(s.t_out[d.j0:d.i1])
+        sun[:k, b] = np.nan_to_num(rc.fill_gaps(s.sun[d.j0:d.i1]))
+        sp[:k, b] = (sched.cool if mode == "cool" else sched.heat)[d.j0:d.i1]
+        lo[:k, b], hi[:k, b] = sched.lo[d.j0:d.i1], sched.hi[d.j0:d.i1]
+        count[d.i0 - d.j0 : k, b] = True
+    return t_out, sun, sp, lo, hi, count
 
 
 def _replay(model: rc.RCModel, T0: np.ndarray, t_out: np.ndarray, sun: np.ndarray, sp: np.ndarray,
-            lo: np.ndarray, hi: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
-    """(weighted runtime seconds, comfort-violation minutes) for a batch of days."""
+            lo: np.ndarray, hi: np.ndarray, count: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
+    """(weighted runtime seconds, comfort-violation minutes) over the counted slots of a batch."""
     T, on = rc.emulate(model, T0, t_out, sun, sp)
-    runtime = float((on * rc.SLOT_S).sum(axis=(0, 1)) @ weights)
+    runtime = float((on * count[..., None] * rc.SLOT_S).sum(axis=(0, 1)) @ weights)
     after = T[1:]
     with np.errstate(invalid="ignore"):
         bad = (after > hi) if model.mode == "cool" else (after < lo)
-    bad &= np.isfinite(t_out)[..., None]
+    bad &= count[..., None]
     return runtime, float(bad.sum()) * rc.SLOT_S / 60.0
 
 
@@ -257,15 +276,21 @@ def _rc_backtest(s: rc.Series, env: Env, days: list[_Day], fits: dict[str, tuple
     used = 0
     for mode, ds in by_mode.items():
         model = fits[mode][1]
-        starts = [(d, _start_temp(s, d.i0)) for d in ds]
-        ds = [d for d, t in starts if t is not None]
-        if not ds:
+        ready: list[_Day] = []
+        temps: list[np.ndarray] = []
+        for d in ds:
+            init = _initial_state(s, d)
+            if init is not None:
+                d.j0 = init[0]
+                ready.append(d)
+                temps.append(init[1])
+        if not ready:
             continue
-        T0 = np.array([t for _, t in starts if t is not None])
-        used += len(ds)
+        T0 = np.array(temps)
+        used += len(ready)
         for key, sched in (("cur", cur), ("cand", cand)):
-            t_out, sun, sp, lo, hi = _batch(s, ds, sched, mode)
-            rt, viol = _replay(model, T0, t_out, sun, sp, lo, hi, env.weights)
+            t_out, sun, sp, lo, hi, count = _batch(s, ready, sched, mode)
+            rt, viol = _replay(model, T0, t_out, sun, sp, lo, hi, count, env.weights)
             totals[key] += rt
             totals["v" + key] += viol
     if used == 0 or totals["cur"] <= 0:
@@ -299,7 +324,8 @@ def _rc_backtest(s: rc.Series, env: Env, days: list[_Day], fits: dict[str, tuple
             f"and occupancy. Current policy {totals['cur'] / 60:.0f} min, candidate {totals['cand'] / 60:.0f} min "
             f"({delta_pct:+.1f}%). {unc}{verdict} Comfort-violation minutes: {totals['vcur']:.0f} -> "
             f"{totals['vcand']:.0f}.{skip} Approximation: an ideal thermostat holding the linked-floors "
-            "setpoints; room offsets and whole-house-empty setbacks are not replayed.")
+            "setpoints (each day after a 6-hour uncounted warm-up); room offsets and whole-house-empty "
+            "setbacks are not replayed.")
     if "open-meteo" in s.weather_sources:
         note += OPEN_METEO_NOTE
     return BacktestOut(days=used, model="rc", current_runtime_min=round(totals["cur"] / 60, 1),
@@ -395,7 +421,7 @@ def backtest(session: Session, params: dict, days: int = 28) -> BacktestOut:
     today = local_date(utcnow(), env.tz)
     start, _ = day_bounds_utc(today - timedelta(days=days), env.tz)
     end, _ = day_bounds_utc(today, env.tz)
-    s = rc.load_series(session, start, end, env.tz)
+    s = rc.load_series(session, start - WARMUP_SLOTS * rc.SLOT, end, env.tz)
     usable = _usable_days(s)
     sched_cur, sched_cand = schedule(active, env, s), schedule(cand, env, s)
     fits = rc.active_rc(session)
@@ -446,11 +472,11 @@ def _future_series(session: Session, day: date, tz: str) -> tuple[rc.Series, str
     return s, how
 
 
-def _choose_mode(session: Session, s: rc.Series, recorded: bool, now: datetime) -> str:
+def _choose_mode(session: Session, s: rc.Series, day: date, recorded: bool, now: datetime) -> str:
     if recorded:
-        modes = set(rc.day_modes(s).values())
-        if len(modes) == 1:
-            return modes.pop()
+        m = rc.day_modes(s).get(day)
+        if m is not None:
+            return m
     rows = session.execute(_RECENT_SQL, {"s": now - timedelta(days=3), "e": now}).all()
     cool = sum(float(r.cool or 0) for r in rows)
     heat = sum(float(r.heat or 0) for r in rows)
@@ -468,24 +494,25 @@ def _sim_out(day: date, model: str, units: dict[str, list[SimPoint]], total_min:
 def simulate(session: Session, params: dict, day: date | None = None) -> SimulateOut:
     """One local day (default tomorrow) under the candidate policy (active params overlaid
     with ``params``): per-unit 15-minute temperature (at the start of each slot) and stage-1
-    runtime. A past day replays its recorded weather and occupancy from its recorded midnight
-    temperatures; a future day uses the forecast (else last week's weather) and last week's
-    occupancy, starting each unit at its setpoint."""
+    runtime. A past day replays its recorded weather and occupancy, starting from the recorded
+    temperatures six hours earlier (an uncounted warm-up); a future day uses the forecast (else
+    last week's weather) and last week's occupancy, starting each unit at its setpoint."""
     env = load_env(session)
     now = utcnow()
     today = local_date(now, env.tz)
     day = day or today + timedelta(days=1)
     pp = candidate_policy(active_policy(session), dict(params))
     recorded = day < today
+    day_start, day_end = day_bounds_utc(day, env.tz)
     if recorded:
-        start, end = day_bounds_utc(day, env.tz)
-        s = rc.load_series(session, start, end, env.tz)
+        s = rc.load_series(session, day_start - WARMUP_SLOTS * rc.SLOT, day_end, env.tz)
         how = "the recorded weather and occupancy"
     else:
         s, how = _future_series(session, day, env.tz)
-    if s.n == 0:
+    w = max(0, s.index_of(rc.floor15(day_start)))  # first slot of the day itself
+    if s.n - w <= 0:
         raise ValueError("no slots in that day")
-    mode = _choose_mode(session, s, recorded, now)
+    mode = _choose_mode(session, s, day, recorded, now)
     sched = schedule(pp, env, s)
     sp = sched.cool if mode == "cool" else sched.heat
     t_out = rc.fill_gaps(s.t_out)
@@ -494,18 +521,22 @@ def simulate(session: Session, params: dict, day: date | None = None) -> Simulat
     if not np.isfinite(t_out).all():
         return _sim_out(day, "rule_of_thumb", {}, 0.0, "No outdoor temperature for that day or the week before, so "
                         "nothing can be simulated.")
+    span = range(w, s.n)
     fits = rc.active_rc(session)
     if mode in fits:
         model = fits[mode][1]
-        T0 = _start_temp(s, 0) if recorded else None
-        start_note = "its recorded midnight temperatures" if T0 is not None else "each unit at its setpoint"
+        j0, T0 = 0, (_start_temp(s, 0) if recorded else None)
+        if T0 is None and recorded:
+            j0, T0 = w, _start_temp(s, w)
+        start_note = ("the recorded temperatures, after a 6-hour warm-up" if T0 is not None and j0 < w else
+                      "its recorded midnight temperatures" if T0 is not None else "each unit at its setpoint")
         if T0 is None:
-            T0 = sp[0].copy()
-        T, on = rc.emulate(model, T0[None, :], t_out[:, None], sun[:, None], sp[:, None, :])
-        units = {u: [SimPoint(ts=s.ts(i), temp_f=round(float(T[i, 0, z]), 2),
-                              runtime_s=round(float(on[i, 0, z] * rc.SLOT_S), 1)) for i in range(s.n)]
+            j0, T0 = w, sp[w].copy()
+        T, on = rc.emulate(model, T0[None, :], t_out[j0:, None], sun[j0:, None], sp[j0:, None, :])
+        units = {u: [SimPoint(ts=s.ts(i), temp_f=round(float(T[i - j0, 0, z]), 2),
+                              runtime_s=round(float(on[i - j0, 0, z] * rc.SLOT_S), 1)) for i in span]
                  for z, u in enumerate(ZONES)}
-        total = float((on[:, 0, :] * rc.SLOT_S).sum(axis=0) @ env.weights) / 60.0
+        total = float((on[w - j0 :, 0, :] * rc.SLOT_S).sum(axis=0) @ env.weights) / 60.0
         note = (f"House model ({mode}ing), {how}, starting from {start_note}; an ideal thermostat holding the "
                 f"policy's setpoints. Treat the trajectory as coarse: day-ahead errors of a couple of °F are "
                 f"normal for this kind of model.{attribution}")
@@ -526,11 +557,11 @@ def simulate(session: Session, params: dict, day: date | None = None) -> Simulat
         fit = fits_b[(u, mode)]
         r = recent.get(u)
         rec_sp = (r.csp if mode == "cool" else r.hsp) if r is not None else None
-        ref = float(rec_sp) if rec_sp is not None else float(np.mean(sp[:, z]))
-        dd = _degree_slots(t_out, fit.balance_point_f, sp[:, z], ref, mode)
+        ref = float(rec_sp) if rec_sp is not None else float(np.mean(sp[w:, z]))
+        dd = _degree_slots(t_out[w:], fit.balance_point_f, sp[w:, z], ref, mode)
         run = np.clip(float(fit.slope_s_per_dd) * dd + float(fit.intercept_s) * rc.DT_H / 24.0, 0.0, rc.SLOT_S)
-        units[u] = [SimPoint(ts=s.ts(i), temp_f=float(sp[i, z]), runtime_s=round(float(run[i]), 1))
-                    for i in range(s.n)]
+        units[u] = [SimPoint(ts=s.ts(i), temp_f=float(sp[i, z]), runtime_s=round(float(run[i - w]), 1))
+                    for i in span]
         total += float(env.weights[z] * run.sum()) / 60.0
     missing = [u for u in ZONES if u not in have]
     note = (f"Rule of thumb ({mode}ing baselines; no house model has passed its checks yet), {how}. Temperatures "
