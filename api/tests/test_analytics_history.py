@@ -26,7 +26,10 @@ def hist(database_url):
     reset_db()
     s = _factory()()
     end = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-    make_history(s, days=HISTORY_DAYS, end=end)
+    # 4-day chunks keep each insert under Postgres' 65,535 bind-parameter limit whatever
+    # batch size make_history uses (SQLAlchemy binds every table column per row).
+    for i in range(0, HISTORY_DAYS, 4):
+        make_history(s, days=4, end=end - timedelta(days=i), seed=i + 1)
     s.commit()
     try:
         yield s

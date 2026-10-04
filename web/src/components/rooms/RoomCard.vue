@@ -25,20 +25,20 @@ const motion = computed(() => motionText(props.room.seconds_since_motion))
       <div class="min-w-0 flex-1">
         <p class="flex flex-wrap items-center gap-1.5">
           <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{ background: STATE_COLORS[room.state] }" aria-hidden="true" />
-          <span class="min-w-0 truncate font-semibold">{{ room.name }}</span>
+          <span class="min-w-0 font-semibold break-words">{{ room.name }}</span>
           <span v-if="room.is_priority" class="chip bg-accent/15 text-accent">Priority</span>
           <span v-if="room.stale" class="chip bg-warn/15 text-warn">Stale</span>
         </p>
+        <p v-if="!room.has_sensor" class="mt-0.5 text-sm text-muted">{{ NO_SENSOR_TEXT }}</p>
         <p class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
           <span class="chip" :class="STATE_CHIP[room.state]">{{ STATE_LABELS[room.state] }}</span>
           <span v-if="since" class="text-muted">{{ since }}</span>
         </p>
       </div>
-      <div class="shrink-0 text-right">
-        <p v-if="!room.has_sensor" class="max-w-[8.5rem] text-xs leading-snug text-muted">{{ NO_SENSOR_TEXT }}</p>
-        <p v-else-if="room.temp_f === null" class="text-sm text-muted">no reading</p>
+      <div v-if="room.has_sensor" class="shrink-0 text-right">
+        <p v-if="room.temp_f === null" class="text-sm text-muted">no reading</p>
         <p v-else class="num text-2xl leading-none font-semibold">{{ temp(room.temp_f) }}</p>
-        <p v-if="room.has_sensor && room.humidity !== null" class="num mt-1 text-xs text-muted">{{ pct(room.humidity) }} RH</p>
+        <p v-if="room.humidity !== null" class="num mt-1 text-xs text-muted">{{ pct(room.humidity) }} RH</p>
       </div>
     </div>
     <p v-if="room.reason" class="mt-2 line-clamp-2 text-sm text-muted">{{ room.reason }}</p>

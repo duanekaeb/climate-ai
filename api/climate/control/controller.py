@@ -216,12 +216,12 @@ def _evaluate(
         and abs(guard.heat_f - cur_heat) <= MATCH_F and abs(guard.cool_f - cur_cool) <= MATCH_F
     )
     if same:
+        # A renewal obeys the rate limit too: it comes long after the write it renews, and the
+        # limit stops a second renewal while the snapshot still shows the old end time.
         if ours and ours_until is not None and ours_until - now <= RENEW_WITHIN:
-            renew = check(target, unit, limits, now, mode=mode, act_units=act_units,
-                          enforce_rate_limit=False, tz=state.tz)
-            if renew.ok:
-                return _Eval("renew", renew, "Our hold ends soon and the target is unchanged, so it is renewed.")
-            return _Eval("none", renew, renew.blocked_reason or "Blocked.")
+            if guard.ok:
+                return _Eval("renew", guard, "Our hold ends soon and the target is unchanged, so it is renewed.")
+            return _Eval("none", guard, guard.blocked_reason or "Blocked.")
         return _Eval("none", guard, "The thermostat already holds the planned setpoints.")
     if not guard.ok:
         return _Eval("none", guard, guard.blocked_reason or "Blocked.")

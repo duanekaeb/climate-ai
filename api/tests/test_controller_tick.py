@@ -175,6 +175,11 @@ async def test_renews_our_hold_before_it_ends(db):
     assert len(src.holds) == 2 and (src.holds[1].heat_f, src.holds[1].cool_f) == (68.0, 77.0)
     renewed = actions(db, unit_key="up", status="verified")[-1]
     assert "Renewing" in renewed.reason
+    # the snapshot still shows the old end time three minutes later: no second renewal
+    t3 = t2 + timedelta(minutes=3)
+    show_hold(t3)
+    await controller.tick(src, t3)
+    assert len(src.holds) == 2
 
 
 async def test_resumes_program_when_schedule_matches(db):

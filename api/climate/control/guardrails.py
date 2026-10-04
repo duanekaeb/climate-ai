@@ -62,8 +62,8 @@ def check(
     Keyword options (all default to the strictest behaviour except ``mode``):
     - ``mode``: the controller mode; 'off' blocks. With 'act' and ``act_units`` given, a
       unit outside the list is blocked (it stays suggest-only).
-    - ``enforce_rate_limit`` / ``enforce_manual_backoff``: False for owner holds (the owner
-      is the manual actor) and for renewing an unchanged hold.
+    - ``enforce_rate_limit`` / ``enforce_manual_backoff``: False only for owner holds (the
+      owner is the manual actor).
     - ``tz``: house time zone, only used to word times in sentences.
 
     Clamp order: round -> hard min/max -> step limit from the current setpoint -> humidity

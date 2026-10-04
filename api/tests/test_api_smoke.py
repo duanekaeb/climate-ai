@@ -46,8 +46,12 @@ GETS = [
 
 @pytest.fixture
 def history_owner(owner):
+    # Contiguous 3-day chunks keep each make_history insert under Postgres's 65,535 bind
+    # parameters (runtime_5m binds all 18 table columns per row, defaults included).
+    end = utcnow().replace(minute=0, second=0, microsecond=0)
     with session_scope() as s:
-        make_history(s, days=30)
+        for i in range(10):
+            make_history(s, days=3, end=end - timedelta(days=3 * i), seed=i + 1)
     with session_scope() as s:
         baseline.refit_all(s, utcnow())  # the nightly fit, so expected runtime and baselines exist
     return owner
