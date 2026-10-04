@@ -380,7 +380,11 @@ class NaturalExperiments(BaseModel):
     estimate_min_per_event: float | None
     ci90: tuple[float, float] | None
     placebo_estimate: float | None  # fake event times on similar days; should be ~0
+    placebo_ci90: tuple[float, float] | None = None
     bed_wing_estimate: float | None  # the wing should show no effect
+    bed_wing_ci90: tuple[float, float] | None = None
+    # False when a control moved materially: the estimate is then NOT a finding.
+    controls_ok: bool | None = None
     note: str
 
 

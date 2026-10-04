@@ -45,7 +45,10 @@ def migrate(engine: Engine | None = None) -> list[str]:
                     continue
                 log.info("applying migration %s", mid)
                 with conn.begin():
-                    conn.exec_driver_sql(sql)
+                    # Raw DBAPI cursor with NO parameters, so '%' in the SQL (format strings in
+                    # RAISE NOTICE, LIKE patterns) is never read as a placeholder.
+                    with conn.connection.dbapi_connection.cursor() as cur:
+                        cur.execute(sql)
                     conn.execute(text("INSERT INTO schema_migrations (id) VALUES (:id)"), {"id": mid})
                 applied.append(mid)
         finally:

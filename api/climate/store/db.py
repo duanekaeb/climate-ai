@@ -21,8 +21,10 @@ def get_engine(url: str | None = None) -> Engine:
     return create_engine(
         url or get_settings().database_url,
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
+        # app + worker + homekit share one Postgres; keep the total well under max_connections
+        # (the TimescaleDB image tunes it down to 25 on 2 GB hosts).
+        pool_size=3,
+        max_overflow=4,
         future=True,
     )
 

@@ -8,6 +8,11 @@
   expiry (the API raises the 30-day warning from it).
 - Claims a queued run every 20 s (``POST /agent/claim``), runs it, posts ``/finish``. One run
   at a time. Claude is never in the control path, so a stopped agent only delays reports.
+  Every claimed run is finished, even when running it raises unexpectedly (as failed).
+- Signed out (a failed sign-in check, or a run that failed sign-in, which defers that run 30
+  minutes): claims nothing, keeps heartbeating "not signed in", re-checks sign-in at most
+  every 30 minutes with one tiny run, and resumes claiming once it works.
+- A run deferred by this process is resumed from its Claude session when claimed again.
 - SIGTERM/SIGINT: stop claiming; a run in flight is cancelled and handed back as deferred so
   the next start picks it up.
 """
@@ -34,6 +39,8 @@ log = logging.getLogger("climate_agent.scheduler")
 
 FINISH_ATTEMPTS = 4
 STOP_FINISH_TIMEOUT_S = 8.0
+SIGNIN_RECHECK = timedelta(minutes=30)
+MAX_REMEMBERED_SESSIONS = 50
 
 
 def cli_version() -> str | None:
@@ -70,7 +77,10 @@ class Scheduler:
         self.now = now
         self.signed_in: bool | None = None
         self.signin_checked = False
+        self.signin_checked_at: datetime | None = None
         self.current_run_id: int | None = None
+        # run id -> Claude session id of runs this process deferred, to resume on reclaim.
+        self._run_sessions: dict[int, str] = {}
         self.last_error: str | None = None
         self._stop = asyncio.Event()
         self._warned_on: date | None = None
@@ -86,19 +96,31 @@ class Scheduler:
 
     # -- sign-in ---------------------------------------------------------------------
 
+    def signin_recheck_due(self) -> bool:
+        """Signed out, and the last sign-in check is at least SIGNIN_RECHECK old."""
+        if self.signed_in is not False:
+            return False
+        return self.signin_checked_at is None or self.now() - self.signin_checked_at >= SIGNIN_RECHECK
+
     async def signin_check(self) -> bool | None:
-        """One tiny run per process start. Usage-limited counts as signed in."""
-        if self.signin_checked:
+        """One tiny run per process start and, while signed out, again at most every 30
+        minutes. Usage-limited counts as signed in."""
+        if self.signin_checked and not self.signin_recheck_due():
             return self.signed_in
         self.signin_checked = True
-        outcome = await execute_run(
-            {"id": None, "kind": "signin_check"}, config=self.config, api=self.api, query_fn=self.query_fn, now=self.now
-        )
+        self.signin_checked_at = self.now()
+        try:
+            outcome = await execute_run(
+                {"id": None, "kind": "signin_check"}, config=self.config, api=self.api, query_fn=self.query_fn, now=self.now
+            )
+        except Exception as exc:  # noqa: BLE001 - a crash here must not end the work loop
+            outcome = RunOutcome(status="failed", error=redact(f"Sign-in check crashed: {type(exc).__name__}: {exc}"))
         if outcome.signed_in is not None:
             self.signed_in = outcome.signed_in
         elif outcome.status == "completed":
             self.signed_in = True
         if self.signed_in:
+            self.last_error = None
             log.info("Claude sign-in OK (subscription)")
         else:
             self.last_error = outcome.error
@@ -175,8 +197,11 @@ class Scheduler:
         run_id = int(run["id"])
         self.current_run_id = run_id
         log.info("running %s run %s", run.get("kind"), run_id)
+        resume = self._run_sessions.pop(run_id, None)
         try:
-            outcome = await execute_run(run, config=self.config, api=self.api, query_fn=self.query_fn, now=self.now)
+            outcome = await execute_run(
+                run, config=self.config, api=self.api, query_fn=self.query_fn, now=self.now, resume_session_id=resume
+            )
         except asyncio.CancelledError:
             handback = RunOutcome(
                 status="deferred",
@@ -189,21 +214,53 @@ class Scheduler:
             except (TimeoutError, asyncio.CancelledError):
                 log.error("could not hand run %s back before stopping", run_id)
             raise
+        except Exception as exc:  # noqa: BLE001 - a claimed run is always finished
+            log.error("run %s crashed: %s", run_id, redact(repr(exc)))
+            outcome = RunOutcome(
+                status="failed",
+                terminal_reason="agent_error",
+                error=redact(f"The agent service hit an unexpected error during this run: {type(exc).__name__}: {exc}"),
+            )
         finally:
             self.current_run_id = None
         if outcome.signed_in is not None:
             self.signed_in = outcome.signed_in
+            if outcome.signed_in is False:
+                self.signin_checked_at = self.now()  # this run just checked; re-check in 30 min
+        if outcome.status == "deferred" and outcome.session_id:
+            self._remember_session(run_id, outcome.session_id)
         self.last_error = outcome.error if outcome.status != "completed" else None
         log.info("run %s %s%s", run_id, outcome.status, f": {outcome.error}" if outcome.error else "")
         await self.finish(run_id, outcome.finish_body())
         return True
 
+    def _remember_session(self, run_id: int, session_id: str) -> None:
+        self._run_sessions[run_id] = session_id
+        while len(self._run_sessions) > MAX_REMEMBERED_SESSIONS:
+            self._run_sessions.pop(next(iter(self._run_sessions)))
+
+    async def work_once(self) -> bool:
+        """One pass of the work loop. Returns True when it did something (no wait needed).
+
+        Signed out: claim nothing (each run would fail sign-in too); re-check sign-in at most
+        every SIGNIN_RECHECK and resume claiming once it works."""
+        if self.signed_in is False:
+            if not self.signin_recheck_due():
+                return False
+            await self.signin_check()
+            await self.heartbeat()  # report the result right away
+            return self.signed_in is not False
+        before = self.signed_in
+        processed = await self.claim_once()
+        if self.signed_in != before:
+            await self.heartbeat()
+        return processed
+
     async def work_loop(self) -> None:
         await self.signin_check()
         await self.heartbeat()  # report the sign-in result right away
         while not self.stopping:
-            processed = await self.claim_once()
-            if not processed:
+            if not await self.work_once():
                 await _wait(self._stop, self.config.claim_s)
 
     async def run(self) -> bool:

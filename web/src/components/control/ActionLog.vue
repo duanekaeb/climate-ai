@@ -7,6 +7,7 @@ import AsyncState from '@/components/AsyncState.vue'
 import Card from '@/components/Card.vue'
 import Icon from '@/components/Icon.vue'
 import { dateTime } from '@/components/analysis/stats'
+import { temp } from '@/lib/format'
 import { ACTIONS_LIMIT, useControl } from '@/stores/control'
 import { unitName } from './units'
 
@@ -51,8 +52,8 @@ function brief(r: Record<string, unknown> | null): string {
   const h = r.heat_f ?? r.heat ?? r.heat_sp_f
   const c = r.cool_f ?? r.cool ?? r.cool_sp_f
   const parts: string[] = []
-  if (typeof h === 'number') parts.push(`heat ${h}°`)
-  if (typeof c === 'number') parts.push(`cool ${c}°`)
+  if (typeof h === 'number') parts.push(`heat ${temp(h)}`)
+  if (typeof c === 'number') parts.push(`cool ${temp(c)}`)
   const hrs = r.hours ?? r.hold_hours
   if (typeof hrs === 'number') parts.push(`${hrs} h`)
   return parts.join(' · ')

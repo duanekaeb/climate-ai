@@ -59,6 +59,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-climate}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: ${POSTGRES_DB:-climate}
+      # timescaledb-tune would cap connections at 25 on a 2 GB host; app + worker + homekit +
+      # backups need more headroom than that.
+      TS_TUNE_MAX_CONNS: "100"
       TIMESCALEDB_TELEMETRY: "off"
       TZ: ${TZ:-UTC}
     volumes:

@@ -172,3 +172,25 @@ def test_next_nightly_at(chicago):
     assert agent_queue.next_nightly_at(db, local(2026, 10, 4, 1)) == local(2026, 10, 4, 3, 30)
     agent_queue.schedule_due(db, local(2026, 10, 4, 4))
     assert agent_queue.next_nightly_at(db, local(2026, 10, 4, 4)) == local(2026, 10, 5, 3, 30)
+
+
+def test_waiting_runs_do_not_pile_up_and_stale_ones_expire(db):
+    from datetime import UTC, datetime, timedelta
+
+    from climate import agent_queue
+    from climate.store.orm import AgentRun
+
+    t0 = datetime(2026, 7, 1, 15, 0, tzinfo=UTC)  # 10:00 in Chicago, after 03:30
+    ids = [agent_queue.schedule_due(db, t0 + timedelta(days=d))[0] for d in range(4)]
+    # the agent never claimed any: each new nightly replaced the one still waiting
+    statuses = [db.get(AgentRun, i).status for i in ids]
+    assert statuses == ["cancelled", "cancelled", "cancelled", "queued"]
+    # a run that waited more than 36 h is cancelled instead of being run late
+    assert agent_queue.claim_next(db, t0 + timedelta(days=5)) is None
+    assert db.get(AgentRun, ids[-1]).status == "cancelled"
+    # owner chat questions never expire
+    chat = agent_queue.enqueue(db, "chat", "owner", prompt="hi")
+    chat.created_at = t0 - timedelta(days=10)
+    db.flush()
+    claimed = agent_queue.claim_next(db, t0 + timedelta(days=5))
+    assert claimed is not None and claimed.id == chat.id

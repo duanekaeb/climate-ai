@@ -975,12 +975,15 @@ export interface NaturalEvent {
  * via the `definition` "NaturalExperiments".
  */
 export interface NaturalExperiments {
+  bed_wing_ci90: [unknown, unknown] | null
   bed_wing_estimate: number | null
   ci90: [unknown, unknown] | null
+  controls_ok: boolean | null
   days: number
   estimate_min_per_event: number | null
   events: NaturalEvent[]
   note: string
+  placebo_ci90: [unknown, unknown] | null
   placebo_estimate: number | null
 }
 /**

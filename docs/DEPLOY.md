@@ -84,9 +84,8 @@ The first build takes a few minutes (it builds the web app and installs the Pyth
 On start the app applies database migrations and seeds the house; the worker then generates
 synthetic history for the simulator.
 
-Until you do section 9 the agent has no Claude sign-in. It may restart about once a minute with
-"refusing to start: CLAUDE_CODE_OAUTH_TOKEN is not set": harmless (Claude is never in the
-control path); `docker compose stop agent` silences it.
+Until you do section 9 the agent has no Claude sign-in. It stays up and idle (Claude never
+runs) and reports "not signed in" on the Live and Ask Claude pages; nothing else is affected.
 
 ## 5. First visit: choose the owner password
 
@@ -128,6 +127,13 @@ docker exec <nginx-container> nginx -t && docker exec <nginx-container> nginx -s
 Both files proxy the websocket at `/api/ws` with the HTTP/1.1 upgrade headers and a long read
 timeout, overwrite `X-Forwarded-For` with the real client address (the login throttle counts
 attempts per client IP), and contain a commented `allow`/`deny` block for LAN + Tailscale only.
+
+The app trusts `X-Forwarded-For` only from `FORWARDED_ALLOW_IPS` (default `172.16.0.0/12`, Docker's
+usual bridge range). If your Docker networks live elsewhere (some hosts with many stacks hand
+out `192.168.x.x` bridges), set it in `.env` to the address your nginx connects from, e.g. the
+nginx container's IP or the bridge subnet (`docker network inspect <network>`). If it is wrong,
+every visitor shares one login-throttle bucket and a single wrong-password streak locks out the
+whole house for five minutes.
 
 ### HTTPS
 

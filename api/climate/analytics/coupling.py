@@ -444,6 +444,7 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
             f"{est:+.0f} min per day versus its weather baseline (90% interval {lo:.0f} to {hi:.0f}).")
     if not _excludes_zero(lo, hi):
         note = note[:-1] + ", which includes zero: no clear effect."
+    controls_ok: bool | None = None
     checks = []
     if placebo is not None:
         checks.append(f"fake-event placebo {placebo[0]:+.0f} min ({placebo[1]:.0f} to {placebo[2]:.0f})")
@@ -456,6 +457,7 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
         def material(c: tuple[float, float, float] | None) -> bool:
             return moved(c) and abs(c[0]) >= MATERIAL_PLACEBO * abs(est)  # type: ignore[index]
 
+        controls_ok = not (material(placebo) or material(bed))
         if material(placebo) or material(bed):
             verdict = " - a check moved, so treat the estimate with suspicion."
         elif moved(placebo) or moved(bed):
@@ -466,5 +468,8 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
     return NaturalExperiments(
         days=days, events=events_out, estimate_min_per_event=round(est, 1), ci90=(round(lo, 1), round(hi, 1)),
         placebo_estimate=None if placebo is None else round(placebo[0], 1),
-        bed_wing_estimate=None if bed is None else round(bed[0], 1), note=note,
+        placebo_ci90=None if placebo is None else (round(placebo[1], 1), round(placebo[2], 1)),
+        bed_wing_estimate=None if bed is None else round(bed[0], 1),
+        bed_wing_ci90=None if bed is None else (round(bed[1], 1), round(bed[2], 1)),
+        controls_ok=controls_ok, note=note,
     )

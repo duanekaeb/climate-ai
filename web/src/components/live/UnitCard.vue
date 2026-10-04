@@ -33,7 +33,7 @@ const hold = computed(() => {
   const h = props.unit.hold
   if (!h) return null
   const what =
-    h.kind === 'temperature' ? `Hold ${temp(h.heat_f, 0)}–${temp(h.cool_f, 0)}` : `Hold: ${h.climate_ref ?? 'comfort setting'}`
+    h.kind === 'temperature' ? `Hold ${temp(h.heat_f)}–${temp(h.cool_f)}` : `Hold: ${h.climate_ref ?? 'comfort setting'}`
   const until = h.end ? `until ${localTime(h.end, props.tz)}` : 'until changed'
   return { what, until, byUs: h.set_by_us }
 })
@@ -76,8 +76,8 @@ const maxedAlarm = computed(() => props.unit.unit_key === 'up' && props.unit.max
         </p>
       </div>
       <dl class="num shrink-0 space-y-0.5 text-right text-sm">
-        <div><dt class="inline text-muted">Heat </dt><dd class="inline font-semibold text-bad">{{ temp(unit.heat_sp_f, 0) }}</dd></div>
-        <div><dt class="inline text-muted">Cool </dt><dd class="inline font-semibold text-accent">{{ temp(unit.cool_sp_f, 0) }}</dd></div>
+        <div><dt class="inline text-muted">Heat </dt><dd class="inline font-semibold text-bad">{{ temp(unit.heat_sp_f) }}</dd></div>
+        <div><dt class="inline text-muted">Cool </dt><dd class="inline font-semibold text-accent">{{ temp(unit.cool_sp_f) }}</dd></div>
       </dl>
     </div>
 
@@ -106,7 +106,7 @@ const maxedAlarm = computed(() => props.unit.unit_key === 'up' && props.unit.max
           <span class="chip border border-line bg-surface text-muted">{{ RULE_LABELS[unit.target.rule] }}</span>
         </div>
         <p class="num mt-1 font-semibold">
-          Heat {{ temp(unit.target.heat_f, 0) }} · Cool {{ temp(unit.target.cool_f, 0) }}
+          Heat {{ temp(unit.target.heat_f) }} · Cool {{ temp(unit.target.cool_f) }}
           <span v-if="unit.target.desired === 'program'" class="text-xs font-normal text-muted">· schedule already matches</span>
         </p>
         <p class="mt-1 text-sm text-muted">{{ unit.target.reason }}</p>

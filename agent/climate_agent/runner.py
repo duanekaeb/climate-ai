@@ -6,11 +6,18 @@ Isolation, by construction:
 - no filesystem settings (``setting_sources=[]``), only our MCP server
   (``strict_mcp_config``), and an empty working directory;
 - subscription billing only: no API key or ``--bare`` mode reaches the CLI, and a run whose
-  init message reports an API-key source is aborted before it can spend anything.
+  init message reports an API-key source is aborted before it can spend anything;
+- prompts are delivered verbatim (``verbatim_prompts``): no ``@path`` expansion or slash
+  commands from the owner's chat text or a trigger's JSON.
 
 A digest is trusted only when ``ResultMessage.terminal_reason == "completed"``. A usage limit
 (HTTP 429) defers the run until the limit resets; if only the Opus limit was hit, the run is
-retried once, immediately, on the fallback model.
+retried once, immediately, on the fallback model. A sign-in failure defers the run 30 minutes
+(the scheduler stops claiming until sign-in works again).
+
+A retry (the immediate fallback retry, or a deferred / handed-back run claimed again) resumes
+the earlier Claude session when its transcript is still on disk, and is always told what the
+run already published, proposed or signed off, so gated side effects are not repeated.
 """
 
 from __future__ import annotations
@@ -40,11 +47,12 @@ from claude_agent_sdk import (
     ResultMessage,
     SystemMessage,
     TextBlock,
+    get_session_info,
     query,
 )
 
 from climate_agent import __version__
-from climate_agent.api import ApiClient
+from climate_agent.api import ApiClient, ApiError
 from climate_agent.config import (
     BARE_MODE_ENV_VAR,
     BILLING_ENV_VARS,
@@ -52,7 +60,7 @@ from climate_agent.config import (
     AgentConfig,
     ensure_empty_dir,
 )
-from climate_agent.toolkit import Toolkit
+from climate_agent.toolkit import Toolkit, clip, parse_ts
 from climate_agent.tools import SERVER_NAME, allowed_tool_names, create_house_server
 
 log = logging.getLogger("climate_agent.runner")
@@ -68,6 +76,12 @@ DISALLOWED_TOOLS: list[str] = [
 # apiKeySource values in the CLI's init message that mean per-token API billing.
 API_BILLED_KEY_SOURCES = frozenset({"ANTHROPIC_API_KEY", "apiKeyHelper", "/login managed key"})
 DEFAULT_DEFER = timedelta(hours=1)
+SIGNIN_DEFER = timedelta(minutes=30)
+PRIOR_REPORTS_LIMIT = 20
+PRIOR_CHANGES_LIMIT = 200
+# AgentRunOut fields a fresh claim leaves empty; any of them set means an earlier attempt
+# finished this run (deferred, or handed back when the service stopped).
+_ATTEMPT_HISTORY_FIELDS = ("not_before", "terminal_reason", "num_turns", "model", "error", "session_id")
 RESULT_TEXT_MAX = 20000
 ERROR_TEXT_MAX = 2000
 SIGNIN_SYSTEM_PROMPT = "This is a sign-in check for a scheduled service. Reply with the single word OK."
@@ -119,6 +133,7 @@ class _Collected:
     last_text: str = ""
     model: str | None = None
     api_key_source: str | None = None
+    session_id: str | None = None
     auth_error: bool = False
     rate_limited: bool = False
     stderr_tail: deque[str] = field(default_factory=lambda: deque(maxlen=8))
@@ -165,6 +180,8 @@ def verify_options(options: ClaudeAgentOptions) -> None:
         raise SubscriptionGuardError("filesystem settings must not load (setting_sources=[])")
     if options.permission_mode != "dontAsk":
         raise SubscriptionGuardError("permission_mode must be 'dontAsk'")
+    if options.verbatim_prompts is not True:
+        raise SubscriptionGuardError("prompts must be delivered verbatim (verbatim_prompts=True): no @path expansion")
     if any(not name.startswith(f"mcp__{SERVER_NAME}__") for name in options.allowed_tools):
         raise SubscriptionGuardError("only mcp__house__* tools may be pre-approved")
 
@@ -207,6 +224,15 @@ def user_prompt_for(run: Mapping[str, Any], now: datetime) -> str:
     raise ValueError(f"unknown run kind {kind!r}")
 
 
+def resume_prompt_for(run: Mapping[str, Any], now: datetime, why: str) -> str:
+    """The user turn that continues a resumed session (the original task is in its history)."""
+    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"(Run #{run.get('id')} resumed at {stamp}: {why}.) Carry on with the original task from where it "
+        "stopped and finish it. Anything you fetched before may be out of date; re-check what you rely on."
+    )
+
+
 def subprocess_env() -> dict[str, str]:
     """Extra environment for the Claude Code subprocess. Never an API key: the CLI inherits
     ``CLAUDE_CODE_OAUTH_TOKEN`` from this process, which ``assert_subscription_env`` checked."""
@@ -220,6 +246,7 @@ def build_options(
     *,
     model: str | None = None,
     stderr: Callable[[str], None] | None = None,
+    resume: str | None = None,
 ) -> ClaudeAgentOptions:
     signin = kind == "signin_check"
     chosen = model or (config.fallback_model if signin else config.model)
@@ -246,6 +273,10 @@ def build_options(
         max_turns=1 if signin else config.max_turns,
         env=subprocess_env(),
         stderr=stderr,
+        # The owner's chat text and trigger JSON go to Claude exactly as written: no @path
+        # file-mention expansion, no slash-command dispatch.
+        verbatim_prompts=True,
+        resume=None if signin else resume,
     )
 
 
@@ -262,11 +293,14 @@ async def _consume(query_fn: QueryFn, prompt: str, options: ClaudeAgentOptions, 
                 col.api_key_source = source if isinstance(source, str) else None
                 if isinstance(msg.data.get("model"), str):
                     col.model = msg.data["model"]
+                if isinstance(msg.data.get("session_id"), str) and msg.data["session_id"]:
+                    col.session_id = msg.data["session_id"]
                 if col.api_key_source in API_BILLED_KEY_SOURCES:
                     raise SubscriptionGuardError(
                         f"Claude Code signed in with an API key (apiKeySource={col.api_key_source}); aborted to avoid API billing."
                     )
         elif isinstance(msg, RateLimitEvent):
+            col.session_id = msg.session_id or col.session_id
             info = msg.rate_limit_info
             if col.rate_limit is None or info.status == "rejected" or col.rate_limit.status != "rejected":
                 col.rate_limit = info
@@ -282,6 +316,7 @@ async def _consume(query_fn: QueryFn, prompt: str, options: ClaudeAgentOptions, 
                 col.rate_limited = True
         elif isinstance(msg, ResultMessage):
             col.result = msg
+            col.session_id = msg.session_id or col.session_id
 
 
 def _usage(r: ResultMessage) -> dict[str, Any]:
@@ -317,7 +352,7 @@ def _base(col: _Collected, model: str) -> dict[str, Any]:
     return {
         "model": col.model or model,
         "num_turns": r.num_turns if r else None,
-        "session_id": r.session_id if r else None,
+        "session_id": (r.session_id if r else None) or col.session_id,
         "usage": _usage(r) if r else None,
     }
 
@@ -377,6 +412,8 @@ def _from_result_error(exc: ResultError, col: _Collected, model: str, now: datet
     status = exc.api_error_status
     if status is None and col.result is not None:
         status = col.result.api_error_status
+    if col.session_id is None and isinstance(exc.session_id, str) and exc.session_id:
+        col.session_id = exc.session_id
     if status == 429 or (status is None and col.rate_limited):
         return _usage_limited(col, model, text, exc.terminal_reason, now)
     reason = exc.terminal_reason or exc.subtype
@@ -394,9 +431,11 @@ async def _attempt(
     server: McpSdkServerConfig | None,
     model: str | None,
     now: Callable[[], datetime],
+    *,
+    resume: str | None = None,
 ) -> RunOutcome:
     col = _Collected()
-    options = build_options(kind, config, server, model=model, stderr=col.stderr_tail.append)
+    options = build_options(kind, config, server, model=model, stderr=col.stderr_tail.append, resume=resume)
     chosen = options.model or config.model
     try:
         if kind == "signin_check":
@@ -414,6 +453,12 @@ async def _attempt(
         tail = " | ".join(col.stderr_tail)
         detail = f"{type(exc).__name__}: {exc}" + (f" (stderr: {tail})" if tail else "")
         return _failed(col, chosen, detail, None, None)
+    except Exception as exc:  # noqa: BLE001 - the SDK also raises bare Exception
+        # (initialize control-request timeout, an error control_response, reader errors).
+        # CancelledError is a BaseException and still propagates (service stopping).
+        tail = " | ".join(col.stderr_tail)
+        detail = f"Claude Agent SDK error ({type(exc).__name__}): {exc}" + (f" (stderr: {tail})" if tail else "")
+        return _failed(col, chosen, detail, None, None)
     return _from_collected(col, chosen, now())
 
 
@@ -427,6 +472,108 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# ---------------------------------------------------------------------------------------
+# retries: resume the earlier session, and never repeat a gated side effect
+# ---------------------------------------------------------------------------------------
+
+
+def was_attempted(run: Mapping[str, Any]) -> bool:
+    """True when the claimed run carries history from an earlier attempt (it was deferred, or
+    handed back when the service stopped), so its gated tools may already have run."""
+    return any(run.get(name) not in (None, "") for name in _ATTEMPT_HISTORY_FIELDS)
+
+
+def session_exists(session_id: str, cwd: Path) -> bool:
+    """Whether the CLI still has this session's transcript on disk (``resume`` needs it)."""
+    try:
+        return get_session_info(session_id, directory=str(cwd)) is not None
+    except Exception:  # noqa: BLE001 - unreadable means "start fresh"
+        return False
+
+
+async def _rows(api: ApiClient, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    rows = await api.get(path, params)
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _since(row: Mapping[str, Any], key: str, since: datetime) -> bool:
+    ts = parse_ts(row.get(key))
+    return ts is not None and ts >= since
+
+
+async def prior_work_note(api: ApiClient, run: Mapping[str, Any], since: datetime) -> str:
+    """A note for a retried run: the reports it published (``agent_run_id``) and the changes,
+    experiments and sign-offs Claude made since the run was queued, so none is repeated."""
+    run_id = run.get("id")
+    done: list[str] = []
+    unchecked: list[str] = []
+    try:
+        for r in await _rows(api, "/reports", {"limit": PRIOR_REPORTS_LIMIT}):
+            if run_id is not None and r.get("agent_run_id") == run_id:
+                done.append(f"published {r.get('kind')} report #{r.get('id')} '{clip(r.get('title'), 80)}'")
+    except ApiError:
+        unchecked.append("reports")
+    try:
+        for c in await _rows(api, "/changes", {"limit": PRIOR_CHANGES_LIMIT}):
+            if c.get("proposed_by") == "claude" and _since(c, "created_at", since):
+                done.append(f"proposed change #{c.get('id')} '{clip(c.get('title'), 80)}' (now {c.get('status')})")
+            if c.get("decided_by") == "claude" and _since(c, "decided_at", since):
+                done.append(f"signed off change #{c.get('id')} '{clip(c.get('title'), 80)}' (now {c.get('status')})")
+    except ApiError:
+        unchecked.append("changes")
+    try:
+        for e in await _rows(api, "/experiments"):
+            if e.get("proposed_by") == "claude" and _since(e, "created_at", since):
+                done.append(f"proposed experiment #{e.get('id')} '{clip(e.get('name'), 80)}' (now {e.get('status')})")
+    except ApiError:
+        unchecked.append("experiments")
+    lines = ["Retry note: an earlier attempt of this run stopped before it finished."]
+    if done:
+        lines.append(
+            "Already done since this run was queued (by that attempt, or another Claude run). Do NOT publish, "
+            "propose or sign off any of these again; build on them and mention them in your summary:"
+        )
+        lines += [f"- {item}" for item in done]
+    elif not unchecked:
+        lines.append("It published no report and made no proposal, experiment or sign-off, so nothing needs skipping.")
+    if unchecked:
+        lines.append(
+            f"Could not check {', '.join(unchecked)} (API error). Before publishing, proposing or signing off "
+            "anything, look with list_reports, list_experiments and review_pending_changes so nothing is done twice."
+        )
+    return "\n".join(lines)
+
+
+async def _retry_prompt(
+    api: ApiClient,
+    run: Mapping[str, Any],
+    prompt: str,
+    session_id: str | None,
+    config: AgentConfig,
+    since: datetime,
+    now: datetime,
+    why: str,
+) -> tuple[str, str | None]:
+    """(prompt, resume session id) for a retry: resume when the session is still on disk,
+    otherwise start fresh; either way, with the note of what is already done."""
+    note = await prior_work_note(api, run, since)
+    if session_id and await asyncio.to_thread(session_exists, session_id, config.cwd):
+        return resume_prompt_for(run, now, why) + "\n\n" + note, session_id
+    return prompt + "\n\n" + note, None
+
+
+def _defer_signed_out(outcome: RunOutcome, now: datetime) -> RunOutcome:
+    """A sign-in failure is not the run's fault: hand it back for after sign-in is fixed."""
+    if outcome.signed_in is False and outcome.status == "failed":
+        outcome.status = "deferred"
+        outcome.not_before = now + SIGNIN_DEFER
+        outcome.error = redact(
+            f"{outcome.error or 'Claude sign-in failed.'} Deferred {int(SIGNIN_DEFER.total_seconds() // 60)} min; "
+            "the run is retried once sign-in works."
+        )
+    return outcome
+
+
 async def execute_run(
     run: Mapping[str, Any],
     *,
@@ -434,8 +581,12 @@ async def execute_run(
     api: ApiClient,
     query_fn: QueryFn = query,
     now: Callable[[], datetime] = _utcnow,
+    resume_session_id: str | None = None,
 ) -> RunOutcome:
-    """Run one claimed run to an outcome. Never raises for Claude or API problems."""
+    """Run one claimed run to an outcome. Never raises for Claude or API problems.
+
+    ``resume_session_id`` (or a ``session_id`` on the run) names the session an earlier
+    attempt of this run left; it is resumed when still on disk."""
     kind = str(run.get("kind") or "")
     try:
         assert_subscription_env()
@@ -443,22 +594,30 @@ async def execute_run(
         prompt = user_prompt_for(run, now())
     except (SubscriptionGuardError, RuntimeError, OSError, ValueError) as exc:
         return RunOutcome(status="failed", error=redact(str(exc)))
-    server = None if kind == "signin_check" else create_house_server(Toolkit(api, run_id=run.get("id")))
-    outcome = await _attempt(query_fn, prompt, kind, config, server, None, now)
-    first_model = config.fallback_model if kind == "signin_check" else config.model
-    if (
-        outcome.status == "deferred"
-        and outcome.opus_limited
-        and first_model != config.fallback_model
-        and kind != "signin_check"
-    ):
+    if kind == "signin_check":
+        return await _attempt(query_fn, prompt, kind, config, None, None, now)
+    started = now()
+    since = parse_ts(run.get("created_at")) or started - timedelta(days=1)
+    earlier = resume_session_id or (run.get("session_id") if isinstance(run.get("session_id"), str) else None)
+    first_prompt, first_resume = prompt, None
+    if earlier or was_attempted(run):
+        first_prompt, first_resume = await _retry_prompt(
+            api, run, prompt, earlier, config, since, started, "an earlier attempt was deferred or interrupted"
+        )
+    server = create_house_server(Toolkit(api, run_id=run.get("id")))
+    outcome = await _attempt(query_fn, first_prompt, kind, config, server, None, now, resume=first_resume)
+    if outcome.status == "deferred" and outcome.opus_limited and config.model != config.fallback_model:
         log.warning("Opus usage limit reached; retrying run %s once on %s", run.get("id"), config.fallback_model)
+        retry_prompt, retry_resume = await _retry_prompt(
+            api, run, prompt, outcome.session_id or first_resume, config, since, now(),
+            f"the Opus usage limit was reached, so it continues on {config.fallback_model}",
+        )
         server = create_house_server(Toolkit(api, run_id=run.get("id")))
-        retry = await _attempt(query_fn, prompt, kind, config, server, config.fallback_model, now)
+        retry = await _attempt(query_fn, retry_prompt, kind, config, server, config.fallback_model, now, resume=retry_resume)
         if retry.status == "deferred":
             retry.error = redact(f"Opus limit, then the fallback model's limit too. {retry.error or ''}")
-        return retry
-    return outcome
+        outcome = retry
+    return _defer_signed_out(outcome, now())
 
 
 async def run_one(

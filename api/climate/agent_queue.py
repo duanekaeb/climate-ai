@@ -29,6 +29,10 @@ FINISH_FIELDS = {"status", "result_text", "model", "terminal_reason", "num_turns
                  "not_before", "finished_at"}
 # A run 'running' this long without a finish call is assumed dead (agent crashed mid-run).
 STALE_RUNNING = timedelta(hours=3)
+# A scheduled or anomaly run nobody claimed for this long is superseded by newer data; run it
+# late and it spends the owner's subscription on a stale report.
+STALE_WAITING = timedelta(hours=36)
+EXPIRING_KINDS = ("nightly", "weekly", "triggered")
 DEFAULT_DEFER = timedelta(minutes=30)
 _TRIGGER_LOCK = 727_101  # advisory xact lock: serializes triggered enqueue (API + worker)
 
@@ -139,10 +143,31 @@ def _reap_stale(session: Session, now: datetime) -> None:
         publish(session, "agent_run", run.id)
 
 
+def _expire_waiting(session: Session, now: datetime) -> None:
+    """Cancel nightly/weekly/triggered runs that waited longer than STALE_WAITING (no agent,
+    signed out, stopped container). Owner chat questions never expire."""
+    old = session.execute(
+        select(AgentRun)
+        .where(
+            AgentRun.status.in_(WAITING),
+            AgentRun.kind.in_(EXPIRING_KINDS),
+            AgentRun.created_at < now - STALE_WAITING,
+        )
+        .with_for_update(skip_locked=True)
+    ).scalars().all()
+    for run in old:
+        run.status = "cancelled"
+        run.finished_at = now
+        run.error = "Superseded: waited more than 36 h for the agent service; newer runs cover this period."
+        session.flush()
+        publish(session, "agent_run", run.id)
+
+
 def claim_next(session: Session, now: datetime) -> AgentRun | None:
     """Oldest queued (or deferred with not_before <= now) run -> running (SELECT ... FOR UPDATE
-    SKIP LOCKED). Chat runs first."""
+    SKIP LOCKED). Chat runs first. Stale scheduled runs are cancelled first."""
     _reap_stale(session, now)
+    _expire_waiting(session, now)
     run = session.execute(
         select(AgentRun)
         .where(
@@ -189,6 +214,19 @@ def finish(session: Session, run_id: int, **fields: Any) -> AgentRun:
     return run
 
 
+def _supersede_waiting(session: Session, kind: str, now: datetime) -> None:
+    """A new period's scheduled run replaces an older one still waiting (agent down or signed
+    out), so the backlog never grows past one run per kind."""
+    for run in session.execute(
+        select(AgentRun).where(AgentRun.kind == kind, AgentRun.status.in_(WAITING)).with_for_update(skip_locked=True)
+    ).scalars():
+        run.status = "cancelled"
+        run.finished_at = now
+        run.error = f"Superseded by a newer {kind} run before the agent service picked it up."
+        session.flush()
+        publish(session, "agent_run", run.id)
+
+
 def _exists(session: Session, kind: str, start: datetime, end: datetime) -> bool:
     return session.execute(
         select(AgentRun.id).where(AgentRun.kind == kind, AgentRun.created_at >= start, AgentRun.created_at < end).limit(1)
@@ -213,12 +251,14 @@ def schedule_due(session: Session, now: datetime) -> list[int]:
     if local_now.time() >= parse_hhmm(settings.nightly_time):
         start, end = day_bounds_utc(local_now.date(), tz)
         if not _exists(session, "nightly", start, end):
+            _supersede_waiting(session, "nightly", now)  # one waiting nightly at most
             new.append(_insert(session, "nightly", "schedule", "", None, now).id)
 
     if local_now.weekday() == settings.weekly_day and local_now.time() >= parse_hhmm(settings.weekly_time):
         start, _ = day_bounds_utc(local_now.date(), tz)
         _, end = day_bounds_utc(local_now.date() + timedelta(days=6), tz)
         if not _exists(session, "weekly", start, end):
+            _supersede_waiting(session, "weekly", now)
             new.append(_insert(session, "weekly", "schedule", "", None, now).id)
     return new
 
