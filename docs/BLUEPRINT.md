@@ -17,11 +17,13 @@ The interactive version of this document, including a working mockup of the app,
 | Unit | Thermostat | Remote sensors | Notes |
 |---|---|---|---|
 | **Main floor** | ecobee in the Hallway (model to confirm) | School Room, Living Room, Kitchen | Its heat rises into the upstairs through the floor and the open stairwell |
-| **Upstairs** | ecobee Smart Thermostat Essential in the Toy Room (`attisRetail`, **no occupancy sensor**) | Girls' Room | Under the roof. Loaded by the sun and by heat from the main floor |
+| **Upstairs** | ecobee Smart Thermostat Essential in the Toy Room (`attisRetail`, no built-in occupancy sensor) | Girls' Room (Toy Room too? confirm) | Under the roof. Loaded by the sun and by heat from the main floor |
 | **Bed / Office** | ecobee in the Bedroom (model to confirm) | Office | Opposite side of the house. No link to the upstairs; a weak link to the main floor at most |
 
-There are seven temperature points. The four SmartSensors report motion-based occupancy. The
-Essential has no occupancy sensor, and the Hallway and Bedroom thermostats have one unless they are
+There are eight temperature points: three thermostats and five SmartSensors. Every SmartSensor
+reports temperature and occupancy, and they are the app's main occupancy source. The Essential
+thermostat has no occupancy sensor of its own, so if the Toy Room is read from the thermostat rather
+than a SmartSensor, that one room has no occupancy signal. The Hallway and Bedroom thermostats have one unless they are
 ecobee3 lite models. Humidity comes from the thermostats only.
 
 **Observed problem.** When the main floor is empty, ecobee Smart Away lets it float warm (about
@@ -72,16 +74,17 @@ Occupied rooms come first. An occupied room's comfort is never traded for runtim
 
 **Why ecobee's flag isn't enough.** The API reports occupancy as "motion in the past 30 minutes",
 updated about every 3 minutes in the cloud. PIR motion sensors miss people sitting still or
-sleeping. The Toy Room has no occupancy sensing at all.
+sleeping. The Toy Room has occupancy only if a SmartSensor is in it (the Essential has none built in).
 
 **Signals the app uses.**
 - Live motion from each SmartSensor over local HomeKit (pushed in seconds), plus polled "seconds
   since last motion".
 - Learned per-room patterns from the 5-minute sensor history (school days, weekends, holidays
-  separately). The Toy Room has no history until its presence sensor is installed.
+  separately), for every room with a SmartSensor.
 - Sleep windows for the Girls' Room and Bedroom: they count as occupied all night.
-- Add-on presence sensors (mmWave) where people sit still: Toy Room first, then Office and Living
-  Room. Door contacts on bedrooms (closed after motion means someone is probably inside).
+- Optional add-on presence sensors (mmWave), only for a room that keeps getting marked empty while
+  someone sits still (likely the Office). Door contacts on bedrooms (closed after motion means
+  someone is probably inside).
 - Phones only for whole-house "adults away"; the kids carry no phones.
 
 **States.** Start with three; add Arriving once predictions prove out.
@@ -323,10 +326,14 @@ ESP32 relays is possible but means building an uncertified thermostat. If cloud-
 becomes a hard requirement, use a listed thermostat with a local API (Venstar ColorTouch, Honeywell
 T6 Pro Z-Wave).
 
-**Hardware to add (read-only), in priority order:** Toy Room presence sensor; stairwell top/bottom
-temperature sensors; per-unit power monitoring (Emporia Vue 3 or Shelly EM Gen3); mmWave in Office,
-Living Room and School Room; bedroom/Office door contacts; wired attic probe; 24V call monitor with
-supply/return probes.
+**Hardware to add (read-only), in priority order:**
+1. A SmartSensor in the Toy Room, only if none of the five is there already.
+2. Stairwell top/bottom temperature sensors.
+3. Per-unit power monitoring (Emporia Vue 3 or Shelly EM Gen3).
+4. Optional mmWave for a room where people sit still and get marked empty.
+5. Bedroom/Office door contacts.
+6. A wired attic probe.
+7. A 24V call monitor with supply/return probes.
 
 **Adapter rules.**
 - Read back every write; the library swallows HTTP errors.
@@ -386,7 +393,7 @@ Phase 4.
 
 | Phase | When | Deliverable | Done when |
 |---|---|---|---|
-| 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, order Toy Room + stairwell sensors | all 7 points stream live; tests answered |
+| 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, confirm which rooms the five SmartSensors are in, order stairwell sensors | all 8 points stream live; tests answered |
 | 1 | weeks 1–2 | backfill, Live/Rooms/Runtime screens, daily digest | runtime per unit matches ecobee within 1% |
 | 2 | weeks 2–4 | baselines, attribution, history study, occupancy v1 (3 states) | baselines pass checks; a week of room states spot-checked |
 | 3 | weeks 3–5 | Claude analyst on your subscription (read-only tools + sign-off of model changes), weekly report, MCP server | the weekly report says something new |

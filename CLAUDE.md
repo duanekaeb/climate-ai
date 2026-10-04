@@ -6,9 +6,12 @@ Read `docs/BLUEPRINT.md` before building anything. It is the plan of record.
 
 - **Main floor:** ecobee in the Hallway (model to confirm); SmartSensors in the School Room,
   Living Room and Kitchen.
-- **Upstairs:** ecobee Smart Thermostat Essential (`attisRetail`) in the Toy Room, which has **no
-  occupancy sensor**; SmartSensor in the Girls' Room.
+- **Upstairs:** ecobee Smart Thermostat Essential (`attisRetail`) in the Toy Room, which has no
+  built-in occupancy sensor; SmartSensor in the Girls' Room. Confirm whether one of the five
+  SmartSensors is also in the Toy Room; if not, that room has no occupancy signal.
 - **Bed / Office wing:** ecobee in the Bedroom (model to confirm); SmartSensor in the Office.
+- Five SmartSensors in total (eight temperature points with the thermostats). Every SmartSensor
+  reports temperature and occupancy; they are the primary occupancy source.
 - The main floor drives heat into the upstairs (floor + open stairwell). The wing is independent
   of the upstairs and at most weakly linked to the main floor. Measure; don't assume.
 

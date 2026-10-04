@@ -481,7 +481,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
   <div class="hero-main">
     <p class="eyebrow">duanekaeb/climate-ai · project blueprint · October 2026</p>
     <h1 id="h-hero">One brain for three ecobees</h1>
-    <p class="lede">Your ecobees each see one floor and report one floor at a time. Climate AI treats the house as one connected system. It watches all seven sensors, learns how the floors push heat into each other, and checks every change against the weather. Then it adjusts the schedules to cut total runtime without letting a room you're using get uncomfortable.</p>
+    <p class="lede">Your ecobees each see one floor and report one floor at a time. Climate AI treats the house as one connected system. It watches all eight temperature points (three thermostats and five room sensors), learns how the floors push heat into each other, and checks every change against the weather. Then it adjusts the schedules to cut total runtime without letting a room you're using get uncomfortable.</p>
   </div>
   <div class="answers-grid" aria-label="Short answers to your three questions">
     <div class="answer">
@@ -493,7 +493,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
     <div class="answer">
       <span class="k">Your question 2</span>
       <h4>Does it put occupied rooms first?</h4>
-      <p><b>Yes.</b> The app keeps its own estimate for each room (live motion, sleep windows, learned habits) and never trades an occupied room's comfort for runtime. Most runtime savings come from empty floors, timing and the linked-floors rule.</p>
+      <p><b>Yes.</b> Your five SmartSensors already report occupancy. The app builds its own estimate for each room from them (live motion, sleep windows, learned habits) and never trades an occupied room's comfort for runtime. Most runtime savings come from empty floors, timing and the linked-floors rule.</p>
       <a href="#occupancy">How occupancy works</a>
     </div>
     <div class="answer">
@@ -504,7 +504,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
     </div>
   </div>
   <div class="pillars">
-    <div class="pillar"><span class="k">Monitor</span><h4>Every sensor, one view</h4><p>All three thermostats and four room sensors live over your local network, plus each unit's runtime in 5-minute detail from ecobee.</p></div>
+    <div class="pillar"><span class="k">Monitor</span><h4>Every sensor, one view</h4><p>All three thermostats and five room sensors live over your local network, plus each unit's runtime in 5-minute detail from ecobee.</p></div>
     <div class="pillar"><span class="k">Normalize</span><h4>Weather is the control</h4><p>Every runtime number is compared with what this weather should have cost. A cooler week never gets credited as a win.</p></div>
     <div class="pillar"><span class="k">Learn</span><h4>A thermal model of your house</h4><p>Learns how fast each floor gains heat, how much the main floor pushes upstairs, and what the sun adds. It's refit every night and kept only if it passes its accuracy checks.</p></div>
     <div class="pillar"><span class="k">Act</span><h4>Small, bounded, measured changes</h4><p>A deterministic controller moves setpoints inside your limits. Claude reviews results, explains them, and proposes the next experiment.</p></div>
@@ -515,7 +515,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
 <section class="block" id="house" aria-labelledby="h-house">
   <div class="sec-head">
     <p class="eyebrow">Your house</p>
-    <h2 id="h-house">Three units, one building, seven sensors</h2>
+    <h2 id="h-house">Three units, one building, eight temperature points</h2>
     <p>This is the house as you described it. The coupling arrows show what you've observed: the main floor drives heat into the upstairs, and the bedroom wing may be affected by the main floor slightly. The app's first job is to measure each of these links.</p>
   </div>
 
@@ -619,12 +619,12 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
       <thead><tr><th>Unit</th><th>Thermostat</th><th>Room sensors</th><th>What it fights</th><th>What the app will measure</th></tr></thead>
       <tbody>
         <tr><td><span class="swatch" style="background:var(--s-main)"></span><b>Main floor</b></td><td>ecobee in the Hallway</td><td>School Room, Living Room, Kitchen</td><td>Outdoor heat, kitchen loads, sun on its windows</td><td>How much of its heat ends up upstairs. Its own cooling rate.</td></tr>
-        <tr><td><span class="swatch" style="background:var(--s-up)"></span><b>Upstairs</b></td><td>ecobee Smart Thermostat Essential in the Toy Room <span class="muted">(no occupancy sensor)</span></td><td>Girls' Room</td><td>Roof and attic heat, plus heat rising from the main floor</td><td>Its load as a function of the main-floor temperature, outdoor temperature and sun</td></tr>
+        <tr><td><span class="swatch" style="background:var(--s-up)"></span><b>Upstairs</b></td><td>ecobee Smart Thermostat Essential in the Toy Room <span class="muted">(no built-in occupancy sensor)</span></td><td>Girls' Room</td><td>Roof and attic heat, plus heat rising from the main floor</td><td>Its load as a function of the main-floor temperature, outdoor temperature and sun</td></tr>
         <tr><td><span class="swatch" style="background:var(--s-bed)"></span><b>Bed / Office</b></td><td>ecobee in the Bedroom <span class="muted">(confirm)</span></td><td>Office</td><td>Outdoor heat on the far side of the house</td><td>Whether the main floor affects it at all. If not, it gets its own schedule.</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="small muted" style="margin-top:10px">Seven temperature points in total. The four SmartSensors report motion-based occupancy. The Essential in the Toy Room has no occupancy sensor, and the Hallway and Bedroom thermostats have one unless they're ecobee3 lite models. Humidity comes from the thermostats only. ecobee reports a sensor as occupied for 30 minutes after it last saw motion; the app reads motion live instead (see <a href="#occupancy">Occupancy</a>).</p>
+  <p class="small muted" style="margin-top:10px">Eight temperature points in total: three thermostats and five SmartSensors. Every SmartSensor reports temperature and occupancy, and those five are the app's main occupancy source. The Essential thermostat has no occupancy sensor of its own, so if the Toy Room's reading comes from the thermostat rather than a SmartSensor, that one room has no occupancy signal. The Hallway and Bedroom thermostats have one unless they're ecobee3 lite models. Humidity comes from the thermostats only. ecobee reports a sensor as occupied for 30 minutes after it last saw motion; the app reads motion live instead (see <a href="#occupancy">Occupancy</a>).</p>
 </section>
 
 <!-- ================= APP MOCKUP ================= -->
@@ -638,7 +638,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
   <div class="app" id="mock">
     <div class="app-bar">
       <span class="brand"><svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="7" fill="var(--ink)"/><path d="M7 15.5a6 6 0 0 1 12 0" fill="none" stroke="var(--bg)" stroke-width="2.2" stroke-linecap="round"/><circle cx="13" cy="15.5" r="2.2" fill="var(--accent)"/><path d="M13 15.5 16.6 11" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>Climate AI</span>
-      <span class="app-house">Home · 3 units · 7 sensors</span>
+      <span class="app-house">Home · 3 units · 8 sensors</span>
       <span class="pill accent mode-chip" id="modeChip">Suggest mode</span>
       <span class="live" aria-live="off"><i aria-hidden="true"></i><span id="liveAgo">Live · updated 8 s ago</span></span>
     </div>
@@ -686,7 +686,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
             <div class="zone-sub">Toy Room ecobee Essential · Home</div>
             <div class="zone-main"><span class="t" data-live="up">78.6<sup>°F</sup></span><span class="sp">Target <b>78°</b><span>Toy Room (day set)</span></span></div>
             <div class="rooms">
-              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Toy Room</span></span><span class="tag">radar add-on</span><span class="v">78.6°</span></div>
+              <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Toy Room</span></span><span class="tag">sensor</span><span class="v">78.6°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>Girls' Room</span></span><span class="tag">sensor</span><span class="v">78.1°</span></div>
             </div>
             <div class="zone-f"><div class="duty"><small>Duty, last hour · 71%</small><div class="meter"><i style="width:71%;background:var(--s-up)"></i></div></div><div class="rt">5h 40m<small>today</small></div></div>
@@ -741,7 +741,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
           </div>
         </div>
         <div class="row c21">
-          <div class="panel"><div class="panel-h"><h5>When each room is usually in use</h5><span class="sub">weekdays · learned from 12 months of sensor history (Toy Room: from its radar since install)</span></div><div id="ch-occ"></div>
+          <div class="panel"><div class="panel-h"><h5>When each room is usually in use</h5><span class="sub">weekdays · learned from 12 months of SmartSensor history</span></div><div id="ch-occ"></div>
             <p class="small muted" style="margin-top:6px">Nights in the Girls' Room and the Bedroom come from the sleep schedule. Motion sensors can't see people sleeping.</p></div>
           <div class="panel"><div class="panel-h"><h5>Rules for occupied rooms</h5></div>
             <ul class="small" style="margin:0;padding-left:1.1em;color:var(--ink-2);display:grid;gap:6px">
@@ -1013,7 +1013,7 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
       <ul>
         <li><b>It's a 30-minute flag, not motion.</b> ecobee's API reports a room as occupied if its sensor saw motion in the past 30 minutes, and the cloud copy updates about every 3 minutes. A room someone left 25 minutes ago still reads occupied.</li>
         <li><b>Motion sensors miss still people.</b> SmartSensors use PIR, which sees movement, not presence. Someone reading, working at a desk or sleeping goes undetected. Field studies of motion-based home control report exactly this: misses are worst at night.</li>
-        <li><b>The Toy Room is blind today.</b> The upstairs Smart Thermostat Essential has no occupancy sensor of its own, so upstairs occupancy currently comes only from the Girls' Room sensor. The Hallway and Bedroom thermostats sense occupancy only if they aren't ecobee3 lite models.</li>
+        <li><b>One room to check: the Toy Room.</b> Your five SmartSensors all report occupancy. The upstairs Smart Thermostat Essential doesn't have its own occupancy sensor, though. If the Toy Room's reading comes from the thermostat rather than a SmartSensor, that room has no occupancy signal, and moving or adding a SmartSensor there fixes it. The Hallway and Bedroom thermostats sense occupancy unless they're ecobee3 lite models.</li>
         <li><b>A temperature hold switches sensor sets.</b> ecobee's documented behavior is that a temperature hold uses the <em>Home</em> comfort setting's sensors, whatever the schedule says. An app that sets holds at night could quietly stop listening to the Girls' Room. The controller handles this explicitly (below), and it's a Phase 0 test on your firmware.</li>
       </ul>
     </div>
@@ -1021,9 +1021,9 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
       <h3 style="margin-bottom:12px">What the app uses instead</h3>
       <ul>
         <li><b>Live motion in seconds</b> from each SmartSensor over the local HomeKit link, with a "seconds since last motion" reading. The app sets its own windows per room instead of ecobee's fixed 30 minutes.</li>
-        <li><b>Learned patterns per room</b>, from the per-sensor occupancy history ecobee keeps in its 5-minute reports. The app learns when the School Room and Office are usually in use, separately for school days, weekends and holidays. The Toy Room has no history (the Essential has no occupancy sensor), so its pattern starts once the presence sensor is installed.</li>
+        <li><b>Learned patterns per room</b>, from the per-sensor occupancy history ecobee keeps in its 5-minute reports. The app learns when each sensor's room is usually in use (the School Room, Office, Living Room and so on), separately for school days, weekends and holidays.</li>
         <li><b>Sleep windows</b> for the Girls' Room and Bedroom. They count as occupied all night without needing motion, because motion sensors can't see sleepers.</li>
-        <li><b>Optional presence sensors</b> (mmWave radar) where people sit still: one in the Toy Room is the top recommendation, then the Office and Living Room. Door contacts on bedrooms help too: a door that closed after motion means someone is probably still inside.</li>
+        <li><b>Optional presence sensors</b> (mmWave radar) for rooms where people sit still for long stretches, such as the Office during work hours. The SmartSensors are enough to start; add radar only if a room keeps getting marked empty while someone is in it. Door contacts on bedrooms help too: a door that closed after motion means someone is probably still inside.</li>
         <li><b>Phones</b> only for whole-house "adults away". The kids don't carry phones, so phones alone never declare the house empty.</li>
       </ul>
     </div>
@@ -1490,10 +1490,10 @@ options = ClaudeAgentOptions(
     <table class="t">
       <thead><tr><th>Add</th><th>What it fixes</th><th>Rough cost</th></tr></thead>
       <tbody>
-        <tr><td><b>A presence sensor in the Toy Room</b> (Aqara FP300 mmWave; an ecobee SmartSensor also works but is motion-only)</td><td>The Toy Room has no occupancy sensing: the Essential has none built in</td><td class="num">$40–50</td></tr>
+        <tr><td><b>A SmartSensor in the Toy Room</b>, only if none of your five is there already</td><td>The Essential thermostat has no occupancy sensor of its own, so a Toy Room read from the thermostat has no occupancy signal</td><td class="num">~$50, or move an existing one</td></tr>
         <tr><td><b>2 temperature sensors at the top and bottom of the stairwell</b> (Zigbee, e.g. SONOFF SNZB-02D)</td><td>Measures the stairwell heat flow directly instead of inferring it</td><td class="num">~$16 each</td></tr>
         <tr><td><b>Power monitoring on each condenser and air handler</b> (Emporia Vue 3 flashed to ESPHome, or Shelly EM Gen3 per unit)</td><td>Real kW per unit, so the app optimizes energy instead of minutes. Also catches a compressor that fails to start.</td><td class="num">~$200 total, or ~$82 per unit</td></tr>
-        <tr><td><b>mmWave presence in the Office, Living Room and School Room</b></td><td>People sitting still are missed by motion sensors</td><td class="num">$35–60 each</td></tr>
+        <tr><td><b>mmWave presence</b>, optional, only for rooms that get marked empty while someone sits still (likely the Office)</td><td>Motion sensors can miss people sitting still for a long time</td><td class="num">$35–60 each</td></tr>
         <tr><td><b>Door contacts on the bedrooms and Office</b></td><td>A door that closed after motion means someone is inside</td><td class="num">~$15 each</td></tr>
         <tr><td><b>A wired attic probe</b>, if the upstairs ducts run there</td><td>Attic heat is a big upstairs load; battery sensors aren't rated for attic temperatures</td><td class="num">~$10–20</td></tr>
         <tr><td><b>A 24V call monitor with supply/return air probes</b>, per air handler</td><td>Filter and airflow diagnostics from the temperature drop across the coil</td><td class="num">$40–80 each</td></tr>
@@ -1548,7 +1548,7 @@ options = ClaudeAgentOptions(
     <div class="lane"><h4>Sources</h4>
       <div class="svc"><b>ecobee cloud</b><span>Runtime reports, history, sensor sets, settings, holds</span></div>
       <div class="svc"><b>HomeKit, local</b><span>Live temperatures, motion, cooling state; backup holds</span></div>
-      <div class="svc"><b>Add-on sensors</b><span>Toy Room presence, stairwell temps, door contacts (Zigbee/ESPHome)</span></div>
+      <div class="svc"><b>Add-on sensors</b><span>Stairwell temps, door contacts, optional radar (Zigbee/ESPHome)</span></div>
       <div class="svc"><b>Open-Meteo + NWS</b><span>Forecast, observations, archive</span></div>
       <div class="svc"><b>Power monitor</b><span>Optional: kW per unit</span></div>
     </div>
@@ -1580,7 +1580,7 @@ options = ClaudeAgentOptions(
       <div class="table-wrap"><table class="t" style="min-width:420px">
         <thead><tr><th>Table</th><th>Holds</th></tr></thead>
         <tbody>
-          <tr><td class="num">units, sensors</td><td>3 thermostats, 7 temperature points, room names, which floor</td></tr>
+          <tr><td class="num">units, sensors</td><td>3 thermostats, 5 SmartSensors (8 temperature points), room names, which floor</td></tr>
           <tr><td class="num">readings_5m</td><td>Per sensor: temp, occupancy. Per unit: humidity, targets, mode, comfort setting, equipment</td></tr>
           <tr><td class="num">runtime_5m</td><td>Per unit: compCool1/2, compHeat1/2, auxHeat1/2, fan seconds (stage 1 already includes stage 2)</td></tr>
           <tr><td class="num">occupancy_events, room_state_1m</td><td>Every motion, presence and door signal; each room's state and confidence by minute</td></tr>
@@ -1626,7 +1626,7 @@ options = ClaudeAgentOptions(
     <p>Each phase ends in something you can use. Apart from Phase 0's HomeKit pairing and a one-night test hold, nothing writes to a thermostat until phase 4, and complexity is earned: the simple linked-floors rule goes first, and the full house model only replaces it if it does better. It's October, so the backfill hands you last summer's cooling data right away. Heating season gets its own learning pass, and that's when heat rising from the main floor starts working in your favor.</p>
   </div>
   <div>
-    <div class="phase"><div class="when"><b>Phase 0</b>this week</div><div><h4>Access, local pairing, and the facts</h4><ul><li>ecobee sign-in with TOTP or SMS MFA; HomeKit pairing for all three thermostats (decide on Apple Home first)</li><li>Run the <a href="#ecobee">Phase 0 tests</a>: compressor columns, history depth, model numbers, hold sensor behavior, Smart Away type</li><li>Order the Toy Room presence sensor and the two stairwell sensors; database schema and Open-Meteo for your location</li></ul><p class="exit"><b>Done when</b>all 7 temperature points stream live and the Phase 0 tests have answers</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 0</b>this week</div><div><h4>Access, local pairing, and the facts</h4><ul><li>ecobee sign-in with TOTP or SMS MFA; HomeKit pairing for all three thermostats (decide on Apple Home first)</li><li>Run the <a href="#ecobee">Phase 0 tests</a>: compressor columns, history depth, model numbers, hold sensor behavior, Smart Away type</li><li>Confirm which rooms the five SmartSensors are in (one in the Toy Room?), order the two stairwell sensors, database schema and Open-Meteo for your location</li></ul><p class="exit"><b>Done when</b>all 8 temperature points stream live and the Phase 0 tests have answers</p></div></div>
     <div class="phase"><div class="when"><b>Phase 1</b>weeks 1–2</div><div><h4>History and the live dashboard</h4><ul><li>Backfill all available 5-minute history and matching weather</li><li>Live, Rooms and Runtime screens; daily digest to your phone</li></ul><p class="exit"><b>Done when</b>daily runtime per unit matches ecobee's own reports within 1%</p></div></div>
     <div class="phase"><div class="when"><b>Phase 2</b>weeks 2–4</div><div><h4>Baselines, the history study, occupancy v1</h4><ul><li>Weather-expected runtime per unit and the attribution waterfall</li><li>History study of past warm-main-floor afternoons for a first coupling estimate</li><li>Room occupancy with three states (occupied, asleep, empty) and learned patterns</li></ul><p class="exit"><b>Done when</b>baselines pass their checks on held-out days, and you've spot-checked a week of room states</p></div></div>
     <div class="phase"><div class="when"><b>Phase 3</b>weeks 3–5</div><div><h4>Claude as analyst (read-only)</h4><ul><li>House tools, nightly review with sign-off of model changes, weekly report, Ask Claude tab, all on your Claude subscription through the Agent SDK</li><li>MCP server so you can ask from Claude Code or Desktop on your subscription</li></ul><p class="exit"><b>Done when</b>the weekly report tells you something you didn't know</p></div></div>
@@ -2036,7 +2036,7 @@ const ROOMS=[
   ["Living Room","Main floor","--s-main",false,"6%","No motion for 2 h 10 min (live over HomeKit)","Evenings","Yes","77.9° · buffer"],
   ["Kitchen","Main floor","--s-main",false,"4%","No motion for 2 h 40 min","—","Yes","78.3° · buffer"],
   ["School Room","Main floor","--s-main",false,"9%","School ended 3 PM on the schedule; no motion since 2:51 PM","School days 8–3","Yes","76.8° · buffer"],
-  ["Toy Room","Upstairs","--s-up",true,"97%","Radar presence sensor (recommended add-on). The Essential thermostat has no occupancy sensor of its own.","Daytime","Yes (day set)","78.6° · 77–79 ✓"],
+  ["Toy Room","Upstairs","--s-up",true,"97%","Motion 1 min ago (SmartSensor)","Daytime","Yes (day set)","78.6° · 77–79 ✓"],
   ["Girls' Room","Upstairs","--s-up",false,"8%","No motion since 9:05 AM; counts as asleep from 9 PM (sleep window)","Nights","Night set only","78.1° · relaxed"],
   ["Office","Bed / Office","--s-bed",true,"91%","Radar sensor (optional add-on) sees someone at the desk. No motion for 22 min, so ecobee alone would call it empty in 8 min.","Weekdays 9–5","Yes (9–5 set)","75.8° · 75–77 ✓"],
   ["Bedroom","Bed / Office","--s-bed",false,"3%","Empty; counts as asleep from 10 PM (sleep window)","Nights","Night set only","76.4° · relaxed"]];
