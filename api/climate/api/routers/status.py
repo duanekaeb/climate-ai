@@ -249,19 +249,32 @@ def weather_now(session: Session, now: datetime, tz: str) -> WeatherNow | None:
                     WeatherHour.kind == "forecast", WeatherHour.source == fsrc, WeatherHour.ts == hour
                 )
             ).scalar_one_or_none()
+    # Today's high/low over the whole local day: every forecast hour plus the observed hours so
+    # far (a source may keep no forecast rows for hours already past, e.g. the simulator).
     day_start, day_end = day_bounds_utc(local_date(now, tz), tz)
     day_end = day_end - timedelta(seconds=1)
-    kind, day_src = "forecast", pick_weather_source(session, "forecast", day_start, day_end)
-    if day_src is None:
-        kind, day_src = "observed", pick_weather_source(session, "observed", day_start, day_end)
-    high = low = None
-    if day_src:
-        high, low = session.execute(
-            select(func.max(WeatherHour.temp_f), func.min(WeatherHour.temp_f)).where(
-                WeatherHour.kind == kind, WeatherHour.source == day_src,
-                WeatherHour.ts >= day_start, WeatherHour.ts <= day_end,
+    obs_src = pick_weather_source(session, "observed", day_start, now)
+    fc_src = pick_weather_source(session, "forecast", day_start, day_end)
+    temps: list[float] = []
+    if obs_src:
+        temps += session.execute(
+            select(WeatherHour.temp_f).where(
+                WeatherHour.kind == "observed", WeatherHour.source == obs_src,
+                WeatherHour.ts >= day_start, WeatherHour.ts <= now, WeatherHour.temp_f.is_not(None),
             )
-        ).one()
+        ).scalars().all()
+    if fc_src:
+        temps += session.execute(
+            select(WeatherHour.temp_f).where(
+                WeatherHour.kind == "forecast", WeatherHour.source == fc_src,
+                WeatherHour.ts >= day_start, WeatherHour.ts <= day_end, WeatherHour.temp_f.is_not(None),
+            )
+        ).scalars().all()
+    if current is not None and current.temp_f is not None:
+        temps.append(current.temp_f)
+    high = max(temps) if temps else None
+    low = min(temps) if temps else None
+    day_src = obs_src or fc_src
     if current is None and high is None:
         return None
     return WeatherNow(
@@ -289,7 +302,7 @@ def source_info(session: Session, now: datetime) -> SourceInfo:
     else:
         age = (now - hb.at).total_seconds()
         source_ok = pick("ok", "source_ok")
-        text = pick("detail", "source_detail")
+        text = pick("detail", "source_detail") or top.get("source_error")
         detail = text if isinstance(text, str) else ""
         ok = hb.ok and source_ok is not False and age <= WORKER_STALE_S
         if age > WORKER_STALE_S:
@@ -306,7 +319,7 @@ def source_info(session: Session, now: datetime) -> SourceInfo:
             signed_in = has_secret(session, "ecobee_refresh_token")
     return SourceInfo(
         kind=src.kind, ok=ok, detail=detail, signed_in=signed_in,
-        last_success_at=parse_dt(pick("last_success_at", "last_success_at")),
+        last_success_at=parse_dt(pick("last_success_at", "last_success_at") or top.get("source_last_success_at")),
     )
 
 
@@ -489,12 +502,17 @@ def runtime_intraday(
     d = day or local_date(utcnow(), tz)
     start, end = day_bounds_utc(d, tz)
     by_unit: dict[str, list[IntradayPoint]] = {k: [] for k in UNIT_KEYS}
+    # Same heating metric as the daily totals: comp_heat1 for a heat pump (aux = backup heat),
+    # aux_heat1 for a furnace (no separate backup). Stage-2 columns are never added.
+    heat_pump = daily.heat_metrics(session)
     for r in session.execute(
         select(Runtime5m).where(Runtime5m.ts >= start, Runtime5m.ts < end).order_by(Runtime5m.unit_key, Runtime5m.ts)
     ).scalars():
+        hp = heat_pump.get(r.unit_key, True)
         by_unit.setdefault(r.unit_key, []).append(
             IntradayPoint(
-                ts=r.ts, cool_s=r.comp_cool1, heat_s=r.comp_heat1, aux_s=r.aux_heat1, fan_s=r.fan,
+                ts=r.ts, cool_s=r.comp_cool1, heat_s=r.comp_heat1 if hp else r.aux_heat1,
+                aux_s=r.aux_heat1 if hp else 0, fan_s=r.fan,
                 zone_temp_f=_r(r.zone_temp_f, 2), heat_sp_f=_r(r.heat_sp_f), cool_sp_f=_r(r.cool_sp_f),
             )
         )
