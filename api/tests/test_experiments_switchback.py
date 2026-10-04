@@ -274,6 +274,7 @@ def test_update_days_fills_house_residuals(db, monkeypatch):
     exp = _insert_experiment(db, start, 10)
     sched = dict(switchback.assign_days(["ctl", "trt"], start, 10, 2, 1))
     thin_day, no_fit_day = start + timedelta(days=1), start + timedelta(days=2)
+    short_day = start + timedelta(days=3)  # main has 270 of 288 slots: still included
 
     def fake_rows(session, a, b, tz, unit_keys=None):
         out = []
@@ -281,15 +282,17 @@ def test_update_days_fills_house_residuals(db, monkeypatch):
         while d <= b:
             for u in ("main", "up", "bed"):
                 cool = 9000.0 if sched.get(d) == "trt" else 10000.0
-                slots = 100 if (d == thin_day and u == "up") else 288
+                slots = 100 if (d == thin_day and u == "up") else 270 if (d == short_day and u == "main") else 288
                 out.append(
                     SimpleNamespace(
                         day=d,
                         unit_key=u,
-                        cool_s=cool,
+                        cool_s=cool * slots / 288,  # the slots with data ran like the rest of the day
                         heat_s=0.0,
                         aux_s=0.0,
                         slots=slots,
+                        expected_slots=288,
+                        coverage=slots / 288,
                         mode="cool",
                         outdoor_mean_f=85.0,
                     )
@@ -331,11 +334,23 @@ def test_update_days_fills_house_residuals(db, monkeypatch):
             assert not r.included and "90%" in r.note
         elif d == no_fit_day:
             assert not r.included and "no active cool baseline for bed" in r.note and r.residual_s is None
+        elif d == short_day:
+            # Expected over the same 270 slots the actual covers, so a dropout is not a saving.
+            assert r.included and r.note is None
+            assert r.expected_s == pytest.approx(20000.0 + 10000.0 * 270 / 288)
+            want = -1000.0 * (2 + 270 / 288) if r.arm == "trt" else 0.0
+            assert r.residual_s == pytest.approx(want)
         else:
             assert r.included and r.note is None
             assert r.expected_s == pytest.approx(30000.0)
             want = -3000.0 if r.arm == "trt" else 0.0
             assert r.residual_s == pytest.approx(want)
+    # Checkpoint 1 (day 3) ended 4 days ago, past the refill window: its verdict is frozen
+    # (only one usable day, so it cannot judge); checkpoint 2 (day 7) is still open.
+    db.refresh(exp)
+    cps = exp.result["checkpoints"]
+    assert set(cps) == {"1"}
+    assert cps["1"]["decision"] == "continue" and cps["1"]["effect_pct"] is None and cps["1"]["at"]
 
 
 # ---------------------------------------------------------------------------------------
@@ -378,25 +393,32 @@ def test_analyze_continue_between_looks(db, no_baselines):
 
 def test_analyze_stop_win_at_first_checkpoint(db, no_baselines):
     today = local_date(utcnow(), TZ)
-    exp = _insert_experiment(db, today - timedelta(days=11), 28)  # past checkpoint 1 (day 9)
+    exp = _insert_experiment(db, today - timedelta(days=13), 28)  # checkpoint 1 (day 9) ended 5 days ago
     _fill(db, exp, -3000.0, 300.0)  # treatment ~15% less runtime
+    pending = analysis.analyze(db, exp)  # reached, but not yet judged by the nightly run
+    assert pending.decision == "continue" and pending.checkpoint_reached == 1
+    assert "verdict is fixed in the nightly run" in pending.note and "not a decision" in pending.note
+    assert analysis.freeze_checkpoints(db, utcnow()) == 1
     a = analysis.analyze(db, exp)
     assert a.decision == "stop_win" and a.checkpoint_reached == 1
     assert a.effect_pct == pytest.approx(-15.0, abs=2.0)
     assert a.ci_high_pct < 0
-    # the checkpoint uses only its own 9 days, not the 11 observed
-    assert "vs" in a.note and a.days_observed == 11
+    # the checkpoint uses only its own 9 days, not the 13 observed
+    assert "(5 vs 4 days" in a.note or "(4 vs 5 days" in a.note
+    assert a.days_observed == 13 and "Verdict fixed" in a.note
+    assert analysis.freeze_checkpoints(db, utcnow()) == 0  # a final verdict ends the looks
 
 
 def test_analyze_final_look_futile_and_inconclusive(db, no_baselines):
     today = local_date(utcnow(), TZ)
-    exp = _insert_experiment(db, today - timedelta(days=28), 28, statuses="completed")
+    exp = _insert_experiment(db, today - timedelta(days=32), 28, statuses="completed")  # ended 5 days ago
     _fill(db, exp, +400.0, 300.0, seed=1)  # treatment worse
+    exp2 = _insert_experiment(db, today - timedelta(days=32), 28, statuses="completed")
+    _fill(db, exp2, -150.0, 1500.0, seed=3)  # leans better, far too noisy to call
+    analysis.freeze_checkpoints(db, utcnow())
     a = analysis.analyze(db, exp)
     assert a.decision == "stop_futile" and a.checkpoint_reached == 3 and a.effect_pct > 0
 
-    exp2 = _insert_experiment(db, today - timedelta(days=28), 28, statuses="completed")
-    _fill(db, exp2, -150.0, 1500.0, seed=3)  # leans better, far too noisy to call
     b = analysis.analyze(db, exp2)
     assert b.checkpoint_reached == 3
     assert b.decision in ("inconclusive", "stop_futile")
