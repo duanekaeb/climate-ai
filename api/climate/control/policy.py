@@ -658,19 +658,29 @@ def _prep_hold_running(state: HouseState, unit_key: str, start: datetime, end_by
 
 
 def _prep_direction(state: HouseState, unit_key: str, ev: UtilityEventState) -> Literal["cool", "heat"] | None:
-    """Cooling or heating: the event's own direction (a positive cool offset, a cool
-    setpoint or the AC off -> cooling; a negative heat offset, a heat setpoint or the heat off
-    -> heating), when it names exactly one; else the unit's mode (cool -> cooling; heat /
-    auxHeatOnly -> heating; auto -> cooling at or above 65°F outdoors, heating below); None
-    when nothing tells."""
+    """Cooling or heating, from what the unit is doing now: its mode (cool -> cooling; heat /
+    auxHeatOnly -> heating; auto -> cooling at or above 65°F outdoors, heating below). The
+    event's own direction (a positive cool offset, a cool setpoint or the AC off -> cooling; a
+    negative heat offset, a heat setpoint or the heat off -> heating), when it names exactly
+    one, must agree: a cooling event on a unit that is heating gets no pre-cooling (it would
+    change nothing and say something untrue). With the unit's direction unknown the event's
+    decides; None when neither tells."""
     cooling = ev.is_cool_off or (
         (ev.cool_offset_f or 0) > 0 if ev.is_relative else ev.cool_f is not None
     )
     heating = ev.is_heat_off or (
         (ev.heat_offset_f or 0) < 0 if ev.is_relative else ev.heat_f is not None
     )
-    if cooling != heating:
-        return "cool" if cooling else "heat"
+    event_dir: Literal["cool", "heat"] | None = ("cool" if cooling else "heat") if cooling != heating else None
+    unit_dir = _unit_direction(state, unit_key)
+    if unit_dir is None:
+        return event_dir
+    if event_dir is not None and event_dir != unit_dir:
+        return None
+    return unit_dir
+
+
+def _unit_direction(state: HouseState, unit_key: str) -> Literal["cool", "heat"] | None:
     unit = state.units.get(unit_key)
     snap = unit.snapshot if unit is not None else None
     mode = snap.hvac_mode if snap is not None else None

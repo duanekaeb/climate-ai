@@ -128,7 +128,7 @@ async function unskip() {
       <Icon name="check" :size="16" class="mt-0.5 shrink-0" />
       <span>
         Skipped<template v-if="done.length < rows.length"> on {{ names(done) }}</template><template v-if="doneAt"> at {{ doneAt }}</template>.
-        ecobee recorded the opt-out; normal temperatures are back.
+        ecobee recorded the opt-out; your normal settings are back.
       </span>
     </p>
     <p v-if="failed.length" class="mt-3 text-sm text-bad">
@@ -143,8 +143,8 @@ async function unskip() {
     <template v-if="isOwner && open && skippable.length && !pending.length">
       <div v-if="confirming" class="mt-3 rounded-xl border border-warn/40 bg-warn/10 p-3" role="alertdialog" :aria-labelledby="`${headingId}-confirm`">
         <p :id="`${headingId}-confirm`" class="text-sm">
-          Skipping is an opt-out. ecobee records it and your utility sees it; it may cost this event's credit. Normal
-          temperatures come back right away (or when it starts, if it hasn't yet).
+          Skipping is an opt-out. ecobee records it and your utility sees it; it may cost this event's credit. Your
+          normal settings come back right away (or as soon as it starts, if it hasn't yet).
         </p>
         <div class="mt-2 flex flex-wrap gap-2">
           <button type="button" class="btn btn-danger" :disabled="busy !== null" @click="skip">Skip</button>

@@ -186,9 +186,11 @@ for a unit with an `announced` event `e` (no skip requested/done) and `start_at`
 `end_by = e.start_at - precondition_end_gap_min`; window `[end_by - precondition_hours h - 15 min,
 end_by)`. Inside it the target becomes rule `event_prep`, `desired='hold'`, `hold_end_by=end_by`,
 cooling: `cool_f -= precondition_degrees_f`; heating: `heat_f += precondition_degrees_f`. Direction:
-the event's own (cool offset > 0 / cool setpoint / AC off → cooling; heat offset < 0 / heat
-setpoint / heat off → heating), else the unit's `hvac_mode` (cool → cooling; heat/auxHeatOnly →
-heating; auto → cooling when outdoor ≥ 65°F). Reason: "Pre-cooling 2°F before the utility event at
+what the unit is doing now, from its `hvac_mode` (cool → cooling; heat/auxHeatOnly → heating;
+auto → cooling when outdoor ≥ 65°F). When the event names a direction (cool offset > 0 / cool
+setpoint / AC off → cooling; heat offset < 0 / heat setpoint / heat off → heating) it must agree,
+else there is no prep (a cooling event on a heating unit would change nothing and the label would
+be untrue); with the unit's direction unknown, the event's decides. Reason: "Pre-cooling 2°F before the utility event at
 3:00 PM; this hold ends by 2:50 PM, before the event starts."
 The controller writes an `event_prep` hold only with `hours` = the largest of {hold_hours, 1} such
 that `now + hours <= hold_end_by`; when none fits it writes nothing ("Too close to the utility

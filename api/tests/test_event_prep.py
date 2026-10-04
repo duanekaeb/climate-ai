@@ -74,8 +74,11 @@ def test_a_running_prep_hold_keeps_the_target_so_it_lapses_on_its_own():
 
 
 @pytest.mark.parametrize(("ev", "hvac", "outdoor", "direction"), [
-    ({"cool_offset_f": 2.0}, "heat", None, "cool"),  # the event's own direction wins over the mode
-    ({"cool_offset_f": None, "heat_offset_f": -2.0}, "cool", None, "heat"),
+    ({"cool_offset_f": 2.0}, "cool", None, "cool"),
+    ({"cool_offset_f": 2.0}, "heat", None, None),  # a cooling event on a heating unit: no pre-cooling
+    ({"cool_offset_f": 2.0}, "auto", 50.0, None),  # auto, heating weather: likewise
+    ({"cool_offset_f": None, "heat_offset_f": -2.0}, "cool", None, None),
+    ({"cool_offset_f": None, "heat_offset_f": -2.0}, "heat", None, "heat"),
     ({"cool_offset_f": None, "is_cool_off": True}, "auto", None, "cool"),
     ({"is_relative": False, "cool_offset_f": None, "heat_f": 64.0}, "auto", None, "heat"),
     ({"is_relative": False, "cool_offset_f": None, "heat_f": 64.0, "cool_f": 80.0}, "cool", None, "cool"),
