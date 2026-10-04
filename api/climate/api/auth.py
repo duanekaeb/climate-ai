@@ -1,278 +1,198 @@
-"""Owner sign-in (one password, long-lived cookie) and bearer tokens for services.
+"""Who is calling, and what they may do. Spec: docs/specs/users-and-tokens.md.
 
-Roles:
-- ``owner``: everything. Signed-in browser or the iOS WKWebView wrapper (cookie).
-- ``agent``: the Claude agent service and the MCP server (``Authorization: Bearer``).
-  Read everything except setup secrets; may propose changes/experiments, sign off or hold
-  model-proposed changes inside the pre-approved ranges, publish reports, request refits,
-  backtests and simulations, and claim/finish its own runs. It can never reach a thermostat
-  write, the controller mode, settings or setup.
+One login (the owner password, no user accounts) plus API tokens for services. Every
+authenticated call carries ``Authorization: Bearer <token>``; there is no cookie auth outside
+``/api/auth/refresh`` and ``/api/auth/logout`` (``routers/auth.py``). The resolver hands the
+bearer to ``climate.auth_service.resolve_bearer``, which recognises:
+
+- ``cai_<id hex>_<secret>``: an API token (role ``agent``, ``viewer`` or ``control``), checked
+  live on every use (revoked, expired) and refused from public addresses when ``local_only``;
+- the legacy ``CLIMATE_AGENT_TOKEN`` / ``CLIMATE_MCP_TOKEN``: role ``agent``, constant-time
+  compared, private addresses only;
+- an access JWT: the owner, with the session row re-checked so sign-out and password changes
+  take effect at once.
+
+"Address" is always ``request.client.host``: the client after uvicorn's trusted proxy headers
+(``--proxy-headers --forwarded-allow-ips``), never a raw ``X-Forwarded-For`` an attacker could set.
+
+Roles and the dependencies that admit them (the route-guard test pins this for every route):
+
+========================  ================================  ==========================================
+Dependency                Allowed                           Used for
+========================  ================================  ==========================================
+``ReaderDep``             owner, agent, viewer, control     reads
+``ControlDep``            owner, control                    everyday controls (holds, resume, presence,
+                                                            back to automatic, utility-event skips)
+``OwnerDep``              owner                             everything else that changes state
+``RecentAuthDep``         owner, password re-entered within creating API tokens
+                          ``reauth_window_minutes``
+``WriterDep``             owner, agent                      the gated agent writes (propose, sign off)
+``AgentDep``              agent                             the agent's own run bookkeeping
+========================  ================================  ==========================================
+
+``ReaderDep`` / ``ControlDep`` / ``OwnerDep`` / ``WriterDep`` / ``AgentDep`` resolve to the
+caller's ``Role``; ``CallerDep`` / ``OwnerCallerDep`` / ``RecentAuthDep`` resolve to the full
+``Principal`` (session id, token id, label) for routes that need it. Auth failures are
+``HTTPException(status, detail={"code", "message"})`` (``AuthErrorDetail``): 401
+NOT_AUTHENTICATED / TOKEN_EXPIRED / SESSION_REVOKED, 403 FORBIDDEN / REAUTHENTICATION_REQUIRED,
+503 AUTH_NOT_CONFIGURED.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import logging
-import os
-import secrets
-import threading
-import time
-from collections import defaultdict
-from typing import Literal
+from collections.abc import Iterable
 
-from fastapi import Depends, HTTPException, Request, Response, status
-from itsdangerous import BadSignature, URLSafeTimedSerializer
-from sqlalchemy import text
+from fastapi import Depends, HTTPException, Request, status
+from starlette.requests import HTTPConnection
 
-from climate.config import get_settings
-from climate.store.app_settings import OwnerSettings, get_raw, get_setting, put_setting
-from climate.store.db import session_scope
+from climate import auth_service
+from climate.api.schemas import Role
+from climate.api.security import AuthError, verify_password
 
-log = logging.getLogger(__name__)
-Role = Literal["owner", "agent"]
-COOKIE = "climate_session"
-MAX_AGE_S = 180 * 24 * 3600
-_SCRYPT = (2**15, 8, 1)  # n, r, p (about 32 MiB per check)
-_WINDOW_S = 300
-_PER_IP_LIMIT = 5  # attempts per client per window
-_GLOBAL_LIMIT = 30  # attempts across all clients per window (spoofed X-Forwarded-For can't dodge it)
-_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
-_ALL_ATTEMPTS: list[float] = []
-_LOCK = threading.Lock()
-_CHECKS = threading.BoundedSemaphore(2)  # at most two scrypt checks at once
-_fallback_secret = secrets.token_urlsafe(32)
-_VERSION_CACHE: dict[str, tuple[float, str]] = {}
+# Kept importable from here for older callers (climate.cli, tests/test_worker_cli.py).
+from climate.auth_service import Principal, set_owner_password
 
+__all__ = [
+    "AgentDep",
+    "AuthError",
+    "CallerDep",
+    "ControlDep",
+    "OwnerCallerDep",
+    "OwnerDep",
+    "Principal",
+    "ReaderDep",
+    "RecentAuthDep",
+    "Role",
+    "WriterDep",
+    "auth_error",
+    "bearer_token",
+    "client_ip",
+    "optional_caller",
+    "resolve_caller",
+    "set_owner_password",
+    "verify_password",
+]
 
-# --- password hashing (stdlib scrypt) --------------------------------------------------
-
-
-def hash_password(password: str) -> str:
-    salt = os.urandom(16)
-    n, r, p = _SCRYPT
-    digest = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, maxmem=2**26, dklen=32)
-    return f"scrypt${n}${r}${p}${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
+ALL_ROLES: frozenset[str] = frozenset({"owner", "agent", "viewer", "control"})
+_STATE_ATTR = "climate_auth"  # per-request memo on request.state: (Principal | None) or AuthError
 
 
-def verify_password(password: str, encoded: str) -> bool:
+def auth_error(status_code: int, code: str, message: str) -> HTTPException:
+    """The auth layer's error shape: ``{"detail": {"code": ..., "message": ...}}``."""
+    return AuthError(status_code, code, message).to_http()
+
+
+def client_ip(conn: HTTPConnection) -> str | None:
+    """The caller's address as uvicorn resolved it from trusted proxy headers (None if unknown)."""
+    return conn.client.host if conn.client else None
+
+
+def bearer_token(conn: HTTPConnection) -> str | None:
+    """The bearer credential, or None when the request carries no Authorization header.
+
+    A header that is present but is not ``Bearer <something>`` is an error (401), not
+    "anonymous", so a client that mangles its header learns about it instead of silently
+    falling back to public routes."""
+    raw = conn.headers.get("authorization")
+    if raw is None:
+        return None
+    scheme, _, value = raw.strip().partition(" ")
+    value = value.strip()
+    if scheme.lower() != "bearer" or not value:
+        raise AuthError(status.HTTP_401_UNAUTHORIZED, "NOT_AUTHENTICATED", "Use an 'Authorization: Bearer <token>' header.")
+    return value
+
+
+def resolve_caller(conn: HTTPConnection) -> Principal | None:
+    """The authenticated caller, or None for an anonymous request (no Authorization header).
+
+    Raises ``AuthError`` for a credential that is present but bad (unknown, expired, revoked,
+    refused from this address). The outcome is memoised on ``request.state`` so several
+    dependencies on one request cost one database check."""
+    memo = getattr(conn.state, _STATE_ATTR, None)
+    if memo is not None:
+        if isinstance(memo, AuthError):
+            raise memo
+        return memo[0]
     try:
-        _, n, r, p, salt_b64, digest_b64 = encoded.split("$")
-        digest = hashlib.scrypt(
-            password.encode(), salt=base64.b64decode(salt_b64), n=int(n), r=int(r), p=int(p), maxmem=2**26, dklen=32
-        )
-        return hmac.compare_digest(digest, base64.b64decode(digest_b64))
-    except (ValueError, TypeError):
-        return False
+        token = bearer_token(conn)
+        principal = None if token is None else auth_service.resolve_bearer(token, ip=client_ip(conn))
+    except AuthError as err:
+        setattr(conn.state, _STATE_ATTR, err)
+        raise
+    setattr(conn.state, _STATE_ATTR, (principal,))
+    return principal
 
 
-def password_set() -> bool:
-    if get_settings().owner_password:
-        return True
-    with session_scope() as s:
-        return get_setting(s, "owner", OwnerSettings).password_hash is not None
-
-
-def check_owner_password(password: str) -> bool:
-    env_pw = get_settings().owner_password
-    if env_pw:
-        return hmac.compare_digest(password.encode(), env_pw.encode())
-    with session_scope() as s:
-        h = get_setting(s, "owner", OwnerSettings).password_hash
-    return bool(h) and verify_password(password, h)
-
-
-def set_owner_password(password: str) -> None:
-    """Set or change the password. Signs out every existing session (new session epoch)."""
-    with session_scope() as s:
-        current = get_setting(s, "owner", OwnerSettings)
-        put_setting(
-            s, "owner",
-            OwnerSettings(password_hash=hash_password(password), session_epoch=current.session_epoch + 1),
-            updated_by="owner",
-        )
-    _VERSION_CACHE.clear()
-
-
-def claim_first_password(password: str) -> bool:
-    """First run: set the password only if none is set, atomically. False if someone else won."""
-    if get_settings().owner_password:
-        return False
-    encoded = hash_password(password)
-    with session_scope() as s:
-        get_setting(s, "owner", OwnerSettings)  # make sure the seed row exists
-        if get_raw(s, "owner") is None:
-            put_setting(s, "owner", OwnerSettings(), updated_by="seed")
-            s.flush()
-        won = s.execute(
-            text(
-                "UPDATE app_settings SET value = jsonb_set(value, '{password_hash}', to_jsonb(CAST(:h AS text))),"
-                " updated_at = now(), updated_by = 'owner'"
-                " WHERE key = 'owner' AND (value->>'password_hash') IS NULL RETURNING key"
-            ),
-            {"h": encoded},
-        ).first()
-    _VERSION_CACHE.clear()
-    return won is not None
-
-
-def sign_out_everywhere() -> None:
-    with session_scope() as s:
-        current = get_setting(s, "owner", OwnerSettings)
-        current.session_epoch += 1
-        put_setting(s, "owner", current, updated_by="owner")
-    _VERSION_CACHE.clear()
-
-
-def _session_version() -> str:
-    """Changes when the password changes or the owner signs out everywhere; old cookies die."""
-    cached = _VERSION_CACHE.get("v")
-    if cached and time.monotonic() - cached[0] < 5:
-        return cached[1]
-    cfg = get_settings()
-    with session_scope() as s:
-        owner = get_setting(s, "owner", OwnerSettings)
-    secret_material = cfg.owner_password or owner.password_hash or ""
-    fp = hashlib.sha256(f"{secret_material}|{owner.session_epoch}".encode()).hexdigest()[:16]
-    _VERSION_CACHE["v"] = (time.monotonic(), fp)
-    return fp
-
-
-# --- login throttling -------------------------------------------------------------------
-
-
-def _prune(now: float) -> None:
-    cutoff = now - _WINDOW_S
-    for ip in list(_ATTEMPTS):
-        _ATTEMPTS[ip] = [t for t in _ATTEMPTS[ip] if t > cutoff]
-        if not _ATTEMPTS[ip]:
-            del _ATTEMPTS[ip]
-    _ALL_ATTEMPTS[:] = [t for t in _ALL_ATTEMPTS if t > cutoff]
-
-
-def begin_attempt(ip: str) -> float:
-    """Reserve a login attempt BEFORE checking the password (parallel requests can't slip
-    through). Raises 429 past the per-client or global limit. Returns a token for forgive()."""
-    with _LOCK:
-        now = time.monotonic()
-        _prune(now)
-        if len(_ATTEMPTS.get(ip, [])) >= _PER_IP_LIMIT or len(_ALL_ATTEMPTS) >= _GLOBAL_LIMIT:
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts; wait a few minutes.")
-        _ATTEMPTS[ip].append(now)
-        _ALL_ATTEMPTS.append(now)
-        return now
-
-
-def forgive(ip: str, token: float) -> None:
-    """A successful sign-in doesn't count against the limits."""
-    with _LOCK:
-        for bucket in (_ATTEMPTS.get(ip), _ALL_ATTEMPTS):
-            if bucket and token in bucket:
-                bucket.remove(token)
-
-
-def checked_password(password: str) -> bool:
-    """check_owner_password with at most two scrypt computations running at once."""
-    with _CHECKS:
-        return check_owner_password(password)
-
-
-# --- cookies ------------------------------------------------------------------------------
-
-
-def _serializer() -> URLSafeTimedSerializer:
-    secret = get_settings().session_secret
-    if not secret:
-        # Deliberately NOT derived from CLIMATE_SECRET_KEY: rotating the session secret must
-        # never be tied to the key that decrypts the stored tokens.
-        log.warning("CLIMATE_SESSION_SECRET not set; sign-ins reset when the API restarts.")
-        secret = _fallback_secret
-    return URLSafeTimedSerializer(secret, salt="climate-session")
-
-
-def issue_cookie(response: Response) -> None:
-    token = _serializer().dumps({"r": "owner", "v": _session_version()})
-    response.set_cookie(
-        COOKIE, token, max_age=MAX_AGE_S, httponly=True, samesite="lax", secure=get_settings().cookie_secure, path="/"
-    )
-
-
-def clear_cookie(response: Response) -> None:
-    response.delete_cookie(COOKIE, path="/")
-
-
-# --- role resolution ------------------------------------------------------------------
-
-
-def role_from_request(request: Request) -> Role | None:
-    cfg = get_settings()
-    authz = request.headers.get("authorization", "")
-    if authz.lower().startswith("bearer "):
-        token = authz[7:].strip()
-        for configured in (cfg.agent_token, cfg.mcp_token):
-            if configured and hmac.compare_digest(token.encode(), configured.encode()):
-                return "agent"
-        return None
-    raw = request.cookies.get(COOKIE)
-    if not raw:
-        return None
+def optional_caller(conn: HTTPConnection) -> Principal | None:
+    """Like ``resolve_caller`` but a bad credential counts as anonymous (public routes such as
+    ``/auth/state`` and ``/auth/logout`` must keep working with a stale token)."""
     try:
-        data = _serializer().loads(raw, max_age=MAX_AGE_S)
-    except BadSignature:
+        return resolve_caller(conn)
+    except AuthError:
         return None
-    if data.get("r") != "owner" or not isinstance(data.get("v"), str):
-        return None
-    return "owner" if hmac.compare_digest(data["v"], _session_version()) else None
 
 
-def _same_origin(request: Request) -> bool:
-    """Cookie-authenticated writes must come from our own origin (CSRF guard)."""
-    origin = request.headers.get("origin")
-    if not origin:
-        return True  # same-origin fetches from WKWebView may omit it; JSON bodies need CORS anyway
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
-    return origin.split("://", 1)[-1] == host
+def current_caller(request: Request) -> Principal:
+    """Any authenticated caller; 401 NOT_AUTHENTICATED when there is no credential."""
+    try:
+        principal = resolve_caller(request)
+    except AuthError as err:
+        raise err.to_http() from None
+    if principal is None or principal.role not in ALL_ROLES:
+        raise auth_error(status.HTTP_401_UNAUTHORIZED, "NOT_AUTHENTICATED", "Sign in required.")
+    return principal
 
 
-def get_role(request: Request) -> Role | None:
-    return role_from_request(request)
+def _admit(principal: Principal, roles: Iterable[str], message: str) -> Principal:
+    if principal.role not in roles:
+        raise auth_error(status.HTTP_403_FORBIDDEN, "FORBIDDEN", message)
+    return principal
 
 
-def require_reader(request: Request) -> Role:
-    role = role_from_request(request)
-    if role is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sign in required.")
-    return role
+def require_reader(principal: Principal = Depends(current_caller)) -> Role:
+    """Reads: the owner and every API token role."""
+    return _admit(principal, ALL_ROLES, "Not allowed.").role  # type: ignore[return-value]
 
 
-def require_owner(request: Request) -> Role:
-    role = role_from_request(request)
-    if role is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sign in required.")
-    if role != "owner":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Owner only.")
-    if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-origin request refused.")
-    return role
+def require_control(principal: Principal = Depends(current_caller)) -> Role:
+    """Everyday controls: the owner or a ``control`` token (never the agent or a viewer)."""
+    return _admit(principal, ("owner", "control"), "Needs the owner or a control token.").role  # type: ignore[return-value]
 
 
-def require_writer(request: Request) -> Role:
-    """Owner or agent, for the gated endpoints both may call (propose, sign off, reports)."""
-    role = require_reader(request)
-    if role == "owner" and request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-origin request refused.")
-    return role
+def require_owner(principal: Principal = Depends(current_caller)) -> Role:
+    """Settings, mode, setup, hand-back, decisions, tokens, sessions, audit: the owner only."""
+    return _admit(principal, ("owner",), "Owner only.").role  # type: ignore[return-value]
 
 
-def require_agent(request: Request) -> Role:
-    role = require_reader(request)
-    if role != "agent":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Agent service only.")
-    return role
+def require_writer(principal: Principal = Depends(current_caller)) -> Role:
+    """The gated writes both the owner and the agent may make (propose, sign off, reports)."""
+    return _admit(principal, ("owner", "agent"), "Needs the owner or an agent token.").role  # type: ignore[return-value]
 
 
-OwnerDep = Depends(require_owner)
+def require_agent(principal: Principal = Depends(current_caller)) -> Role:
+    """The agent service's own run bookkeeping (claim, heartbeat, finish)."""
+    return _admit(principal, ("agent",), "Agent service only.").role  # type: ignore[return-value]
+
+
+def owner_caller(principal: Principal = Depends(current_caller)) -> Principal:
+    """The owner, with the session id and device name (for routes that act on the session)."""
+    return _admit(principal, ("owner",), "Owner only.")
+
+
+def recent_owner(principal: Principal = Depends(owner_caller)) -> Principal:
+    """The owner who re-entered the password within ``reauth_window_minutes`` (403
+    REAUTHENTICATION_REQUIRED otherwise; the web asks for the password and replays)."""
+    if not principal.recently_authenticated:
+        raise auth_error(status.HTTP_403_FORBIDDEN, "REAUTHENTICATION_REQUIRED", "Enter your password again to continue.")
+    return principal
+
+
+CallerDep = Depends(current_caller)
 ReaderDep = Depends(require_reader)
+ControlDep = Depends(require_control)
+OwnerDep = Depends(require_owner)
 WriterDep = Depends(require_writer)
 AgentDep = Depends(require_agent)
+OwnerCallerDep = Depends(owner_caller)
+RecentAuthDep = Depends(recent_owner)
