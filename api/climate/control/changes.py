@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 from sqlalchemy import select, text, update
@@ -174,7 +175,8 @@ def decide(
     (skipping remaining gates is recorded in gates).
 
     Claude may approve or hold only model-proposed changes whose every key is inside
-    CLAUDE_SIGNOFF_RANGES, from 'awaiting_signoff' or 'held'; it may never decide changes
+    CLAUDE_SIGNOFF_RANGES, from 'awaiting_signoff' or a hold of its own (never one the owner
+    placed); it may never decide changes
     Claude or the owner proposed, and may not reject (holding with a reason is its veto).
     The owner may decide anything that passed validation, from 'backtest', 'shadow',
     'awaiting_signoff' or 'held'."""
@@ -199,6 +201,8 @@ def decide(
             raise PermissionError(
                 "Claude can approve or hold a model change, but only the owner can reject one; hold it with the reason."
             )
+        if change.status == "held" and change.decided_by != "claude":
+            raise PermissionError("The owner put this change on hold, so only the owner can decide it now.")
         allowed = {"awaiting_signoff", "held"}
     elif actor == "owner":
         allowed = {"backtest", "shadow", "awaiting_signoff", "held"}
@@ -339,7 +343,7 @@ def _run_backtest(session: Session, change: Change, now: datetime) -> bool:
 
 
 def _finish_trial(session: Session, change: Change, now: datetime) -> None:
-    tz = get_setting(session, "location", LocationSettings).tz
+    tz = _house_tz(session)
     control = get_setting(session, "control", ControlSettings)
     start = change.trial_start or (change.trial_end - timedelta(days=TRIAL_DAYS))  # type: ignore[operator]
     end = change.trial_end or now
@@ -429,6 +433,15 @@ def comfort_in_windows(
         "start": start.isoformat(),
         "end": end.isoformat(),
     }
+
+
+def _house_tz(session: Session) -> str:
+    tz = get_setting(session, "location", LocationSettings).tz
+    try:
+        ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        return "UTC"
+    return tz
 
 
 def _by_status(session: Session, status: str) -> list[Change]:

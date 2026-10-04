@@ -42,8 +42,8 @@ def main() -> None:
     for name, d in defs.items():
         _strip_titles(d, top_level=True)
         # Responses always carry every field; mark them required so TS types aren't optional.
-        # Request bodies (``*Body``) keep pydantic's defaults-are-optional semantics.
-        if d.get("type") == "object" and "properties" in d and not name.endswith("Body"):
+        # Request bodies (``*Body``, ``*Update``) keep pydantic's defaults-are-optional semantics.
+        if d.get("type") == "object" and "properties" in d and not name.endswith(("Body", "Update")):
             d["required"] = sorted(d["properties"])
     root = {
         "title": "ApiTypes",

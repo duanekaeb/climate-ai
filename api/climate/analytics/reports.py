@@ -14,6 +14,7 @@ from climate.analytics.baseline import (
     BaselineFit,
     expected_covered_seconds,
     involved_modes,
+    plain,
     pre_period_fits,
     residual_stats,
 )
@@ -206,10 +207,10 @@ def build_daily_report(session: Session, day: date) -> int:
         report = existing[0]
         for extra in existing[1:]:
             session.delete(extra)
-        report.title, report.body_md, report.data = title, body, data
+        report.title, report.body_md, report.data = title, body, plain(data)
     else:
         report = Report(kind="daily", author="system", period_start=day, period_end=day, title=title, body_md=body,
-                        data=data)
+                        data=plain(data))
         session.add(report)
     session.flush()
     publish(session, "report", int(report.id))

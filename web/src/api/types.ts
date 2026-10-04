@@ -1253,10 +1253,10 @@ export interface SettingsOut {
  * via the `definition` "SettingsUpdate".
  */
 export interface SettingsUpdate {
-  agent: AgentSettings | null
-  control: ControlSettings | null
-  location: LocationSettings | null
-  occupancy: OccupancySettings | null
+  agent?: AgentSettings | null
+  control?: ControlSettings | null
+  location?: LocationSettings | null
+  occupancy?: OccupancySettings | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema

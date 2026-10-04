@@ -390,7 +390,29 @@ def pre_period_fits(session: Session, before: date, tz: str | None = None, train
 
 
 def _r(x: float, nd: int = 4) -> float:
+    x = float(x)
     return float(f"{x:.{nd}g}") if math.isfinite(x) else x
+
+
+def plain(obj: Any) -> Any:
+    """Recursively turn numpy scalars/arrays (and dates) into JSON-safe Python values for
+    JSONB columns; non-finite floats become None."""
+    if isinstance(obj, dict):
+        return {str(k): plain(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [plain(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return [plain(v) for v in obj.tolist()]
+    if isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, (float, np.floating)):
+        f = float(obj)
+        return f if math.isfinite(f) else None
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    return obj
 
 
 def refit_all(session: Session, now: datetime, train_days: int = 90) -> list[int]:
@@ -414,21 +436,21 @@ def refit_all(session: Session, now: datetime, train_days: int = 90) -> list[int
             mode=mode,
             train_start=fit.train_start,
             train_end=fit.train_end,
-            params={
-                "balance_point_f": fit.balance_point_f,
+            params=plain({
+                "balance_point_f": float(fit.balance_point_f),
                 "intercept_s": _r(fit.intercept_s, 6),
                 "slope_s_per_dd": _r(fit.slope_s_per_dd, 6),
                 "resid_std_s": _r(fit.resid_std_s, 6),
                 "resid_lag1": _r(fit.resid_lag1, 4),
-            },
-            metrics={
+            }),
+            metrics=plain({
                 "r2": _r(fit.r2, 4),
                 "adj_r2": _r(fit.adj_r2 if fit.adj_r2 is not None else fit.r2, 4),
                 "cvrmse": _r(fit.cvrmse, 4),
                 "nmbe": _r(fit.nmbe, 4),
-                "n_days": fit.n_days,
-                "passes": fit.passes,
-            },
+                "n_days": int(fit.n_days),
+                "passes": bool(fit.passes),
+            }),
             status="active",
             notes=fit.notes,
         )

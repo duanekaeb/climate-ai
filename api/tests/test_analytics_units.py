@@ -43,9 +43,9 @@ def _insert_runtime(db, rows: list[dict]) -> None:
 
 
 def _rt(ts: datetime, unit: str, cool: int = 0, heat1: int = 0, aux1: int = 0, mode: str = "cool", out: float = 80.0):
-    return dict(ts=ts, unit_key=unit, comp_cool1=cool, comp_cool2=0, comp_heat1=heat1, comp_heat2=0, aux_heat1=aux1,
-                aux_heat2=0, fan=cool + heat1 + aux1, hvac_mode=mode, zone_temp_f=75.0, outdoor_temp_f=out,
-                source="ecobee_report")
+    return {"ts": ts, "unit_key": unit, "comp_cool1": cool, "comp_cool2": 0, "comp_heat1": heat1, "comp_heat2": 0,
+            "aux_heat1": aux1, "aux_heat2": 0, "fan": cool + heat1 + aux1, "hvac_mode": mode, "zone_temp_f": 75.0,
+            "outdoor_temp_f": out, "source": "ecobee_report"}
 
 
 def _slots(t0: datetime, t1: datetime) -> list[datetime]:

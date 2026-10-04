@@ -77,6 +77,12 @@ def test_permission_matrix(db):
     with pytest.raises(PermissionError):
         changes.decide(db, claude_in.id, "claude", "approve", "my own idea")
 
+    # a hold the owner placed can't be lifted by Claude
+    owner_held = awaiting(db, "model", in_range)
+    changes.decide(db, owner_held.id, "owner", "hold", "not this month")
+    with pytest.raises(PermissionError):
+        changes.decide(db, owner_held.id, "claude", "approve", "data looks good")
+
     owner_in = awaiting(db, "owner", in_range)
     with pytest.raises(PermissionError):
         changes.decide(db, owner_in.id, "claude", "hold", "wait")
