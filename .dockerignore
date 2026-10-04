@@ -8,3 +8,6 @@ web/dev-dist
 ios
 docs/blueprint.html
 .env
+**/*.egg-info
+api/tests
+agent/tests

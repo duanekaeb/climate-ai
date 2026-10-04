@@ -134,15 +134,25 @@ def startup_problems(env: Mapping[str, str], config: AgentConfig) -> list[str]:
             )
     if _truthy(env.get(BARE_MODE_ENV_VAR)):
         problems.append(f"{BARE_MODE_ENV_VAR} is set (--bare mode), which ignores subscription sign-in; unset it.")
-    if not config.oauth_token_present:
-        problems.append(f"{OAUTH_ENV_VAR} is not set. Run `claude setup-token` and set it for the agent service.")
-    if not config.agent_token:
-        problems.append("CLIMATE_AGENT_TOKEN is not set; the agent cannot reach the API.")
     return problems
 
 
+def idle_reason(config: AgentConfig) -> str | None:
+    """Why the agent must idle instead of running Claude (None = ready).
+
+    A missing token is not a reason to exit: the agent service is on by default, so exiting
+    would make Docker restart it in a loop. It idles and reports "not signed in" instead."""
+    if not config.agent_token:
+        return "CLIMATE_AGENT_TOKEN is not set; the agent cannot reach the API."
+    if not config.oauth_token_present:
+        return f"{OAUTH_ENV_VAR} is not set. Run `claude setup-token` and set it for the agent service."
+    return None
+
+
 def check_startup(env: MutableMapping[str, str] | None = None, config: AgentConfig | None = None) -> AgentConfig:
-    """Validate the environment and return the config, or raise StartupRefused.
+    """Validate the environment and return the config, or raise StartupRefused when anything
+    would bill the API instead of the subscription. Missing tokens are reported by
+    :func:`idle_reason` (the service idles rather than exiting).
 
     An empty ``ANTHROPIC_API_KEY=`` (common from compose files) is removed from the process
     environment so the Claude Code subprocess never inherits it.
@@ -172,6 +182,7 @@ def ensure_empty_dir(path: Path) -> Path:
 
 __all__ = [
     "AgentConfig",
+    "idle_reason",
     "BILLING_ENV_VARS",
     "ConfigError",
     "StartupRefused",

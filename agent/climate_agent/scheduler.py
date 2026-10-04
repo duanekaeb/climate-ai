@@ -1,7 +1,8 @@
 """``python -m climate_agent.scheduler``: the agent service's main loop.
 
 - Refuses to start if anything would bill the API instead of the owner's subscription
-  (``ANTHROPIC_API_KEY`` and friends, ``--bare`` mode) or if the sign-in token is missing.
+  (``ANTHROPIC_API_KEY`` and friends, ``--bare`` mode). Without a sign-in token it idles and
+  heartbeats "not signed in" (no restart loop; nothing is claimed).
 - Checks sign-in once per container start with a one-turn run, and reports it.
 - Heartbeats every 60 s (``POST /agent/heartbeat``): sign-in state, SDK/CLI versions, token
   expiry (the API raises the 30-day warning from it).
@@ -26,7 +27,7 @@ from claude_agent_sdk import query
 
 from climate_agent import __version__
 from climate_agent.api import ApiClient, ApiError
-from climate_agent.config import AgentConfig, ConfigError, StartupRefused, check_startup
+from climate_agent.config import AgentConfig, ConfigError, StartupRefused, check_startup, idle_reason
 from climate_agent.runner import QueryFn, RunOutcome, execute_run, redact
 
 log = logging.getLogger("climate_agent.scheduler")
@@ -234,6 +235,34 @@ async def _amain(config: AgentConfig) -> bool:
         await api.aclose()
 
 
+async def _aidle(config: AgentConfig, reason: str) -> bool:
+    """No usable token: never run Claude; heartbeat 'not signed in' so the app shows why."""
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    api = ApiClient(config.api_url, config.agent_token, timeout_s=config.api_timeout_s) if config.agent_token else None
+    try:
+        while not stop.is_set():
+            if api is not None:
+                body = {
+                    "signed_in": False,
+                    "sdk_version": claude_agent_sdk.__version__,
+                    "cli_version": cli_version(),
+                    "token_expires_at": None,
+                    "detail": {"agent_version": __version__, "idle": True, "last_error": reason},
+                }
+                try:
+                    await api.post("/agent/heartbeat", body)
+                except ApiError as exc:
+                    log.warning("heartbeat failed: %s", exc)
+            await _wait(stop, config.heartbeat_s)
+    finally:
+        if api is not None:
+            await api.aclose()
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -247,6 +276,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if config.log_level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         logging.getLogger().setLevel(config.log_level)
+    reason = idle_reason(config)
+    if reason:
+        log.warning("idle, Claude will not run: %s", reason)
+        return 0 if asyncio.run(_aidle(config, reason)) else 1
     log.info(
         "climate agent %s (claude-agent-sdk %s, CLI %s): %r",
         __version__, claude_agent_sdk.__version__, cli_version(), config,

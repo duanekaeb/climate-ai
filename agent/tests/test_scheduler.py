@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from climate_agent import scheduler as scheduler_mod
-from climate_agent.config import AgentConfig, StartupRefused, add_one_year, check_startup
+from climate_agent.config import AgentConfig, StartupRefused, add_one_year, check_startup, idle_reason
 from climate_agent.scheduler import Scheduler
 from test_runner import FakeQuery, init, result_message, usage_limit_error
 
@@ -36,13 +36,32 @@ def test_refuses_other_billing_routes(name):
         check_startup({**GOOD_ENV, name: "1"})
 
 
-def test_refuses_bare_mode_and_missing_tokens():
+def test_refuses_bare_mode_but_idles_on_missing_tokens():
     with pytest.raises(StartupRefused, match="--bare"):
         check_startup({**GOOD_ENV, "CLAUDE_CODE_SIMPLE": "1"})
-    with pytest.raises(StartupRefused, match="CLAUDE_CODE_OAUTH_TOKEN is not set"):
-        check_startup({"CLIMATE_AGENT_TOKEN": "agent-token"})
-    with pytest.raises(StartupRefused, match="CLIMATE_AGENT_TOKEN"):
-        check_startup({"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth"})
+    # Missing tokens don't exit (the default-on service would restart in a loop): it idles.
+    assert "CLAUDE_CODE_OAUTH_TOKEN is not set" in idle_reason(check_startup({"CLIMATE_AGENT_TOKEN": "agent-token"}))
+    assert "CLIMATE_AGENT_TOKEN" in idle_reason(check_startup({"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth"}))
+    assert idle_reason(check_startup(dict(GOOD_ENV))) is None
+
+
+def test_main_idles_without_oauth_token(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CLIMATE_AGENT_TOKEN", "agent-token")
+    seen: dict[str, str] = {}
+
+    async def fake_idle(config: AgentConfig, reason: str) -> bool:
+        seen["reason"] = reason
+        return True
+
+    async def must_not_run(config: AgentConfig) -> bool:
+        raise AssertionError("Claude must not run without a sign-in token")
+
+    monkeypatch.setattr(scheduler_mod, "_aidle", fake_idle)
+    monkeypatch.setattr(scheduler_mod, "_amain", must_not_run)
+    assert scheduler_mod.main([]) == 0
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in seen["reason"]
 
 
 def test_empty_api_key_is_removed_not_inherited():
