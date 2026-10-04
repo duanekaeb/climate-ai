@@ -12,8 +12,10 @@ from tests.conftest import AGENT_TOKEN, OWNER_PASSWORD
 
 @pytest.fixture(autouse=True)
 def _fresh_throttle(monkeypatch):
-    # The throttle is per-process state keyed by client IP ("testclient"); isolate it.
-    monkeypatch.setattr(auth_mod, "_FAILS", defaultdict(list))
+    # The throttle and the session-version cache are per-process state; isolate them.
+    monkeypatch.setattr(auth_mod, "_ATTEMPTS", defaultdict(list))
+    monkeypatch.setattr(auth_mod, "_ALL_ATTEMPTS", [])
+    auth_mod._VERSION_CACHE.clear()
 
 
 def test_state_before_any_password(client):
@@ -92,3 +94,41 @@ def test_cross_origin_owner_write_is_refused(owner):
     assert r.status_code == 403
     ok = owner.post("/api/control/mode", json={"mode": "off"}, headers={"Origin": "http://testserver"})
     assert ok.status_code == 200
+
+
+def test_global_limit_holds_across_client_addresses(owner, monkeypatch):
+    owner.post("/api/auth/logout")
+    ips = iter(f"10.0.0.{i}" for i in range(100))
+    monkeypatch.setattr("climate.api.routers.auth._client_ip", lambda request: next(ips))
+    codes = [owner.post("/api/auth/login", json={"password": "nope"}).status_code for _ in range(auth_mod._GLOBAL_LIMIT + 1)]
+    assert codes[:-1] == [401] * auth_mod._GLOBAL_LIMIT and codes[-1] == 429
+
+
+def test_successful_login_does_not_count(owner):
+    owner.post("/api/auth/logout")
+    for _ in range(10):
+        assert owner.post("/api/auth/login", json={"password": OWNER_PASSWORD}).status_code == 200
+
+
+def test_password_change_revokes_old_sessions(owner):
+    stolen = owner.cookies.get(auth_mod.COOKIE)
+    auth_mod.set_owner_password("a brand new password")
+    owner.cookies.set(auth_mod.COOKIE, stolen)
+    assert owner.get("/api/setup").status_code == 401
+    owner.cookies.clear()
+    assert owner.post("/api/auth/login", json={"password": "a brand new password"}).status_code == 200
+    assert owner.get("/api/setup").status_code == 200
+
+
+def test_sign_out_everywhere(owner):
+    old = owner.cookies.get(auth_mod.COOKIE)
+    assert owner.post("/api/auth/logout-everywhere").json()["authenticated"] is False
+    owner.cookies.set(auth_mod.COOKIE, old)
+    assert owner.get("/api/setup").status_code == 401
+
+
+def test_first_run_claim_is_atomic(client):
+    assert auth_mod.claim_first_password("first person password") is True
+    assert auth_mod.claim_first_password("second person password") is False
+    assert client.post("/api/auth/setup", json={"password": "third person pw"}).status_code == 409
+    assert auth_mod.check_owner_password("first person password")

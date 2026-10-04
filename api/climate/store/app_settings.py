@@ -156,6 +156,8 @@ class AgentSettings(BaseModel):
 
 class OwnerSettings(BaseModel):
     password_hash: str | None = None
+    # Bumped on password change and "sign out everywhere"; part of every session cookie.
+    session_epoch: int = 0
 
 
 class Heartbeat(BaseModel):

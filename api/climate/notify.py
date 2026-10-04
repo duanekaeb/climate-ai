@@ -82,6 +82,9 @@ def push(title: str, body: str, priority: str = "default", tags: list[str] | Non
     cfg = get_settings()
     if not cfg.ntfy_url or not cfg.ntfy_topic:
         return False
+    if "ntfy.sh" in cfg.ntfy_url and len(cfg.ntfy_topic) < 16:
+        log.warning("push disabled: a topic on the public ntfy.sh must be long and random (16+ chars)")
+        return False
     url = f"{cfg.ntfy_url.rstrip('/')}/{cfg.ntfy_topic.strip('/')}"
     headers = {"Title": _header(title or "Climate AI"), "Priority": _header(priority)}
     if tags:

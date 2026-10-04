@@ -57,6 +57,7 @@ WRITER = [
 ]
 
 OWNER_ONLY = [
+    ("POST", "/api/auth/logout-everywhere"),
     ("PUT", "/api/control/settings"),
     ("POST", "/api/control/mode"),
     ("POST", "/api/control/hold"),

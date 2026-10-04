@@ -79,6 +79,22 @@ def create_app() -> FastAPI:
     for module in (auth, status, analytics, control, experiments, reports, agent, setup, ws):
         app.include_router(module.router, prefix="/api")
 
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        # No inline scripts and no remote images: Claude's markdown can't beacon out, and
+        # injected markup can't run. ECharts and Vue need inline style attributes.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; connect-src 'self' ws: wss:; worker-src 'self'; "
+            "manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; "
+            "form-action 'self'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
+
     @app.exception_handler(PermissionError)
     async def _perm(_: Request, exc: PermissionError) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=403)

@@ -30,9 +30,8 @@ def auth_state(request: Request) -> AuthState:
 @router.post("/auth/setup", response_model=AuthState)
 def setup_password(body: PasswordBody, response: Response) -> AuthState:
     """First run only: choose the owner password and sign in."""
-    if auth.password_set():
+    if auth.password_set() or not auth.claim_first_password(body.password):
         raise HTTPException(http.HTTP_409_CONFLICT, "A password is already set; sign in instead.")
-    auth.set_owner_password(body.password)
     auth.issue_cookie(response)
     return AuthState(authenticated=True, role="owner", password_set=True)
 
@@ -40,14 +39,22 @@ def setup_password(body: PasswordBody, response: Response) -> AuthState:
 @router.post("/auth/login", response_model=AuthState)
 def login(body: LoginBody, request: Request, response: Response) -> AuthState:
     ip = _client_ip(request)
-    auth.throttle(ip)
     if not auth.password_set():
         raise HTTPException(http.HTTP_409_CONFLICT, "No password is set yet; choose one first.")
-    if not auth.check_owner_password(body.password):
-        auth.record_failure(ip)
+    attempt = auth.begin_attempt(ip)
+    if not auth.checked_password(body.password):
         raise HTTPException(http.HTTP_401_UNAUTHORIZED, "Wrong password.")
+    auth.forgive(ip, attempt)
     auth.issue_cookie(response)
     return AuthState(authenticated=True, role="owner", password_set=True)
+
+
+@router.post("/auth/logout-everywhere", response_model=AuthState)
+def logout_everywhere(response: Response, _: auth.Role = auth.OwnerDep) -> AuthState:
+    """Invalidate every owner session (all browsers and the iOS app), including this one."""
+    auth.sign_out_everywhere()
+    auth.clear_cookie(response)
+    return AuthState(authenticated=False, role=None, password_set=auth.password_set())
 
 
 @router.post("/auth/logout", response_model=AuthState)

@@ -17,24 +17,33 @@ import hmac
 import logging
 import os
 import secrets
+import threading
 import time
 from collections import defaultdict
 from typing import Literal
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from itsdangerous import BadSignature, URLSafeTimedSerializer
+from sqlalchemy import text
 
 from climate.config import get_settings
-from climate.store.app_settings import OwnerSettings, get_setting, put_setting
+from climate.store.app_settings import OwnerSettings, get_raw, get_setting, put_setting
 from climate.store.db import session_scope
 
 log = logging.getLogger(__name__)
 Role = Literal["owner", "agent"]
 COOKIE = "climate_session"
 MAX_AGE_S = 180 * 24 * 3600
-_SCRYPT = (2**15, 8, 1)  # n, r, p
-_FAILS: dict[str, list[float]] = defaultdict(list)
+_SCRYPT = (2**15, 8, 1)  # n, r, p (about 32 MiB per check)
+_WINDOW_S = 300
+_PER_IP_LIMIT = 5  # attempts per client per window
+_GLOBAL_LIMIT = 30  # attempts across all clients per window (spoofed X-Forwarded-For can't dodge it)
+_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+_ALL_ATTEMPTS: list[float] = []
+_LOCK = threading.Lock()
+_CHECKS = threading.BoundedSemaphore(2)  # at most two scrypt checks at once
 _fallback_secret = secrets.token_urlsafe(32)
+_VERSION_CACHE: dict[str, tuple[float, str]] = {}
 
 
 # --- password hashing (stdlib scrypt) --------------------------------------------------
@@ -75,39 +84,115 @@ def check_owner_password(password: str) -> bool:
 
 
 def set_owner_password(password: str) -> None:
+    """Set or change the password. Signs out every existing session (new session epoch)."""
     with session_scope() as s:
-        put_setting(s, "owner", OwnerSettings(password_hash=hash_password(password)), updated_by="owner")
+        current = get_setting(s, "owner", OwnerSettings)
+        put_setting(
+            s, "owner",
+            OwnerSettings(password_hash=hash_password(password), session_epoch=current.session_epoch + 1),
+            updated_by="owner",
+        )
+    _VERSION_CACHE.clear()
+
+
+def claim_first_password(password: str) -> bool:
+    """First run: set the password only if none is set, atomically. False if someone else won."""
+    if get_settings().owner_password:
+        return False
+    encoded = hash_password(password)
+    with session_scope() as s:
+        get_setting(s, "owner", OwnerSettings)  # make sure the seed row exists
+        if get_raw(s, "owner") is None:
+            put_setting(s, "owner", OwnerSettings(), updated_by="seed")
+            s.flush()
+        won = s.execute(
+            text(
+                "UPDATE app_settings SET value = jsonb_set(value, '{password_hash}', to_jsonb(CAST(:h AS text))),"
+                " updated_at = now(), updated_by = 'owner'"
+                " WHERE key = 'owner' AND (value->>'password_hash') IS NULL RETURNING key"
+            ),
+            {"h": encoded},
+        ).first()
+    _VERSION_CACHE.clear()
+    return won is not None
+
+
+def sign_out_everywhere() -> None:
+    with session_scope() as s:
+        current = get_setting(s, "owner", OwnerSettings)
+        current.session_epoch += 1
+        put_setting(s, "owner", current, updated_by="owner")
+    _VERSION_CACHE.clear()
+
+
+def _session_version() -> str:
+    """Changes when the password changes or the owner signs out everywhere; old cookies die."""
+    cached = _VERSION_CACHE.get("v")
+    if cached and time.monotonic() - cached[0] < 5:
+        return cached[1]
+    cfg = get_settings()
+    with session_scope() as s:
+        owner = get_setting(s, "owner", OwnerSettings)
+    secret_material = cfg.owner_password or owner.password_hash or ""
+    fp = hashlib.sha256(f"{secret_material}|{owner.session_epoch}".encode()).hexdigest()[:16]
+    _VERSION_CACHE["v"] = (time.monotonic(), fp)
+    return fp
 
 
 # --- login throttling -------------------------------------------------------------------
 
 
-def throttle(ip: str) -> None:
-    now = time.monotonic()
-    recent = [t for t in _FAILS[ip] if now - t < 300]
-    _FAILS[ip] = recent
-    if len(recent) >= 5:
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts; wait a few minutes.")
+def _prune(now: float) -> None:
+    cutoff = now - _WINDOW_S
+    for ip in list(_ATTEMPTS):
+        _ATTEMPTS[ip] = [t for t in _ATTEMPTS[ip] if t > cutoff]
+        if not _ATTEMPTS[ip]:
+            del _ATTEMPTS[ip]
+    _ALL_ATTEMPTS[:] = [t for t in _ALL_ATTEMPTS if t > cutoff]
 
 
-def record_failure(ip: str) -> None:
-    _FAILS[ip].append(time.monotonic())
+def begin_attempt(ip: str) -> float:
+    """Reserve a login attempt BEFORE checking the password (parallel requests can't slip
+    through). Raises 429 past the per-client or global limit. Returns a token for forgive()."""
+    with _LOCK:
+        now = time.monotonic()
+        _prune(now)
+        if len(_ATTEMPTS.get(ip, [])) >= _PER_IP_LIMIT or len(_ALL_ATTEMPTS) >= _GLOBAL_LIMIT:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts; wait a few minutes.")
+        _ATTEMPTS[ip].append(now)
+        _ALL_ATTEMPTS.append(now)
+        return now
+
+
+def forgive(ip: str, token: float) -> None:
+    """A successful sign-in doesn't count against the limits."""
+    with _LOCK:
+        for bucket in (_ATTEMPTS.get(ip), _ALL_ATTEMPTS):
+            if bucket and token in bucket:
+                bucket.remove(token)
+
+
+def checked_password(password: str) -> bool:
+    """check_owner_password with at most two scrypt computations running at once."""
+    with _CHECKS:
+        return check_owner_password(password)
 
 
 # --- cookies ------------------------------------------------------------------------------
 
 
 def _serializer() -> URLSafeTimedSerializer:
-    cfg = get_settings()
-    secret = cfg.session_secret or cfg.secret_key
+    secret = get_settings().session_secret
     if not secret:
+        # Deliberately NOT derived from CLIMATE_SECRET_KEY: rotating the session secret must
+        # never be tied to the key that decrypts the stored tokens.
         log.warning("CLIMATE_SESSION_SECRET not set; sign-ins reset when the API restarts.")
         secret = _fallback_secret
     return URLSafeTimedSerializer(secret, salt="climate-session")
 
 
 def issue_cookie(response: Response) -> None:
-    token = _serializer().dumps({"r": "owner"})
+    token = _serializer().dumps({"r": "owner", "v": _session_version()})
     response.set_cookie(
         COOKIE, token, max_age=MAX_AGE_S, httponly=True, samesite="lax", secure=get_settings().cookie_secure, path="/"
     )
@@ -136,7 +221,9 @@ def role_from_request(request: Request) -> Role | None:
         data = _serializer().loads(raw, max_age=MAX_AGE_S)
     except BadSignature:
         return None
-    return "owner" if data.get("r") == "owner" else None
+    if data.get("r") != "owner" or not isinstance(data.get("v"), str):
+        return None
+    return "owner" if hmac.compare_digest(data["v"], _session_version()) else None
 
 
 def _same_origin(request: Request) -> bool:

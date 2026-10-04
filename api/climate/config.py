@@ -55,7 +55,8 @@ class Settings(BaseSettings):
 
     # Push notifications through ntfy (self-hosted or ntfy.sh). Empty URL disables.
     ntfy_url: str = ""
-    ntfy_topic: str = "climate-ai"
+    # No default: a guessable topic on a public server leaks alerts. Push stays off until set.
+    ntfy_topic: str = ""
     ntfy_token: str = ""
 
     # Public base URL (used in notification links), e.g. https://climate.example.home
