@@ -1,7 +1,6 @@
 /* Generated from api/climate/api/schemas.py by web/scripts/gen-types.mjs. Do not edit by hand. */
 
 export interface ApiTypes {
-  AcceptInvitationBody?: AcceptInvitationBody
   AccessTokenOut?: AccessTokenOut
   AgentFinishBody?: AgentFinishBody
   AgentHeartbeatBody?: AgentHeartbeatBody
@@ -62,8 +61,6 @@ export interface ApiTypes {
   Intraday?: Intraday
   IntradayPoint?: IntradayPoint
   IntradayUnit?: IntradayUnit
-  InvitationInfo?: InvitationInfo
-  InvitationOut?: InvitationOut
   JobOut?: JobOut
   LocationSettings?: LocationSettings
   LoginBody?: LoginBody
@@ -86,8 +83,6 @@ export interface ApiTypes {
   PublishReportBody?: PublishReportBody
   ReauthBody?: ReauthBody
   ReportOut?: ReportOut
-  ResetLinkOut?: ResetLinkOut
-  ResetPasswordBody?: ResetPasswordBody
   RoomHistory?: RoomHistory
   RoomOut?: RoomOut
   RoomPoint?: RoomPoint
@@ -119,10 +114,6 @@ export interface ApiTypes {
   UnitLive?: UnitLive
   UnitOut?: UnitOut
   UnitTarget?: UnitTarget
-  UserCreateBody?: UserCreateBody
-  UserCreateOut?: UserCreateOut
-  UserOut?: UserOut
-  UserUpdateBody?: UserUpdateBody
   UtilityEventOut?: UtilityEventOut
   UtilityEventSettings?: UtilityEventSettings
   UtilityInfo?: UtilityInfo
@@ -135,18 +126,9 @@ export interface ApiTypes {
   WsTicketOut?: WsTicketOut
 }
 /**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "AcceptInvitationBody".
- */
-export interface AcceptInvitationBody {
-  display_name?: string
-  password: string
-  token: string
-}
-/**
- * Login / refresh / setup / accept-invitation / reset-password result. The access token is
- * kept in memory by the web app (never stored); the refresh token travels only as the HttpOnly
- * ``climate_refresh`` cookie (Path=/api/auth).
+ * Setup / login / refresh result. The access token is a 15-minute signed bearer token the
+ * web app keeps in memory (never stored); the refresh token travels only as the HttpOnly
+ * ``climate_refresh`` cookie (Path=/api/auth) and rotates on every refresh.
  *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "AccessTokenOut".
@@ -154,23 +136,8 @@ export interface AcceptInvitationBody {
 export interface AccessTokenOut {
   access_token: string
   expires_in: number
+  session_id: number
   token_type: 'bearer'
-  user: UserOut
-}
-/**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "UserOut".
- */
-export interface UserOut {
-  created_at: string
-  display_name: string
-  id: number
-  is_active: boolean
-  last_login_at: string | null
-  locked_until: string | null
-  password_set: boolean
-  role: 'admin' | 'member' | 'viewer'
-  username: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -274,7 +241,7 @@ export interface ApiTokenCreateBody {
   expires_in_days?: number | null
   local_only?: boolean
   name: string
-  role?: 'agent' | 'viewer' | 'member'
+  role?: 'agent' | 'viewer' | 'control'
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -282,7 +249,6 @@ export interface ApiTokenCreateBody {
  */
 export interface ApiTokenCreated {
   created_at: string
-  created_by: string | null
   expires_at: string | null
   id: number
   last_used_at: string | null
@@ -290,7 +256,7 @@ export interface ApiTokenCreated {
   local_only: boolean
   name: string
   revoked_at: string | null
-  role: 'agent' | 'viewer' | 'member'
+  role: 'agent' | 'viewer' | 'control'
   token: string
   token_hint: string
 }
@@ -300,7 +266,6 @@ export interface ApiTokenCreated {
  */
 export interface ApiTokenOut {
   created_at: string
-  created_by: string | null
   expires_at: string | null
   id: number
   last_used_at: string | null
@@ -308,7 +273,7 @@ export interface ApiTokenOut {
   local_only: boolean
   name: string
   revoked_at: string | null
-  role: 'agent' | 'viewer' | 'member'
+  role: 'agent' | 'viewer' | 'control'
   token_hint: string
 }
 /**
@@ -335,8 +300,7 @@ export interface AskBody {
  */
 export interface AuditEventOut {
   actor_label: string
-  actor_role: string | null
-  actor_type: 'user' | 'api_token' | 'system'
+  actor_type: 'owner' | 'api_token' | 'system'
   event_type: string
   id: number
   ip: string | null
@@ -348,10 +312,10 @@ export interface AuditEventOut {
   ts: string
 }
 /**
- * ``detail`` of a 401/403/423 from the auth layer, so clients can react precisely:
- * TOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to login),
- * REAUTHENTICATION_REQUIRED (ask for the password, then replay), ACCOUNT_LOCKED,
- * INVALID_CREDENTIALS, FORBIDDEN, SETUP_NOT_ALLOWED, INVALID_RESET_TOKEN, INVALID_INVITATION.
+ * ``detail`` of a 401/403/429/503 from the auth layer, so clients react precisely:
+ * TOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to the
+ * sign-in page), REAUTHENTICATION_REQUIRED (ask for the password, then replay),
+ * INVALID_CREDENTIALS, LOGIN_PAUSED, FORBIDDEN, SETUP_NOT_ALLOWED, AUTH_NOT_CONFIGURED.
  *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "AuthErrorDetail".
@@ -361,8 +325,8 @@ export interface AuthErrorDetail {
   message: string
 }
 /**
- * GET /api/auth/state (public). ``password_set`` False = no user exists yet: show the
- * first-run screen, which only works from a private address unless allowed (``setup_allowed``).
+ * GET /api/auth/state (public). ``password_set`` False = first run: show "choose a
+ * password", which only works from a private address unless allowed (``setup_allowed``).
  *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "AuthState".
@@ -370,9 +334,8 @@ export interface AuthErrorDetail {
 export interface AuthState {
   authenticated: boolean
   password_set: boolean
-  role: ('admin' | 'member' | 'viewer' | 'agent') | null
+  role: ('owner' | 'agent' | 'viewer' | 'control') | null
   setup_allowed: boolean
-  user: UserOut | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1212,30 +1175,6 @@ export interface IntradayPoint {
   zone_temp_f: number | null
 }
 /**
- * GET /api/auth/invitation?token=… (public): what the invite is for.
- *
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "InvitationInfo".
- */
-export interface InvitationInfo {
-  expires_at: string
-  role: 'admin' | 'member' | 'viewer'
-  username: string
-}
-/**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "InvitationOut".
- */
-export interface InvitationOut {
-  accepted_at: string | null
-  created_at: string
-  expires_at: string
-  id: number
-  revoked_at: string | null
-  role: 'admin' | 'member' | 'viewer'
-  username: string
-}
-/**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "LocationSettings".
  */
@@ -1248,13 +1187,14 @@ export interface LocationSettings {
   zip: string | null
 }
 /**
+ * Signing in. No minimum here: an existing password may predate the length rule.
+ *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "LoginBody".
  */
 export interface LoginBody {
   device_name?: string
   password: string
-  username: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1272,10 +1212,10 @@ export interface ManualHoldBody {
  */
 export interface MeOut {
   recently_authenticated: boolean
-  role: 'admin' | 'member' | 'viewer' | 'agent'
+  role: 'owner' | 'agent' | 'viewer' | 'control'
   session_id: number | null
   token_id: number | null
-  user: UserOut | null
+  token_name: string | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1463,22 +1403,6 @@ export interface ReportOut {
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "ResetLinkOut".
- */
-export interface ResetLinkOut {
-  expires_at: string
-  url: string
-}
-/**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "ResetPasswordBody".
- */
-export interface ResetPasswordBody {
-  new_password: string
-  token: string
-}
-/**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "RoomHistory".
  */
 export interface RoomHistory {
@@ -1591,6 +1515,8 @@ export interface SensorOut {
   unit_key: string
 }
 /**
+ * A signed-in device.
+ *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "SessionOut".
  */
@@ -1661,15 +1587,14 @@ export interface SettingsUpdate {
   utility_events?: UtilityEventSettings | null
 }
 /**
- * First-run: create the first admin (only while no user exists).
+ * First run: choose the owner password (only while none is set).
  *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "SetupBody".
  */
 export interface SetupBody {
-  display_name?: string
+  device_name?: string
   password: string
-  username: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1762,37 +1687,6 @@ export interface SourceBody {
  */
 export interface UnitBody {
   unit_key: string
-}
-/**
- * Admin: create a user. With ``password`` the account is ready now (a temporary password
- * the person changes); without it an invitation link is returned (shown once).
- *
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "UserCreateBody".
- */
-export interface UserCreateBody {
-  display_name?: string
-  password?: string | null
-  role?: 'admin' | 'member' | 'viewer'
-  username: string
-}
-/**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "UserCreateOut".
- */
-export interface UserCreateOut {
-  invitation_expires_at: string | null
-  invitation_url: string | null
-  user: UserOut | null
-}
-/**
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "UserUpdateBody".
- */
-export interface UserUpdateBody {
-  display_name?: string | null
-  is_active?: boolean | null
-  role?: ('admin' | 'member' | 'viewer') | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema

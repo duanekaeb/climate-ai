@@ -28,74 +28,62 @@ from climate.store.app_settings import (
 )
 
 OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com"
-# Who is calling: a signed-in person (admin / member / viewer) or an API token (agent /
-# viewer / member; tokens are never admin). docs/specs/users-and-tokens.md has the matrix.
-Role = Literal["admin", "member", "viewer", "agent"]
-UserRole = Literal["admin", "member", "viewer"]
-TokenRole = Literal["agent", "viewer", "member"]
+# Who is calling: the owner (the one password; signed in on any device) or an API token
+# (agent / viewer / control; never the owner's full rights). docs/specs/users-and-tokens.md.
+Role = Literal["owner", "agent", "viewer", "control"]
+TokenRole = Literal["agent", "viewer", "control"]
 
 # ---------------------------------------------------------------------------------------
 # auth / health
 # ---------------------------------------------------------------------------------------
 
 
-class UserOut(BaseModel):
-    id: int
-    username: str
-    display_name: str
-    role: UserRole
-    is_active: bool
-    password_set: bool  # False until an invitation is accepted
-    locked_until: datetime | None = None
-    last_login_at: datetime | None = None
-    created_at: datetime
-
-
 class AuthState(BaseModel):
-    """GET /api/auth/state (public). ``password_set`` False = no user exists yet: show the
-    first-run screen, which only works from a private address unless allowed (``setup_allowed``)."""
+    """GET /api/auth/state (public). ``password_set`` False = first run: show "choose a
+    password", which only works from a private address unless allowed (``setup_allowed``)."""
 
     authenticated: bool
     role: Role | None = None
     password_set: bool
     setup_allowed: bool = False
-    user: UserOut | None = None
 
 
 class SetupBody(BaseModel):
-    """First-run: create the first admin (only while no user exists)."""
+    """First run: choose the owner password (only while none is set)."""
 
-    username: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._@-]*$")
     password: str = Field(min_length=8, max_length=200)  # the server enforces password_min_length
-    display_name: str = Field(default="", max_length=100)
+    device_name: str = Field(default="", max_length=100)
 
 
 class LoginBody(BaseModel):
-    username: str = Field(min_length=1, max_length=100)
+    """Signing in. No minimum here: an existing password may predate the length rule."""
+
     password: str = Field(min_length=1, max_length=200)
-    device_name: str = Field(default="", max_length=100)  # e.g. "Duane's iPhone"; defaults from the user agent
+    device_name: str = Field(default="", max_length=100)  # e.g. "iPhone"; defaults from the user agent
 
 
 class AccessTokenOut(BaseModel):
-    """Login / refresh / setup / accept-invitation / reset-password result. The access token is
-    kept in memory by the web app (never stored); the refresh token travels only as the HttpOnly
-    ``climate_refresh`` cookie (Path=/api/auth)."""
+    """Setup / login / refresh result. The access token is a 15-minute signed bearer token the
+    web app keeps in memory (never stored); the refresh token travels only as the HttpOnly
+    ``climate_refresh`` cookie (Path=/api/auth) and rotates on every refresh."""
 
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_in: int  # seconds
-    user: UserOut
+    session_id: int
 
 
 class MeOut(BaseModel):
-    user: UserOut | None = None  # None for an API token caller
     role: Role
-    session_id: int | None = None
-    token_id: int | None = None
-    recently_authenticated: bool = False  # within reauth_window_minutes (sensitive admin actions)
+    session_id: int | None = None  # the owner's signed-in device
+    token_id: int | None = None  # an API token caller
+    token_name: str | None = None
+    recently_authenticated: bool = False  # password re-entered within reauth_window_minutes
 
 
 class SessionOut(BaseModel):
+    """A signed-in device."""
+
     id: int
     device_name: str
     user_agent: str
@@ -115,62 +103,6 @@ class ChangePasswordBody(BaseModel):
     new_password: str = Field(min_length=8, max_length=200)
 
 
-class ResetPasswordBody(BaseModel):
-    token: str = Field(min_length=10, max_length=200)
-    new_password: str = Field(min_length=8, max_length=200)
-
-
-class InvitationInfo(BaseModel):
-    """GET /api/auth/invitation?token=… (public): what the invite is for."""
-
-    username: str
-    role: UserRole
-    expires_at: datetime
-
-
-class AcceptInvitationBody(BaseModel):
-    token: str = Field(min_length=10, max_length=200)
-    password: str = Field(min_length=8, max_length=200)
-    display_name: str = Field(default="", max_length=100)
-
-
-class UserCreateBody(BaseModel):
-    """Admin: create a user. With ``password`` the account is ready now (a temporary password
-    the person changes); without it an invitation link is returned (shown once)."""
-
-    username: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._@-]*$")
-    role: UserRole = "member"
-    display_name: str = Field(default="", max_length=100)
-    password: str | None = Field(default=None, min_length=8, max_length=200)
-
-
-class UserCreateOut(BaseModel):
-    user: UserOut | None = None  # set when created with a password
-    invitation_url: str | None = None  # set for an invitation; shown once
-    invitation_expires_at: datetime | None = None
-
-
-class UserUpdateBody(BaseModel):
-    role: UserRole | None = None
-    is_active: bool | None = None
-    display_name: str | None = Field(default=None, max_length=100)
-
-
-class ResetLinkOut(BaseModel):
-    url: str  # one-time link, shown once (there is no email)
-    expires_at: datetime
-
-
-class InvitationOut(BaseModel):
-    id: int
-    username: str
-    role: UserRole
-    created_at: datetime
-    expires_at: datetime
-    accepted_at: datetime | None = None
-    revoked_at: datetime | None = None
-
-
 class ApiTokenCreateBody(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     role: TokenRole = "agent"
@@ -185,7 +117,6 @@ class ApiTokenOut(BaseModel):
     role: TokenRole
     local_only: bool
     created_at: datetime
-    created_by: str | None = None  # username
     expires_at: datetime | None = None
     last_used_at: datetime | None = None
     last_used_ip: str | None = None
@@ -199,9 +130,8 @@ class ApiTokenCreated(ApiTokenOut):
 class AuditEventOut(BaseModel):
     id: int
     ts: datetime
-    actor_type: Literal["user", "api_token", "system"]
+    actor_type: Literal["owner", "api_token", "system"]
     actor_label: str
-    actor_role: str | None = None
     event_type: str
     target_type: str | None = None
     target_id: str | None = None
@@ -218,10 +148,10 @@ class WsTicketOut(BaseModel):
 
 
 class AuthErrorDetail(BaseModel):
-    """``detail`` of a 401/403/423 from the auth layer, so clients can react precisely:
-    TOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to login),
-    REAUTHENTICATION_REQUIRED (ask for the password, then replay), ACCOUNT_LOCKED,
-    INVALID_CREDENTIALS, FORBIDDEN, SETUP_NOT_ALLOWED, INVALID_RESET_TOKEN, INVALID_INVITATION."""
+    """``detail`` of a 401/403/429/503 from the auth layer, so clients react precisely:
+    TOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to the
+    sign-in page), REAUTHENTICATION_REQUIRED (ask for the password, then replay),
+    INVALID_CREDENTIALS, LOGIN_PAUSED, FORBIDDEN, SETUP_NOT_ALLOWED, AUTH_NOT_CONFIGURED."""
 
     code: str
     message: str

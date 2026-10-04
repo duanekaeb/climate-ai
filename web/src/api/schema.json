@@ -1,32 +1,7 @@
 {
  "$defs": {
-  "AcceptInvitationBody": {
-   "properties": {
-    "display_name": {
-     "default": "",
-     "maxLength": 100,
-     "type": "string"
-    },
-    "password": {
-     "maxLength": 200,
-     "minLength": 8,
-     "type": "string"
-    },
-    "token": {
-     "maxLength": 200,
-     "minLength": 10,
-     "type": "string"
-    }
-   },
-   "required": [
-    "token",
-    "password"
-   ],
-   "title": "AcceptInvitationBody",
-   "type": "object"
-  },
   "AccessTokenOut": {
-   "description": "Login / refresh / setup / accept-invitation / reset-password result. The access token is\nkept in memory by the web app (never stored); the refresh token travels only as the HttpOnly\n``climate_refresh`` cookie (Path=/api/auth).",
+   "description": "Setup / login / refresh result. The access token is a 15-minute signed bearer token the\nweb app keeps in memory (never stored); the refresh token travels only as the HttpOnly\n``climate_refresh`` cookie (Path=/api/auth) and rotates on every refresh.",
    "properties": {
     "access_token": {
      "type": "string"
@@ -34,20 +9,20 @@
     "expires_in": {
      "type": "integer"
     },
+    "session_id": {
+     "type": "integer"
+    },
     "token_type": {
      "const": "bearer",
      "default": "bearer",
      "type": "string"
-    },
-    "user": {
-     "$ref": "#/$defs/UserOut"
     }
    },
    "required": [
     "access_token",
     "expires_in",
-    "token_type",
-    "user"
+    "session_id",
+    "token_type"
    ],
    "title": "AccessTokenOut",
    "type": "object"
@@ -614,7 +589,7 @@
      "enum": [
       "agent",
       "viewer",
-      "member"
+      "control"
      ],
      "type": "string"
     }
@@ -630,17 +605,6 @@
     "created_at": {
      "format": "date-time",
      "type": "string"
-    },
-    "created_by": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
     },
     "expires_at": {
      "anyOf": [
@@ -702,7 +666,7 @@
      "enum": [
       "agent",
       "viewer",
-      "member"
+      "control"
      ],
      "type": "string"
     },
@@ -715,7 +679,6 @@
    },
    "required": [
     "created_at",
-    "created_by",
     "expires_at",
     "id",
     "last_used_at",
@@ -736,17 +699,6 @@
      "format": "date-time",
      "type": "string"
     },
-    "created_by": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
     "expires_at": {
      "anyOf": [
       {
@@ -807,7 +759,7 @@
      "enum": [
       "agent",
       "viewer",
-      "member"
+      "control"
      ],
      "type": "string"
     },
@@ -817,7 +769,6 @@
    },
    "required": [
     "created_at",
-    "created_by",
     "expires_at",
     "id",
     "last_used_at",
@@ -872,20 +823,9 @@
     "actor_label": {
      "type": "string"
     },
-    "actor_role": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
     "actor_type": {
      "enum": [
-      "user",
+      "owner",
       "api_token",
       "system"
      ],
@@ -941,7 +881,6 @@
    },
    "required": [
     "actor_label",
-    "actor_role",
     "actor_type",
     "event_type",
     "id",
@@ -955,7 +894,7 @@
    "type": "object"
   },
   "AuthErrorDetail": {
-   "description": "``detail`` of a 401/403/423 from the auth layer, so clients can react precisely:\nTOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to login),\nREAUTHENTICATION_REQUIRED (ask for the password, then replay), ACCOUNT_LOCKED,\nINVALID_CREDENTIALS, FORBIDDEN, SETUP_NOT_ALLOWED, INVALID_RESET_TOKEN, INVALID_INVITATION.",
+   "description": "``detail`` of a 401/403/429/503 from the auth layer, so clients react precisely:\nTOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to the\nsign-in page), REAUTHENTICATION_REQUIRED (ask for the password, then replay),\nINVALID_CREDENTIALS, LOGIN_PAUSED, FORBIDDEN, SETUP_NOT_ALLOWED, AUTH_NOT_CONFIGURED.",
    "properties": {
     "code": {
      "type": "string"
@@ -972,7 +911,7 @@
    "type": "object"
   },
   "AuthState": {
-   "description": "GET /api/auth/state (public). ``password_set`` False = no user exists yet: show the\nfirst-run screen, which only works from a private address unless allowed (``setup_allowed``).",
+   "description": "GET /api/auth/state (public). ``password_set`` False = first run: show \"choose a\npassword\", which only works from a private address unless allowed (``setup_allowed``).",
    "properties": {
     "authenticated": {
      "type": "boolean"
@@ -984,10 +923,10 @@
      "anyOf": [
       {
        "enum": [
-        "admin",
-        "member",
+        "owner",
+        "agent",
         "viewer",
-        "agent"
+        "control"
        ],
        "type": "string"
       },
@@ -1000,25 +939,13 @@
     "setup_allowed": {
      "default": false,
      "type": "boolean"
-    },
-    "user": {
-     "anyOf": [
-      {
-       "$ref": "#/$defs/UserOut"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
     }
    },
    "required": [
     "authenticated",
     "password_set",
     "role",
-    "setup_allowed",
-    "user"
+    "setup_allowed"
    ],
    "title": "AuthState",
    "type": "object"
@@ -3374,94 +3301,6 @@
    "title": "IntradayUnit",
    "type": "object"
   },
-  "InvitationInfo": {
-   "description": "GET /api/auth/invitation?token=\u2026 (public): what the invite is for.",
-   "properties": {
-    "expires_at": {
-     "format": "date-time",
-     "type": "string"
-    },
-    "role": {
-     "enum": [
-      "admin",
-      "member",
-      "viewer"
-     ],
-     "type": "string"
-    },
-    "username": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "expires_at",
-    "role",
-    "username"
-   ],
-   "title": "InvitationInfo",
-   "type": "object"
-  },
-  "InvitationOut": {
-   "properties": {
-    "accepted_at": {
-     "anyOf": [
-      {
-       "format": "date-time",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "created_at": {
-     "format": "date-time",
-     "type": "string"
-    },
-    "expires_at": {
-     "format": "date-time",
-     "type": "string"
-    },
-    "id": {
-     "type": "integer"
-    },
-    "revoked_at": {
-     "anyOf": [
-      {
-       "format": "date-time",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "role": {
-     "enum": [
-      "admin",
-      "member",
-      "viewer"
-     ],
-     "type": "string"
-    },
-    "username": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "accepted_at",
-    "created_at",
-    "expires_at",
-    "id",
-    "revoked_at",
-    "role",
-    "username"
-   ],
-   "title": "InvitationOut",
-   "type": "object"
-  },
   "JobOut": {
    "properties": {
     "created_at": {
@@ -3603,6 +3442,7 @@
    "type": "object"
   },
   "LoginBody": {
+   "description": "Signing in. No minimum here: an existing password may predate the length rule.",
    "properties": {
     "device_name": {
      "default": "",
@@ -3613,15 +3453,9 @@
      "maxLength": 200,
      "minLength": 1,
      "type": "string"
-    },
-    "username": {
-     "maxLength": 100,
-     "minLength": 1,
-     "type": "string"
     }
    },
    "required": [
-    "username",
     "password"
    ],
    "title": "LoginBody",
@@ -3661,10 +3495,10 @@
     },
     "role": {
      "enum": [
-      "admin",
-      "member",
+      "owner",
+      "agent",
       "viewer",
-      "agent"
+      "control"
      ],
      "type": "string"
     },
@@ -3690,10 +3524,10 @@
      ],
      "default": null
     },
-    "user": {
+    "token_name": {
      "anyOf": [
       {
-       "$ref": "#/$defs/UserOut"
+       "type": "string"
       },
       {
        "type": "null"
@@ -3707,7 +3541,7 @@
     "role",
     "session_id",
     "token_id",
-    "user"
+    "token_name"
    ],
    "title": "MeOut",
    "type": "object"
@@ -4644,43 +4478,6 @@
    "title": "ReportOut",
    "type": "object"
   },
-  "ResetLinkOut": {
-   "properties": {
-    "expires_at": {
-     "format": "date-time",
-     "type": "string"
-    },
-    "url": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "expires_at",
-    "url"
-   ],
-   "title": "ResetLinkOut",
-   "type": "object"
-  },
-  "ResetPasswordBody": {
-   "properties": {
-    "new_password": {
-     "maxLength": 200,
-     "minLength": 8,
-     "type": "string"
-    },
-    "token": {
-     "maxLength": 200,
-     "minLength": 10,
-     "type": "string"
-    }
-   },
-   "required": [
-    "token",
-    "new_password"
-   ],
-   "title": "ResetPasswordBody",
-   "type": "object"
-  },
   "RoomHistory": {
    "properties": {
     "hours": {
@@ -5300,6 +5097,7 @@
    "type": "object"
   },
   "SessionOut": {
+   "description": "A signed-in device.",
    "properties": {
     "created_at": {
      "format": "date-time",
@@ -5517,9 +5315,9 @@
    "type": "object"
   },
   "SetupBody": {
-   "description": "First-run: create the first admin (only while no user exists).",
+   "description": "First run: choose the owner password (only while none is set).",
    "properties": {
-    "display_name": {
+    "device_name": {
      "default": "",
      "maxLength": 100,
      "type": "string"
@@ -5528,16 +5326,9 @@
      "maxLength": 200,
      "minLength": 8,
      "type": "string"
-    },
-    "username": {
-     "maxLength": 64,
-     "minLength": 2,
-     "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]*$",
-     "type": "string"
     }
    },
    "required": [
-    "username",
     "password"
    ],
    "title": "SetupBody",
@@ -6388,207 +6179,6 @@
    "title": "UnitTarget",
    "type": "object"
   },
-  "UserCreateBody": {
-   "description": "Admin: create a user. With ``password`` the account is ready now (a temporary password\nthe person changes); without it an invitation link is returned (shown once).",
-   "properties": {
-    "display_name": {
-     "default": "",
-     "maxLength": 100,
-     "type": "string"
-    },
-    "password": {
-     "anyOf": [
-      {
-       "maxLength": 200,
-       "minLength": 8,
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "role": {
-     "default": "member",
-     "enum": [
-      "admin",
-      "member",
-      "viewer"
-     ],
-     "type": "string"
-    },
-    "username": {
-     "maxLength": 64,
-     "minLength": 2,
-     "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]*$",
-     "type": "string"
-    }
-   },
-   "required": [
-    "username"
-   ],
-   "title": "UserCreateBody",
-   "type": "object"
-  },
-  "UserCreateOut": {
-   "properties": {
-    "invitation_expires_at": {
-     "anyOf": [
-      {
-       "format": "date-time",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "invitation_url": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "user": {
-     "anyOf": [
-      {
-       "$ref": "#/$defs/UserOut"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    }
-   },
-   "required": [
-    "invitation_expires_at",
-    "invitation_url",
-    "user"
-   ],
-   "title": "UserCreateOut",
-   "type": "object"
-  },
-  "UserOut": {
-   "properties": {
-    "created_at": {
-     "format": "date-time",
-     "type": "string"
-    },
-    "display_name": {
-     "type": "string"
-    },
-    "id": {
-     "type": "integer"
-    },
-    "is_active": {
-     "type": "boolean"
-    },
-    "last_login_at": {
-     "anyOf": [
-      {
-       "format": "date-time",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "locked_until": {
-     "anyOf": [
-      {
-       "format": "date-time",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "password_set": {
-     "type": "boolean"
-    },
-    "role": {
-     "enum": [
-      "admin",
-      "member",
-      "viewer"
-     ],
-     "type": "string"
-    },
-    "username": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "created_at",
-    "display_name",
-    "id",
-    "is_active",
-    "last_login_at",
-    "locked_until",
-    "password_set",
-    "role",
-    "username"
-   ],
-   "title": "UserOut",
-   "type": "object"
-  },
-  "UserUpdateBody": {
-   "properties": {
-    "display_name": {
-     "anyOf": [
-      {
-       "maxLength": 100,
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "is_active": {
-     "anyOf": [
-      {
-       "type": "boolean"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    },
-    "role": {
-     "anyOf": [
-      {
-       "enum": [
-        "admin",
-        "member",
-        "viewer"
-       ],
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null
-    }
-   },
-   "title": "UserUpdateBody",
-   "type": "object"
-  },
   "UtilityEventOut": {
    "description": "A utility energy-saving (demand-response) event on one thermostat.",
    "properties": {
@@ -7306,9 +6896,6 @@
  },
  "additionalProperties": false,
  "properties": {
-  "AcceptInvitationBody": {
-   "$ref": "#/$defs/AcceptInvitationBody"
-  },
   "AccessTokenOut": {
    "$ref": "#/$defs/AccessTokenOut"
   },
@@ -7489,12 +7076,6 @@
   "IntradayUnit": {
    "$ref": "#/$defs/IntradayUnit"
   },
-  "InvitationInfo": {
-   "$ref": "#/$defs/InvitationInfo"
-  },
-  "InvitationOut": {
-   "$ref": "#/$defs/InvitationOut"
-  },
   "JobOut": {
    "$ref": "#/$defs/JobOut"
   },
@@ -7560,12 +7141,6 @@
   },
   "ReportOut": {
    "$ref": "#/$defs/ReportOut"
-  },
-  "ResetLinkOut": {
-   "$ref": "#/$defs/ResetLinkOut"
-  },
-  "ResetPasswordBody": {
-   "$ref": "#/$defs/ResetPasswordBody"
   },
   "RoomHistory": {
    "$ref": "#/$defs/RoomHistory"
@@ -7659,18 +7234,6 @@
   },
   "UnitTarget": {
    "$ref": "#/$defs/UnitTarget"
-  },
-  "UserCreateBody": {
-   "$ref": "#/$defs/UserCreateBody"
-  },
-  "UserCreateOut": {
-   "$ref": "#/$defs/UserCreateOut"
-  },
-  "UserOut": {
-   "$ref": "#/$defs/UserOut"
-  },
-  "UserUpdateBody": {
-   "$ref": "#/$defs/UserUpdateBody"
   },
   "UtilityEventOut": {
    "$ref": "#/$defs/UtilityEventOut"
