@@ -25,19 +25,20 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from climate.analytics.baseline import (
+    MIN_DAYS,
+    MIN_RUNTIME_DAYS,
     MODES,
     TRAIN_DAYS,
     BaselineFit,
     ResidualStats,
     expected_covered_seconds,
+    involved_modes,
     pre_period_fits,
     residual_stats,
-    weather_part_seconds,
 )
 from climate.analytics.daily import DayRow, daily_rows, house_tz, is_complete, mode_seconds, unit_order, unit_weights
 from climate.api.schemas import Savings, SavingsByUnit, SavingsDay, Waterfall, WaterfallItem
 
-INVOLVED_SHARE = 0.05
 MODE_WORD = {"cool": "cooling", "heat": "heating"}
 UNIT_NAME = {"main": "main floor", "up": "upstairs", "bed": "bed/office wing"}
 
@@ -71,23 +72,6 @@ class _Period:
         return not self.problems
 
 
-def _involvement(rows: list[DayRow], fits: dict[tuple[str, str], BaselineFit]) -> set[tuple[str, str]]:
-    actual: dict[tuple[str, str], float] = defaultdict(float)
-    weather: dict[tuple[str, str], float] = defaultdict(float)
-    for r in rows:
-        for m in MODES:
-            actual[(r.unit_key, m)] += mode_seconds(r, m)
-            if (r.unit_key, m) in fits:
-                weather[(r.unit_key, m)] += weather_part_seconds(fits[(r.unit_key, m)], r)
-    out: set[tuple[str, str]] = set()
-    for u in {r.unit_key for r in rows}:
-        total = max(sum(actual[(u, m)] for m in MODES), sum(weather[(u, m)] for m in MODES), 1.0)
-        for m in MODES:
-            if actual[(u, m)] >= INVOLVED_SHARE * total or weather[(u, m)] >= INVOLVED_SHARE * total:
-                out.add((u, m))
-    return out
-
-
 def _judge(
     rows: list[DayRow], fits: dict[tuple[str, str], BaselineFit], weights: dict[str, float],
     involved: set[tuple[str, str]], days: list[date] | None = None,
@@ -102,8 +86,8 @@ def _judge(
         fit = fits.get((u, m))
         if fit is None:
             p.problems.append(
-                f"no {MODE_WORD[m]} baseline for the {_uname(u)} yet (needs {21} complete days with at least 10 days "
-                f"of {MODE_WORD[m]} in the {TRAIN_DAYS} days before the period)"
+                f"no {MODE_WORD[m]} baseline for the {_uname(u)} yet (needs {MIN_DAYS} complete days with at least "
+                f"{MIN_RUNTIME_DAYS} days of {MODE_WORD[m]} in the {TRAIN_DAYS} days before the period)"
             )
         elif not fit.passes:
             p.problems.append(f"the {_uname(u)} {MODE_WORD[m]} baseline fails its checks ({fit.check_summary()})")
@@ -162,7 +146,7 @@ def savings(session: Session, start: date, end: date) -> Savings:
     fits = pre_period_fits(session, start, tz)
     rows = daily_rows(session, start, end, tz)
     weights = unit_weights(session)
-    p = _judge(rows, fits, weights, _involvement(rows, fits))
+    p = _judge(rows, fits, weights, involved_modes(rows, fits))
 
     actual_s = sum(p.actual.values())
     n = len(p.days)
@@ -245,7 +229,7 @@ def waterfall(session: Session, week_start: date) -> Waterfall:
     weights = unit_weights(session)
     rows_this = daily_rows(session, ws, ws + timedelta(days=6), tz)
     rows_last = daily_rows(session, prev, prev + timedelta(days=6), tz)
-    involved = _involvement(rows_this + rows_last, fits)
+    involved = involved_modes(rows_this + rows_last, fits)
     this = _judge(rows_this, fits, weights, involved)
     last = _judge(rows_last, fits, weights, involved)
     offsets = sorted({(d - ws).days for d in this.days} & {(d - prev).days for d in last.days})

@@ -6,8 +6,8 @@ import json
 import logging
 from datetime import timedelta
 
-import pytest
 import pyecobee
+import pytest
 import requests
 from pyecobee import MfaChallenge
 from pyecobee.errors import EcobeeAuthFailedError, EcobeeAuthMfaRequiredError, EcobeeAuthUnknownError

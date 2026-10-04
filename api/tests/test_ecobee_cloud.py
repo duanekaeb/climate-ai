@@ -86,7 +86,7 @@ class FakeEcobee:
         t["thermostatRev"] = str(int(t["thermostatRev"]) + 1)
 
     def _local_now(self, t: dict[str, Any]) -> datetime:
-        return datetime.strptime(t["thermostatTime"], "%Y-%m-%d %H:%M:%S")
+        return datetime.strptime(t["thermostatTime"], "%Y-%m-%d %H:%M:%S")  # noqa: DTZ007 - thermostat-local
 
     # --- handler ---------------------------------------------------------------------
     async def handler(self, request: httpx.Request) -> httpx.Response:

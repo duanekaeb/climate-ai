@@ -371,25 +371,25 @@ async def test_fetch_runtime_returns_completed_slots_and_long_gaps_reset():
 
 
 def test_synthetic_weather_is_seasonal_and_deterministic():
-    from climate.sources.simulator import synthetic_weather
+    from functools import partial
 
-    jul = synthetic_weather(
+    from climate.sources.simulator import synthetic_weather
+    from climate.store.app_settings import LocationSettings
+
+    synth = partial(synthetic_weather, seed=7, location=LocationSettings())  # default mid-US climate, no DB
+    jul = synth(
         datetime(2026, 7, 1, tzinfo=UTC),
         datetime(2026, 8, 1, tzinfo=UTC),
-        seed=7,
         now=datetime(2026, 7, 20, tzinfo=UTC),
     )
-    jan = synthetic_weather(datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 2, 1, tzinfo=UTC), seed=7)
+    jan = synth(datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 2, 1, tzinfo=UTC))
     assert len(jul) == 31 * 24
-    assert (
-        synthetic_weather(
-            datetime(2026, 7, 1, tzinfo=UTC),
-            datetime(2026, 7, 2, tzinfo=UTC),
-            seed=7,
-            now=datetime(2026, 7, 20, tzinfo=UTC),
-        )
-        == jul[:24]
+    again = synth(
+        datetime(2026, 7, 1, tzinfo=UTC),
+        datetime(2026, 7, 2, tzinfo=UTC),
+        now=datetime(2026, 7, 20, tzinfo=UTC),
     )
+    assert again == jul[:24]
     mean = lambda rows: sum(r.temp_f for r in rows) / len(rows)
     assert 70 < mean(jul) < 85 and 25 < mean(jan) < 45
     assert max(r.temp_f for r in jul) > 90
@@ -411,3 +411,15 @@ def test_reset_starts_inside_the_comfort_band(seed):
     for snap in house._snapshots():
         assert snap.climate_ref == "sleep"
         assert snap.heat_sp_f - 1.5 <= snap.zone_temp_f <= snap.cool_sp_f + 1.5
+
+
+async def test_get_source_builds_a_working_simulator(db):
+    from climate.sources import get_source
+    from climate.sources.base import ThermostatSource
+
+    src = get_source("simulator")
+    assert isinstance(src, ThermostatSource)
+    snaps = await src.fetch_snapshots()
+    assert len(snaps) == 3 and all(s.source == "simulator" and s.connected for s in snaps)
+    assert set(await src.poll_revisions()) == {"main", "up", "bed"}
+    await src.close()

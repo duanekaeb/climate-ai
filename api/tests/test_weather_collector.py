@@ -199,3 +199,16 @@ def test_simulator_history_and_synthetic_weather_for_backfill(db):
     by_hour = {h.ts: h.temp_f for h in hours}
     on_hour = [r for r in rows if r.ts.minute == 0 and r.unit_key == "main" and r.ts in by_hour]
     assert all(abs(r.outdoor_temp_f - by_hour[r.ts]) < 1.5 for r in on_hour)
+
+
+def test_module_synthetic_weather_matches_the_configured_house(db):
+    from climate.sources.simulator import SimulatedHouse, synthetic_weather
+
+    set_location(db, lat=30.3, lon=-97.7)  # somewhere warmer than the default
+    start, end = datetime(2026, 1, 10, tzinfo=UTC), datetime(2026, 1, 12, tzinfo=UTC)
+    now = datetime(2026, 1, 11, tzinfo=UTC)
+    house = SimulatedHouse.from_settings()
+    configured = synthetic_weather(start, end, now=now)
+    assert configured == house.synthetic_weather(start, end, now=now)
+    default = synthetic_weather(start, end, now=now, location=LocationSettings())
+    assert sum(h.temp_f for h in configured) > sum(h.temp_f for h in default)

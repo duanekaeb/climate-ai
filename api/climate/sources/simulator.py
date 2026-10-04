@@ -391,16 +391,31 @@ def synthetic_weather(
     now: datetime | None = None,
 ) -> list[WeatherHourIn]:
     """Synthetic hours in [start, end) (source 'simulator'): 'observed' before ``now``
-    (default: the current time), 'forecast' after. Seed defaults to ``CLIMATE_SIM_SEED``;
-    location to the default mid-US climate."""
+    (default: the current time), 'forecast' after. Seed defaults to ``CLIMATE_SIM_SEED`` and
+    location to app_settings['location'] (the default mid-US climate when unset or when the
+    database is unreachable), so the hours match what ``SimulatedHouse.from_settings`` runs on."""
     if seed is None:
         from climate.config import get_settings
 
         seed = get_settings().sim_seed
-    loc = location or LocationSettings()
+    loc = location or _configured_location()
     lat = loc.lat if loc.lat is not None else DEFAULT_LAT
     lon = loc.lon if loc.lon is not None else default_longitude(loc.tz)
     return _synthetic_hours(SyntheticClimate(seed, lat, lon), start, end, now or utcnow())
+
+
+def _configured_location() -> LocationSettings:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from climate.store.app_settings import get_setting
+    from climate.store.db import session_scope
+
+    try:
+        with session_scope() as s:
+            return get_setting(s, "location", LocationSettings)
+    except SQLAlchemyError as exc:
+        log.info("simulator: location unavailable (%s); using the default climate", type(exc).__name__)
+        return LocationSettings()
 
 
 def _synthetic_hours(

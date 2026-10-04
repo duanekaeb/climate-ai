@@ -46,6 +46,7 @@ from climate.analytics.daily import (
     full_day_seconds,
     house_tz,
     is_complete,
+    mode_seconds,
     unit_order,
 )
 from climate.api.schemas import BaselineOut, DailyRuntime
@@ -229,6 +230,31 @@ def weather_part_seconds(fit: BaselineFit, day: DayRow) -> float:
     """The degree-day-driven part of the expectation (slope * DD), 0 without outdoor data."""
     dd = day_degree_days(day, fit.balance_point_f, fit.mode)
     return 0.0 if dd is None else fit.slope_s_per_dd * dd
+
+
+INVOLVED_SHARE = 0.05
+
+
+def involved_modes(rows: list[DayRow], fits: dict[tuple[str, str], BaselineFit]) -> set[tuple[str, str]]:
+    """(unit, mode) pairs that matter for a period: the mode's actual runtime, or its
+    baseline's degree-day-driven expectation, is >= 5% of that unit's runtime in the rows.
+    Keeps an out-of-season model (say a heating fit on summer days, which would predict only
+    its intercept) from manufacturing savings or drift."""
+    actual: dict[tuple[str, str], float] = defaultdict(float)
+    weather: dict[tuple[str, str], float] = defaultdict(float)
+    for r in rows:
+        for m in MODES:
+            key = (r.unit_key, m)
+            actual[key] += mode_seconds(r, m)
+            if key in fits:
+                weather[key] += weather_part_seconds(fits[key], r)
+    out: set[tuple[str, str]] = set()
+    for u in {r.unit_key for r in rows}:
+        total = max(sum(actual[(u, m)] for m in MODES), sum(weather[(u, m)] for m in MODES), 1.0)
+        for m in MODES:
+            if actual[(u, m)] >= INVOLVED_SHARE * total or weather[(u, m)] >= INVOLVED_SHARE * total:
+                out.add((u, m))
+    return out
 
 
 # ---------------------------------------------------------------------------------------
