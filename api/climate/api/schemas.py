@@ -141,6 +141,7 @@ class AgentRunOut(BaseModel):
     num_turns: int | None = None
     result_text: str | None = None
     error: str | None = None
+    session_id: str | None = None  # lets the agent resume a retried run's Claude session
 
 
 class AgentInfo(BaseModel):

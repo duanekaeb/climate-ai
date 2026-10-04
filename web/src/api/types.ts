@@ -167,6 +167,7 @@ export interface AgentRunOut {
   prompt: string
   requested_by: string
   result_text: string | null
+  session_id: string | null
   started_at: string | null
   status: 'queued' | 'running' | 'completed' | 'failed' | 'deferred' | 'cancelled'
   terminal_reason: string | null
