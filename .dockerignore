@@ -1,0 +1,10 @@
+.git
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+web/node_modules
+web/dist
+web/dev-dist
+ios
+docs/blueprint.html
+.env

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node / web
+web/node_modules/
+web/dist/
+web/dev-dist/
+web/src/api/schema.json
+
+# Secrets and local state: never commit
+.env
+*.env.local
+pairings.json*
+charmap.json
+homekit-state/
+agent-empty/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# iOS build products
+ios/**/xcuserdata/
+ios/**/DerivedData/
