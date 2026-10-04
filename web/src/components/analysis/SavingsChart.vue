@@ -19,8 +19,8 @@ const option = computed<ChartOption>(() => {
   const fmtF = (v: unknown) => (typeof v === 'number' ? `${v.toFixed(0)}°F` : '—')
   return {
     ...baseOption(p),
-    grid: { left: 4, right: hasOutdoor.value ? 4 : 8, top: 34, bottom: 4, containLabel: true },
-    legend: { top: 0, left: 0, itemWidth: 14, itemHeight: 8, textStyle: { color: p.muted, fontSize: 11 } },
+    grid: { left: 4, right: hasOutdoor.value ? 4 : 8, top: 24, bottom: 30, containLabel: true },
+    legend: { bottom: 0, left: 'center', itemWidth: 14, itemHeight: 8, itemGap: 12, textStyle: { color: p.muted, fontSize: 11 } },
     tooltip: { ...baseOption(p).tooltip, trigger: 'axis' },
     xAxis: {
       type: 'category',
@@ -43,7 +43,7 @@ const option = computed<ChartOption>(() => {
         tooltip: { valueFormatter: fmtH },
       },
       {
-        name: 'Expected (weather)',
+        name: 'Expected',
         type: 'line',
         data: props.days.map((d) => (d.expected_min === null ? null : hours(d.expected_min))),
         lineStyle: { color: p.ink, width: 2, type: 'dashed' },
@@ -55,7 +55,7 @@ const option = computed<ChartOption>(() => {
       ...(hasOutdoor.value
         ? [
             {
-              name: 'Outdoor mean',
+              name: 'Outdoor',
               type: 'line' as const,
               yAxisIndex: 1,
               data: props.days.map((d) => d.outdoor_mean_f),

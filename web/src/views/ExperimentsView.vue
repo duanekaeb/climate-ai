@@ -63,6 +63,8 @@ watch(
 
 let unsubscribe: (() => void) | null = null
 onMounted(() => {
+  // The house timezone and room names come from the status store; start it if the shell hasn't.
+  status.start()
   void store.loadList()
   void control.ensureSettings()
   unsubscribe = onEvent((e) => {

@@ -14,10 +14,11 @@ const { busy, error, done, run } = useAction()
 
 const form = reactive({ kind: props.source.kind, homekit: props.source.homekit_enabled })
 const dirty = computed(() => form.kind !== props.source.kind || form.homekit !== props.source.homekit_enabled)
+// Take server updates unless the owner has changed the form (judged against the old value).
 watch(
   () => props.source,
-  (s) => {
-    if (dirty.value) return
+  (s, old) => {
+    if (form.kind !== old.kind || form.homekit !== old.homekit_enabled) return
     form.kind = s.kind
     form.homekit = s.homekit_enabled
   },

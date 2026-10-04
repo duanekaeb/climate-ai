@@ -87,11 +87,11 @@ async function save() {
           <div class="flex flex-wrap items-end gap-2">
             <label class="text-xs text-muted">
               From
-              <input v-model="w.start" type="time" class="input num mt-1 !w-28" />
+              <input v-model="w.start" type="time" class="input num mt-1 !w-32 dark:[color-scheme:dark]" />
             </label>
             <label class="text-xs text-muted">
               Until
-              <input v-model="w.end" type="time" class="input num mt-1 !w-28" />
+              <input v-model="w.end" type="time" class="input num mt-1 !w-32 dark:[color-scheme:dark]" />
             </label>
             <button type="button" class="btn ml-auto !px-2 !py-1" :aria-label="`Remove window ${i + 1}`" @click="remove(k, i)">
               <Icon name="x" :size="14" />

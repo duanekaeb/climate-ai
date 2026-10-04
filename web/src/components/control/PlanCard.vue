@@ -5,7 +5,8 @@ import { computed } from 'vue'
 import type { PlanOut, RoomStatus, UnitTarget } from '@/api/types'
 import Card from '@/components/Card.vue'
 import Icon from '@/components/Icon.vue'
-import { temp, timeAgo } from '@/lib/format'
+import { temp } from '@/lib/format'
+import { ago } from '@/components/analysis/stats'
 import { unitName } from './units'
 
 const props = defineProps<{ plan: PlanOut; loading: boolean; rooms: RoomStatus[] }>()
@@ -41,7 +42,7 @@ function changed(a: number | null, b: number): boolean {
 </script>
 
 <template>
-  <Card title="Current plan" :subtitle="`Planned ${timeAgo(plan.at)}`">
+  <Card title="Current plan" :subtitle="`Planned ${ago(plan.at)}`">
     <template #actions>
       <button type="button" class="btn !px-2 !py-1" aria-label="Refresh plan" :disabled="loading" @click="emit('refresh')">
         <Icon name="refresh" :size="14" />

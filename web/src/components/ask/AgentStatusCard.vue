@@ -3,8 +3,7 @@
 import { computed } from 'vue'
 import type { AgentInfo } from '@/api/types'
 import Card from '@/components/Card.vue'
-import { timeAgo } from '@/lib/format'
-import { WEEKDAYS, dateTime, dayLabel, daysBetween, todayIn } from '@/components/analysis/stats'
+import { WEEKDAYS, ago, dateTime, dayLabel, daysBetween, todayIn } from '@/components/analysis/stats'
 
 const props = defineProps<{ info: AgentInfo; tz?: string }>()
 
@@ -44,7 +43,7 @@ const cap = computed(() => props.info.settings.max_triggered_per_day)
       <div>
         <dt class="text-[11px] text-muted uppercase">Agent service</dt>
         <dd :class="stale && 'text-warn'">
-          {{ info.last_beat_at ? `seen ${timeAgo(info.last_beat_at)}` : 'never seen' }}
+          {{ info.last_beat_at ? `seen ${ago(info.last_beat_at)}` : 'never seen' }}
         </dd>
       </div>
       <div>

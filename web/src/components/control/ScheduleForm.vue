@@ -49,22 +49,22 @@ async function save() {
         <h3 class="text-sm font-medium">School <span class="font-normal text-muted">· School Room has priority</span></h3>
         <div class="mt-1 flex flex-wrap items-end gap-2">
           <DaysPicker v-model="draft.school_days" label="School days" :disabled="!isOwner" />
-          <label class="text-xs text-muted">From <input v-model="draft.school_start" type="time" class="input num mt-1 !w-28" /></label>
-          <label class="text-xs text-muted">Until <input v-model="draft.school_end" type="time" class="input num mt-1 !w-28" /></label>
+          <label class="text-xs text-muted">From <input v-model="draft.school_start" type="time" class="input num mt-1 !w-32 dark:[color-scheme:dark]" /></label>
+          <label class="text-xs text-muted">Until <input v-model="draft.school_end" type="time" class="input num mt-1 !w-32 dark:[color-scheme:dark]" /></label>
         </div>
       </section>
       <section>
         <h3 class="text-sm font-medium">Office <span class="font-normal text-muted">· Office has priority in the wing</span></h3>
         <div class="mt-1 flex flex-wrap items-end gap-2">
           <DaysPicker v-model="draft.office_days" label="Office days" :disabled="!isOwner" />
-          <label class="text-xs text-muted">From <input v-model="draft.office_start" type="time" class="input num mt-1 !w-28" /></label>
-          <label class="text-xs text-muted">Until <input v-model="draft.office_end" type="time" class="input num mt-1 !w-28" /></label>
+          <label class="text-xs text-muted">From <input v-model="draft.office_start" type="time" class="input num mt-1 !w-32 dark:[color-scheme:dark]" /></label>
+          <label class="text-xs text-muted">Until <input v-model="draft.office_end" type="time" class="input num mt-1 !w-32 dark:[color-scheme:dark]" /></label>
         </div>
       </section>
       <section>
         <h3 class="text-sm font-medium">Evening <span class="font-normal text-muted">· Living Room has priority</span></h3>
         <label class="mt-1 block text-xs text-muted">
-          Starts at <input v-model="draft.evening_start" type="time" class="input num mt-1 !w-28" />
+          Starts at <input v-model="draft.evening_start" type="time" class="input num mt-1 !w-32 dark:[color-scheme:dark]" />
         </label>
       </section>
     </fieldset>

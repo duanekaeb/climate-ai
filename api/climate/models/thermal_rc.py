@@ -138,7 +138,9 @@ class RCModel:
         return T + DT_H * (self.free_rate(T, t_out, sun) + self.sign * self.q * on)
 
     def to_params(self) -> dict[str, dict[str, float]]:
-        return {z: {n: float(v) for n, v in zip(PARAM_NAMES[z], getattr(self, z), strict=True)} for z in ZONES}
+        return {
+            z: {n: float(v) for n, v in zip(PARAM_NAMES[z], getattr(self, z), strict=True)} for z in ZONES
+        }
 
     @classmethod
     def from_params(cls, params: dict[str, Any]) -> RCModel:
@@ -165,7 +167,11 @@ class RCModel:
         return {
             "units": "C_main = 1; R in hours·C_main per °F; a_sun per kW/m², Q and g in C_main·°F/h",
             "C": {"main": 1.0, "up": c_up, "bed": c_bed},
-            "R_out": {"main": inv(float(m[0])), "up": inv(scaled(u[0], c_up)), "bed": inv(scaled(b[0], c_bed))},
+            "R_out": {
+                "main": inv(float(m[0])),
+                "up": inv(scaled(u[0], c_up)),
+                "bed": inv(scaled(b[0], c_bed)),
+            },
             "R_mu": inv(float(m[1])),
             "R_mb": inv(float(m[2])),
             "k_s": scaled(u[2], c_up),
@@ -175,8 +181,9 @@ class RCModel:
         }
 
 
-def regressors(zone: str, T: np.ndarray, t_out: np.ndarray, sun: np.ndarray, on: np.ndarray,
-               sign: float) -> np.ndarray:
+def regressors(
+    zone: str, T: np.ndarray, t_out: np.ndarray, sun: np.ndarray, on: np.ndarray, sign: float
+) -> np.ndarray:
     """Columns X (n, p) such that dT_zone/dt = X @ rates[zone] (same order as PARAM_NAMES)."""
     tm, tu, tb = T[:, 0], T[:, 1], T[:, 2]
     one = np.ones_like(tm)
@@ -189,8 +196,9 @@ def regressors(zone: str, T: np.ndarray, t_out: np.ndarray, sun: np.ndarray, on:
     return np.column_stack(cols)
 
 
-def simulate_measured(model: RCModel, T0: np.ndarray, t_out: np.ndarray, sun: np.ndarray,
-                      on: np.ndarray) -> np.ndarray:
+def simulate_measured(
+    model: RCModel, T0: np.ndarray, t_out: np.ndarray, sun: np.ndarray, on: np.ndarray
+) -> np.ndarray:
     """Free simulation with measured inputs. T0 (B, 3); t_out, sun (H, B); on (H, B, 3).
     Returns the temperatures after H steps, (B, 3)."""
     T = np.array(T0, dtype=float)
@@ -199,8 +207,14 @@ def simulate_measured(model: RCModel, T0: np.ndarray, t_out: np.ndarray, sun: np
     return T
 
 
-def emulate(model: RCModel, T0: np.ndarray, t_out: np.ndarray, sun: np.ndarray, setpoint: np.ndarray,
-            off: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+def emulate(
+    model: RCModel,
+    T0: np.ndarray,
+    t_out: np.ndarray,
+    sun: np.ndarray,
+    setpoint: np.ndarray,
+    off: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Thermostat emulation: each slot the unit runs just enough (0..1) to bring its zone to
     the setpoint (cool setpoint in cooling mode, heat setpoint in heating). This is an ideal
     proportional thermostat: a real ecobee cycles inside a ±0.5°F differential, which averages
@@ -320,7 +334,9 @@ _SOURCE_RANK = {"open-meteo": 0, "simulator": 1}
 _KIND_RANK = {"observed": 0, "forecast": 1}
 
 
-def weather_inputs(session: Session, start: datetime, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, set[str]]:
+def weather_inputs(
+    session: Session, start: datetime, n: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, set[str]]:
     """Outdoor temperature, shortwave (kW/m²) and cloud cover at the midpoints of n 15-minute
     slots from ``start``, interpolated from weather_hourly (observed preferred over forecast,
     Open-Meteo over other sources). Shortwave is Open-Meteo's preceding-hour mean, so each
@@ -330,7 +346,9 @@ def weather_inputs(session: Session, start: datetime, n: int) -> tuple[np.ndarra
     if n <= 0:
         return nan, nan.copy(), nan.copy(), set()
     end = start + n * SLOT
-    rows = session.execute(_WEATHER_SQL, {"s": start - timedelta(hours=3), "e": end + timedelta(hours=3)}).all()
+    rows = session.execute(
+        _WEATHER_SQL, {"s": start - timedelta(hours=3), "e": end + timedelta(hours=3)}
+    ).all()
     best: dict[datetime, dict[str, tuple[tuple[int, int], float, str]]] = {}
     for ts, source, kind, temp, sw, cloud in rows:
         rank = (_KIND_RANK.get(kind, 2), _SOURCE_RANK.get(source, 2))
@@ -397,8 +415,21 @@ def load_series(session: Session, start: datetime, end: datetime, tz: str) -> Se
     w_temp, sun, cloud, sources = weather_inputs(session, start, n)
     with np.errstate(invalid="ignore", divide="ignore"):
         t_out = np.where(tout_cnt > 0, tout_sum / np.maximum(tout_cnt, 1), w_temp)
-    return Series(start=start, tz=tz, temp=temp, on_cool=on_c, on_heat=on_h, cool_sp=csp, heat_sp=hsp,
-                  hvac_off=off, t_out=t_out, sun=sun, cloud=cloud, occ=occ, weather_sources=sources)
+    return Series(
+        start=start,
+        tz=tz,
+        temp=temp,
+        on_cool=on_c,
+        on_heat=on_h,
+        cool_sp=csp,
+        heat_sp=hsp,
+        hvac_off=off,
+        t_out=t_out,
+        sun=sun,
+        cloud=cloud,
+        occ=occ,
+        weather_sources=sources,
+    )
 
 
 def fill_gaps(x: np.ndarray) -> np.ndarray:
@@ -469,8 +500,18 @@ def _fit_zone(X: np.ndarray, dT: np.ndarray) -> ZoneFit:
     def jac(phi: np.ndarray) -> np.ndarray:
         return A * np.exp(phi)[None, :]
 
-    sol = least_squares(resid, phi0, jac=jac, bounds=(_LOG_LO, _LOG_HI), method="trf", x_scale="jac",
-                        xtol=1e-12, ftol=1e-12, gtol=1e-12, max_nfev=500)
+    sol = least_squares(
+        resid,
+        phi0,
+        jac=jac,
+        bounds=(_LOG_LO, _LOG_HI),
+        method="trf",
+        x_scale="jac",
+        xtol=1e-12,
+        ftol=1e-12,
+        gtol=1e-12,
+        max_nfev=500,
+    )
     theta = np.exp(sol.x)
     r = A @ theta - dT
     n, p = A.shape
@@ -506,20 +547,26 @@ def _window_starts(ok_inputs: np.ndarray, temp_ok: np.ndarray, lo: int, hi: int,
     return ks[good]
 
 
-def _horizon_rmse(model: RCModel, s: Series, on: np.ndarray, starts: np.ndarray,
-                  horizon: int) -> tuple[float, float, np.ndarray, float]:
+def _horizon_rmse(
+    model: RCModel, s: Series, on: np.ndarray, starts: np.ndarray, horizon: int
+) -> tuple[float, float, np.ndarray, float]:
     """(model RMSE, persistence RMSE, per-zone model RMSE, model bias) H steps ahead."""
     idx = starts[None, :] + np.arange(horizon)[:, None]  # (H, B)
     pred = simulate_measured(model, s.temp[starts], s.t_out[idx], np.nan_to_num(s.sun[idx]), on[idx])
     truth = s.temp[starts + horizon]
     err = pred - truth
     pers = s.temp[starts] - truth
-    return (float(np.sqrt(np.mean(err**2))), float(np.sqrt(np.mean(pers**2))),
-            np.sqrt(np.mean(err**2, axis=0)), float(np.mean(err)))
+    return (
+        float(np.sqrt(np.mean(err**2))),
+        float(np.sqrt(np.mean(pers**2))),
+        np.sqrt(np.mean(err**2, axis=0)),
+        float(np.mean(err)),
+    )
 
 
-def runtime_backcast(model: RCModel, s: Series, days: list[tuple[int, int]],
-                     weights: np.ndarray) -> list[tuple[float, float]]:
+def runtime_backcast(
+    model: RCModel, s: Series, days: list[tuple[int, int]], weights: np.ndarray
+) -> list[tuple[float, float]]:
     """(predicted, actual) weighted stage-1 seconds per day when each held-out day is replayed
     from its measured midnight temperatures through the thermostat emulation with the
     measured setpoints, outdoor temperature and sun."""
@@ -535,8 +582,9 @@ def runtime_backcast(model: RCModel, s: Series, days: list[tuple[int, int]],
         sun = np.nan_to_num(s.sun[i0:i1])
         if not np.isfinite(t_out).all() or not np.isfinite(sp).all():
             continue
-        _, on = emulate(model, T0[None, :], t_out[:, None], sun[:, None], sp[:, None, :],
-                        s.hvac_off[i0:i1][:, None, :])
+        _, on = emulate(
+            model, T0[None, :], t_out[:, None], sun[:, None], sp[:, None, :], s.hvac_off[i0:i1][:, None, :]
+        )
         pred = float((on[:, 0, :] * SLOT_S).sum(axis=0) @ weights)
         actual = float((np.nan_to_num(on_meas[i0:i1]) * SLOT_S).sum(axis=0) @ weights)
         if actual >= 1800.0:  # at least 30 weighted minutes, or the ratio means nothing
@@ -563,8 +611,16 @@ def fit_mode(s: Series, mode: str, k_split: int, weights: np.ndarray) -> ModeFit
     opp = s.on_heat if mode == "cool" else s.on_cool
     sign = -1.0 if mode == "cool" else 1.0
     temp_ok = np.isfinite(s.temp).all(axis=1)
-    inputs_ok = ((modes == mode) & np.isfinite(on).all(axis=1) & np.isfinite(s.t_out)
-                 & ~(np.nan_to_num(opp) > 0).any(axis=1))
+    inputs_ok = (
+        (modes == mode)
+        & np.isfinite(on).all(axis=1)
+        & np.isfinite(s.t_out)
+        & ~(np.nan_to_num(opp) > 0).any(axis=1)
+    )
+    sun_known = np.isfinite(s.sun)
+    if sun_known.any():
+        inputs_ok &= sun_known  # a gap in the weather is a gap, not a cloudy hour
+    # With no shortwave at all the sun terms see zeros and are reported as not pinned down.
     sun = np.nan_to_num(s.sun)
     ks = np.arange(s.n - 1)
     step_ok = inputs_ok[:-1] & temp_ok[:-1] & temp_ok[1:] & (ks + 1 < k_split)
@@ -579,7 +635,9 @@ def fit_mode(s: Series, mode: str, k_split: int, weights: np.ndarray) -> ModeFit
     for z in ZONES:
         X = regressors(z, T, s.t_out[train], sun[train], on[train], sign)
         zone_fits[z] = _fit_zone(X, Tn[:, ZIDX[z]] - T[:, ZIDX[z]])
-    model = RCModel(mode=mode, main=zone_fits["main"].theta, up=zone_fits["up"].theta, bed=zone_fits["bed"].theta)
+    model = RCModel(
+        mode=mode, main=zone_fits["main"].theta, up=zone_fits["up"].theta, bed=zone_fits["bed"].theta
+    )
 
     rmse_1h, pers_1h, by_zone_1h, bias_1h = _horizon_rmse(model, s, on, starts_1h, SLOTS_PER_HOUR)
     starts_24h = _window_starts(inputs_ok, temp_ok, k_split, s.n, SLOTS_PER_DAY)
@@ -600,10 +658,16 @@ def fit_mode(s: Series, mode: str, k_split: int, weights: np.ndarray) -> ModeFit
 
     finite = all(np.isfinite(zf.theta).all() for zf in zone_fits.values()) and math.isfinite(rmse_1h)
     beats = rmse_1h < pers_1h
-    status = "failed" if not finite else ("active" if rmse_1h <= ACTIVE_MAX_RMSE_1H_F and beats else "candidate")
+    status = (
+        "failed" if not finite else ("active" if rmse_1h <= ACTIVE_MAX_RMSE_1H_F and beats else "candidate")
+    )
 
-    unpinned = [f"{z}.{n}" for z in ZONES for n, r in zip(PARAM_NAMES[z], zone_fits[z].rel_hw90, strict=True)
-                if not (r <= REL_HALF_WIDTH_LIMIT)]
+    unpinned = [
+        f"{z}.{n}"
+        for z in ZONES
+        for n, r in zip(PARAM_NAMES[z], zone_fits[z].rel_hw90, strict=True)
+        if not (r <= REL_HALF_WIDTH_LIMIT)
+    ]
     lt = s.local
     train_start = lt[int(train[0])].date()
     train_end = lt[int(train[-1])].date()
@@ -629,21 +693,34 @@ def fit_mode(s: Series, mode: str, k_split: int, weights: np.ndarray) -> ModeFit
         "fit_seconds": round(time.monotonic() - t0, 2),
     }
     label = "Cooling" if mode == "cool" else "Heating"
-    parts = [(f"{label} RC fit on {train_start.isoformat()} to {train_end.isoformat()} "
-              f"({train.size} one-step pairs), scored on the following week.")]
-    parts.append(f"1-hour-ahead RMSE {rmse_1h:.2f}°F vs persistence {pers_1h:.2f}°F"
-                 + (f"; 24-hour-ahead {rmse_24h:.2f}°F vs {pers_24h:.2f}°F." if rmse_24h is not None else "."))
+    parts = [
+        (
+            f"{label} RC fit on {train_start.isoformat()} to {train_end.isoformat()} "
+            f"({train.size} one-step pairs), scored on the following week."
+        )
+    ]
+    parts.append(
+        f"1-hour-ahead RMSE {rmse_1h:.2f}°F vs persistence {pers_1h:.2f}°F"
+        + (f"; 24-hour-ahead {rmse_24h:.2f}°F vs {pers_24h:.2f}°F." if rmse_24h is not None else ".")
+    )
     if rel.size:
-        parts.append(f"Replaying {rel.size} held-out day(s) with the measured setpoints, daily runtime is off by "
-                     f"{metrics['runtime_err_rmse'] * 100:.0f}% (bias {metrics['runtime_err_bias'] * 100:+.0f}%).")
+        parts.append(
+            f"Replaying {rel.size} held-out day(s) with the measured setpoints, daily runtime is off by "
+            f"{metrics['runtime_err_rmse'] * 100:.0f}% (bias {metrics['runtime_err_bias'] * 100:+.0f}%)."
+        )
     if unpinned:
-        parts.append("Not pinned down by the data (90% interval wider than ±50%): "
-                     + "; ".join(f"{p} ({PARAM_HELP[p]})" for p in unpinned) + ".")
+        parts.append(
+            "Not pinned down by the data (90% interval wider than ±50%): "
+            + "; ".join(f"{p} ({PARAM_HELP[p]})" for p in unpinned)
+            + "."
+        )
     else:
         parts.append("Every parameter is pinned down (90% interval within ±50%).")
     if status == "active":
-        parts.append("Passes its checks (1-hour RMSE ≤ 1.0°F and better than persistence); still shadow-only "
-                     "until it beats the linked-floors rule in backtests.")
+        parts.append(
+            "Passes its checks (1-hour RMSE ≤ 1.0°F and better than persistence); still shadow-only "
+            "until it beats the linked-floors rule in backtests."
+        )
     elif status == "candidate":
         why = []
         if rmse_1h > ACTIVE_MAX_RMSE_1H_F:
@@ -653,8 +730,15 @@ def fit_mode(s: Series, mode: str, k_split: int, weights: np.ndarray) -> ModeFit
         parts.append("Kept as a candidate: " + " and ".join(why) + ".")
     else:
         parts.append("Failed: the fit produced non-finite values.")
-    return ModeFit(model=model, zone_fits=zone_fits, metrics=metrics, status=status, notes=" ".join(parts),
-                   train_start=train_start, train_end=train_end)
+    return ModeFit(
+        model=model,
+        zone_fits=zone_fits,
+        metrics=metrics,
+        status=status,
+        notes=" ".join(parts),
+        train_start=train_start,
+        train_end=train_end,
+    )
 
 
 def _tz(session: Session) -> str:
@@ -662,8 +746,10 @@ def _tz(session: Session) -> str:
 
 
 def _weights(session: Session) -> np.ndarray:
-    w = {u.key: float(u.power_weight if u.power_weight is not None else 1.0)
-         for u in session.scalars(select(Unit)).all()}
+    w = {
+        u.key: float(u.power_weight if u.power_weight is not None else 1.0)
+        for u in session.scalars(select(Unit)).all()
+    }
     return np.array([w.get(z, 1.0) for z in ZONES])
 
 
@@ -711,22 +797,42 @@ def fit_rc(session: Session, now: datetime, days: int = 28) -> list[int]:
             "form": "rate",
             "dt_h": DT_H,
             "zones": mf.model.to_params(),
-            "rel_hw90": {z: {n: float(r) for n, r in zip(PARAM_NAMES[z], mf.zone_fits[z].rel_hw90, strict=True)}
-                         for z in ZONES},
+            "rel_hw90": {
+                z: {n: float(r) for n, r in zip(PARAM_NAMES[z], mf.zone_fits[z].rel_hw90, strict=True)}
+                for z in ZONES
+            },
             "resid_std_f": {z: mf.zone_fits[z].resid_std for z in ZONES},
-            "unidentified": [f"{z}.{n}" for z in ZONES
-                             for n, r in zip(PARAM_NAMES[z], mf.zone_fits[z].rel_hw90, strict=True)
-                             if not (r <= REL_HALF_WIDTH_LIMIT)],
+            "unidentified": [
+                f"{z}.{n}"
+                for z in ZONES
+                for n, r in zip(PARAM_NAMES[z], mf.zone_fits[z].rel_hw90, strict=True)
+                if not (r <= REL_HALF_WIDTH_LIMIT)
+            ],
             "physical": mf.model.physical(),
             "weather_sources": sorted(s.weather_sources),
         }
         if mf.status == "active":
-            session.execute(update(ModelFit).where(ModelFit.kind == "rc", ModelFit.mode == mode,
-                                                   ModelFit.status == "active").values(status="retired"))
-        session.execute(update(ModelFit).where(ModelFit.kind == "rc", ModelFit.mode == mode,
-                                               ModelFit.status == "candidate").values(status="retired"))
-        row = ModelFit(kind="rc", unit_key=None, mode=mode, train_start=mf.train_start, train_end=mf.train_end,
-                       params=_jsonable(params), metrics=_jsonable(mf.metrics), status=mf.status, notes=mf.notes)
+            session.execute(
+                update(ModelFit)
+                .where(ModelFit.kind == "rc", ModelFit.mode == mode, ModelFit.status == "active")
+                .values(status="retired")
+            )
+        session.execute(
+            update(ModelFit)
+            .where(ModelFit.kind == "rc", ModelFit.mode == mode, ModelFit.status == "candidate")
+            .values(status="retired")
+        )
+        row = ModelFit(
+            kind="rc",
+            unit_key=None,
+            mode=mode,
+            train_start=mf.train_start,
+            train_end=mf.train_end,
+            params=_jsonable(params),
+            metrics=_jsonable(mf.metrics),
+            status=mf.status,
+            notes=mf.notes,
+        )
         session.add(row)
         session.flush()
         ids.append(int(row.id))
@@ -737,7 +843,8 @@ def active_rc(session: Session) -> dict[str, tuple[ModelFit, RCModel]]:
     """mode -> (row, model) for the newest active RC fit of each mode."""
     out: dict[str, tuple[ModelFit, RCModel]] = {}
     rows = session.scalars(
-        select(ModelFit).where(ModelFit.kind == "rc", ModelFit.status == "active")
+        select(ModelFit)
+        .where(ModelFit.kind == "rc", ModelFit.status == "active")
         .order_by(ModelFit.created_at.desc(), ModelFit.id.desc())
     ).all()
     for row in rows:
@@ -791,8 +898,13 @@ def fit_room_offsets(session: Session, now: datetime, days: int = 14) -> int | N
         period = _period(to_local(ts, tz).hour)
         off = float(room_t) - float(zone_t)
         samples.setdefault(room, {"day": [], "night": []})[period].append(off)
-        mode = ("cool" if (cool or 0) > 0 or hvac == "cool" else
-                "heat" if (heat or 0) > 0 or hvac in ("heat", "auxHeatOnly") else None)
+        mode = (
+            "cool"
+            if (cool or 0) > 0 or hvac == "cool"
+            else "heat"
+            if (heat or 0) > 0 or hvac in ("heat", "auxHeatOnly")
+            else None
+        )
         if mode:
             by_mode.setdefault(room, {}).setdefault(mode, {"day": [], "night": []})[period].append(off)
     if not samples:
@@ -803,21 +915,36 @@ def fit_room_offsets(session: Session, now: datetime, days: int = 14) -> int | N
 
     offsets = {room: {p: med(v) for p, v in per.items()} for room, per in samples.items()}
     counts = {room: {p: len(v) for p, v in per.items()} for room, per in samples.items()}
-    mode_offsets = {room: {m: {p: med(v) for p, v in per.items()} for m, per in modes.items()}
-                    for room, modes in by_mode.items()}
-    spread = {room: {p: (round(float(np.median(np.abs(np.array(v) - np.median(v)))), 2) if v else None)
-                     for p, v in per.items()} for room, per in samples.items()}
-    session.execute(update(ModelFit).where(ModelFit.kind == "room_offsets", ModelFit.status == "active")
-                    .values(status="retired"))
+    mode_offsets = {
+        room: {m: {p: med(v) for p, v in per.items()} for m, per in modes.items()}
+        for room, modes in by_mode.items()
+    }
+    spread = {
+        room: {
+            p: (round(float(np.median(np.abs(np.array(v) - np.median(v)))), 2) if v else None)
+            for p, v in per.items()
+        }
+        for room, per in samples.items()
+    }
+    session.execute(
+        update(ModelFit)
+        .where(ModelFit.kind == "room_offsets", ModelFit.status == "active")
+        .values(status="retired")
+    )
     row = ModelFit(
-        kind="room_offsets", unit_key=None, mode=None,
-        train_start=local_date(start, tz), train_end=local_date(end, tz),
+        kind="room_offsets",
+        unit_key=None,
+        mode=None,
+        train_start=local_date(start, tz),
+        train_end=local_date(end, tz),
         params={"offsets": offsets, "n": counts, "by_mode": mode_offsets, "night": "21:00-07:00"},
         metrics={"n_points": int(sum(sum(c.values()) for c in counts.values())), "mad_f": spread},
         status="active",
-        notes=(f"Median room minus thermostat-average temperature over {days} days, split day / night "
-               "(21:00-07:00) and by mode; null where a room has under an hour of readings. Rooms without "
-               "a sensor are never estimated."),
+        notes=(
+            f"Median room minus thermostat-average temperature over {days} days, split day / night "
+            "(21:00-07:00) and by mode; null where a room has under an hour of readings. Rooms without "
+            "a sensor are never estimated."
+        ),
     )
     session.add(row)
     session.flush()

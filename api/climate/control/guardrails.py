@@ -113,11 +113,15 @@ def check(
 
     if cur_heat is not None and abs(heat - cur_heat) > limits.max_step_f + _EPS:
         stepped = _toward(cur_heat, heat, limits.max_step_f)
-        violations.append(f"Heat step limited to {limits.max_step_f:g}°F: {heat:g}°F -> {stepped:g}°F.")
+        violations.append(
+            f"Heat moves at most {limits.max_step_f:g}°F per change: {stepped:g}°F now, on the way to {heat:g}°F."
+        )
         heat = stepped
     if cur_cool is not None and abs(cool - cur_cool) > limits.max_step_f + _EPS:
         stepped = _toward(cur_cool, cool, limits.max_step_f)
-        violations.append(f"Cool step limited to {limits.max_step_f:g}°F: {cool:g}°F -> {stepped:g}°F.")
+        violations.append(
+            f"Cool moves at most {limits.max_step_f:g}°F per change: {stepped:g}°F now, on the way to {cool:g}°F."
+        )
         cool = stepped
 
     humid = (

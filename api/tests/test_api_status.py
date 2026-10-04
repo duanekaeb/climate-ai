@@ -165,13 +165,11 @@ def test_status_reports_stale_worker_and_ecobee_sign_in(owner, broken_services):
 
 
 def test_room_history(owner):
-    now = utcnow()
     with session_scope() as s:
-        make_history(s, days=1)
-        s.add(RoomStateRow(ts=now - timedelta(minutes=7), room_key="twins_room", state="asleep", confidence=0.9,
-                           reason="sleep window"))
-        s.add(RoomStateRow(ts=now - timedelta(minutes=7), room_key="hallway", state="occupied", confidence=0.9,
-                           reason="motion"))
+        hist = make_history(s, days=1)  # readings end at the top of the current hour
+        at = hist["end"] - timedelta(minutes=17)
+        s.add(RoomStateRow(ts=at, room_key="twins_room", state="asleep", confidence=0.9, reason="sleep window"))
+        s.add(RoomStateRow(ts=at, room_key="hallway", state="occupied", confidence=0.9, reason="motion"))
     r = owner.get("/api/rooms/hallway/history", params={"hours": 6})
     assert r.status_code == 200
     body = r.json()

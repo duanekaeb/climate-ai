@@ -173,12 +173,13 @@ def plan(state: HouseState) -> list[UnitTarget]:
 # plan helpers (private; climate.state reuses _unit_period / _priority_room)
 # ---------------------------------------------------------------------------------------
 
-from dataclasses import dataclass  # noqa: E402  (kept below plan: the types above are the contract)
-from datetime import time, timedelta  # noqa: E402
+# These imports sit below plan() on purpose: everything above is the shared contract.
+from dataclasses import dataclass
+from datetime import time, timedelta
 
-from climate.house import ROOMS, UNIT_KEYS, UNITS  # noqa: E402
-from climate.store.app_settings import DEFAULT_COMFORT, ComfortBand, Schedule  # noqa: E402
-from climate.timeutil import in_window, parse_hhmm, to_local  # noqa: E402
+from climate.house import ROOMS, UNIT_KEYS, UNITS
+from climate.store.app_settings import DEFAULT_COMFORT, ComfortBand, Schedule
+from climate.timeutil import in_window, parse_hhmm, to_local
 
 Period = Literal["day", "night", "away"]
 _OFFSET_CAP_F = 3.0  # learned offsets beyond this are treated as this (model noise guard)
@@ -393,7 +394,7 @@ def _setback_target(ctx: _Ctx, unit_key: str, band: ComfortBand, done: dict[str,
     """Rule 3: whole house empty -> away bands; the main floor stays setback_gap_f under upstairs
     (cooling) and no more than setback_gap_f below it (heating)."""
     st = ctx.state
-    subject, obj, _ = _labels(st, unit_key)
+    _, obj, _ = _labels(st, unit_key)
     why = _lower_first(st.house_empty_reason.rstrip(".")) or "nobody home"
     heat, cool = band.heat_f, band.cool_f
     extra = ""

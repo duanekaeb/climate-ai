@@ -58,6 +58,8 @@ watch(
 )
 
 onMounted(() => {
+  // The house timezone and room names come from the status store; start it if the shell hasn't.
+  status.start()
   void analysis.loadBaselines()
 })
 
@@ -89,11 +91,11 @@ const hasOutdoor = computed(() => (savings.value?.days ?? []).some((d) => d.outd
         <div v-if="preset === 'custom'" class="grid grid-cols-2 gap-2">
           <label class="text-xs text-muted">
             From
-            <input v-model="customStart" type="date" class="input mt-1" :max="yesterday" />
+            <input v-model="customStart" type="date" class="input mt-1 dark:[color-scheme:dark]" :max="yesterday" />
           </label>
           <label class="text-xs text-muted">
             To
-            <input v-model="customEnd" type="date" class="input mt-1" :max="yesterday" />
+            <input v-model="customEnd" type="date" class="input mt-1 dark:[color-scheme:dark]" :max="yesterday" />
           </label>
         </div>
         <p v-if="rangeError" class="text-xs text-bad">{{ rangeError }}</p>

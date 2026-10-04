@@ -41,10 +41,10 @@ class FakeSource:
     async def poll_revisions(self) -> dict[str, str]:
         return {}
 
-    async def fetch_snapshots(self, unit_keys=None):  # noqa: ANN001
+    async def fetch_snapshots(self, unit_keys=None):
         return []
 
-    async def fetch_runtime(self, start, end):  # noqa: ANN001
+    async def fetch_runtime(self, start, end):
         return []
 
     async def health(self) -> SourceHealth:

@@ -17,7 +17,7 @@ TZ = "America/Chicago"
 
 
 def fake_backtest(beats: bool = True):
-    def _bt(session, params, days=28):  # noqa: ANN001
+    def _bt(session, params, days=28):
         return BacktestOut(days=days, model="rule_of_thumb", current_runtime_min=1000.0, candidate_runtime_min=880.0,
                            delta_pct=-12.0, ci90_pct=(-18.0, -6.0), comfort_violation_min_current=0.0,
                            comfort_violation_min_candidate=0.0, beats_model_uncertainty=beats,
@@ -117,7 +117,7 @@ def test_backtest_failure_rejects_and_errors_retry(db, monkeypatch):
     assert c.status == "rejected" and "uncertainty" in c.decision_reason
     assert c.gates["backtest"]["beats_model_uncertainty"] is False
 
-    def boom(*a, **k):  # noqa: ANN002, ANN003
+    def boom(*a, **k):
         raise RuntimeError("no baseline yet")
 
     monkeypatch.setattr(bt, "backtest", boom)

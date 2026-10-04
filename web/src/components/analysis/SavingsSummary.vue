@@ -17,6 +17,8 @@ const direction = computed(() =>
   (props.savings.savings_pct ?? 0) >= 0 ? 'less runtime than the weather predicts' : 'more runtime than the weather predicts',
 )
 const undecided = computed(() => crossesZero(low.value, high.value))
+/** Green or red only when the whole interval is on one side of zero. */
+const headlineClass = computed(() => (undecided.value ? 'text-ink' : (low.value ?? 0) > 0 ? 'text-good' : 'text-bad'))
 const units = computed(() =>
   [...props.savings.by_unit].sort(
     (a, b) => Object.keys(UNIT_NAMES).indexOf(a.unit_key) - Object.keys(UNIT_NAMES).indexOf(b.unit_key),
@@ -33,7 +35,7 @@ const units = computed(() =>
     <!-- A savings claim: point estimate + 90% interval -->
     <div v-if="claim" class="space-y-3">
       <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span class="num text-5xl font-semibold tracking-tight" :class="(savings.savings_pct ?? 0) >= 0 ? 'text-good' : 'text-bad'">
+        <span class="num text-5xl font-semibold tracking-tight" :class="headlineClass">
           {{ num(pctAbs, 0) }}%
         </span>
         <span class="text-sm text-muted">{{ direction }}</span>

@@ -30,7 +30,21 @@ const dirty = computed(() => {
     form.zip !== (l.zip ?? '')
   )
 })
-watch(() => props.location, (l) => !dirty.value && fromProps(l), { immediate: true })
+fromProps(props.location)
+// Later server updates replace the form only while the owner hasn't started editing it. The
+// old value decides that: comparing against the new one would always look "edited".
+watch(
+  () => props.location,
+  (l, old) => {
+    const untouched =
+      form.label === (old.label ?? '') &&
+      form.lat === (old.lat === null ? '' : String(old.lat)) &&
+      form.lon === (old.lon === null ? '' : String(old.lon)) &&
+      form.tz === old.tz &&
+      form.zip === (old.zip ?? '')
+    if (untouched) fromProps(l)
+  },
+)
 
 const timeZones = (() => {
   try {

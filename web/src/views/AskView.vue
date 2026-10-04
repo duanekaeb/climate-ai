@@ -21,6 +21,7 @@ const isOwner = computed(() => auth.state?.role === 'owner')
 const tz = computed(() => status.data?.tz)
 
 const runs = computed(() => agent.runs.data ?? [])
+const newestAnswered = computed(() => runs.value.find((r) => r.result_text)?.id ?? null)
 const lastAsked = ref<number | null>(null)
 const runError = ref('')
 const starting = ref<RunBody['kind'] | null>(null)
@@ -48,6 +49,8 @@ function onAsked(run: AgentRunOut) {
 
 let stop: (() => void) | null = null
 onMounted(() => {
+  // The house timezone and room names come from the status store; start it if the shell hasn't.
+  status.start()
   stop = agent.follow()
 })
 onBeforeUnmount(() => stop?.())
@@ -109,11 +112,11 @@ onBeforeUnmount(() => stop?.())
       >
         <div class="space-y-2">
           <RunItem
-            v-for="(r, i) in runs"
+            v-for="r in runs"
             :key="r.id"
             :run="r"
             :tz="tz"
-            :open="r.id === lastAsked || (lastAsked === null && i === 0)"
+            :open="r.id === lastAsked || (lastAsked === null && r.id === newestAnswered)"
           />
         </div>
       </AsyncState>

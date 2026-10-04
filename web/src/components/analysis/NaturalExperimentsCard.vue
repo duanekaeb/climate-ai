@@ -95,10 +95,10 @@ function relative(v: number | null): string {
               <tbody>
                 <tr v-for="e in events" :key="e.Date" class="border-t border-line">
                   <td class="py-1.5 pr-2 whitespace-nowrap">{{ dayLabel(e.Date) }}</td>
-                  <td class="py-1.5 pr-2 text-right">{{ signed(e.main_floor_float_f, 1, '°') }}</td>
-                  <td class="py-1.5 pr-2 text-right">{{ minutes(e.up_runtime_min) }}</td>
-                  <td class="py-1.5 pr-2 text-right text-muted">{{ minutes(e.expected_up_runtime_min) }}</td>
-                  <td class="py-1.5 text-right">
+                  <td class="py-1.5 pr-2 text-right whitespace-nowrap">{{ signed(e.main_floor_float_f, 1, '°') }}</td>
+                  <td class="py-1.5 pr-2 text-right whitespace-nowrap">{{ minutes(e.up_runtime_min) }}</td>
+                  <td class="py-1.5 pr-2 text-right whitespace-nowrap text-muted">{{ minutes(e.expected_up_runtime_min) }}</td>
+                  <td class="py-1.5 text-right whitespace-nowrap">
                     {{ e.expected_up_runtime_min === null ? '—' : signedMinutes(e.up_runtime_min - e.expected_up_runtime_min) }}
                   </td>
                 </tr>

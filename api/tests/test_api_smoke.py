@@ -8,6 +8,7 @@ from datetime import timedelta
 
 import pytest
 
+from climate.analytics import baseline
 from climate.store.db import session_scope
 from climate.timeutil import local_date, utcnow
 from tests.factories import make_history
@@ -51,6 +52,8 @@ def history_owner(owner):
     with session_scope() as s:
         for i in range(10):
             make_history(s, days=3, end=end - timedelta(days=3 * i), seed=i + 1)
+    with session_scope() as s:
+        baseline.refit_all(s, utcnow())  # the nightly fit, so expected runtime and baselines exist
     return owner
 
 

@@ -326,7 +326,8 @@ def load_signals(session: Session, now: datetime) -> list[SensorSignal]:
 def persist_room_states(session: Session, now: datetime, states: dict[str, RoomStateResult]) -> None:
     """Insert one room_states row per room at ``now`` (on conflict do nothing)."""
     rows = [
-        dict(ts=now, room_key=s.room_key, state=s.state, confidence=float(s.confidence), reason=s.reason[:1000])
+        {"ts": now, "room_key": s.room_key, "state": s.state, "confidence": float(s.confidence),
+         "reason": s.reason[:1000]}
         for s in states.values()
         if s.room_key in ROOM_BY_KEY
     ]

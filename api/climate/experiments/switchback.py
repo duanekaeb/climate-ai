@@ -93,8 +93,13 @@ def _boundaries(t: tuple[float, ...], alpha: float) -> tuple[tuple[float, ...], 
         sd = math.sqrt(tt[k] - tt[k - 1])
         mass = w * dens
 
-        def excess(bk: float, mass: np.ndarray = mass, grid: np.ndarray = grid, sd: float = sd,
-                   target: float = float(inc[k])) -> float:
+        def excess(
+            bk: float,
+            mass: np.ndarray = mass,
+            grid: np.ndarray = grid,
+            sd: float = sd,
+            target: float = float(inc[k]),
+        ) -> float:
             p = stats.norm.sf((bk - grid) / sd) + stats.norm.cdf((-bk - grid) / sd)
             return float(np.dot(mass, p)) - target
 
@@ -111,7 +116,9 @@ def _boundaries(t: tuple[float, ...], alpha: float) -> tuple[tuple[float, ...], 
     return tuple(float(x) for x in z), tuple(float(x) for x in inc)
 
 
-def crossing_probabilities(t: list[float], z_crit: list[float], drift: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+def crossing_probabilities(
+    t: list[float], z_crit: list[float], drift: float = 0.0
+) -> tuple[np.ndarray, np.ndarray]:
     """Per-look probabilities of FIRST crossing the upper (Z_k >= c_k) and lower (Z_k <= -c_k)
     boundary when the standardized statistic has drift ``drift`` (E[Z_k] = drift * sqrt(t_k)).
     drift = 0 is the null hypothesis."""
@@ -187,7 +194,9 @@ def plan_checkpoints(n_days: int, n_checkpoints: int, alpha: float) -> list[Chec
 # ---------------------------------------------------------------------------------------
 
 
-def assign_days(arm_keys: list[str], start: date, n_days: int, block_days: int, seed: int) -> list[tuple[date, str]]:
+def assign_days(
+    arm_keys: list[str], start: date, n_days: int, block_days: int, seed: int
+) -> list[tuple[date, str]]:
     """Randomized, balanced blocks: the days are cut into blocks of ``block_days`` and every
     consecutive group of ``len(arm_keys)`` blocks is a fresh random permutation of the arms.
     The same seed always gives the same schedule."""
@@ -242,7 +251,11 @@ def create_experiment(session: Session, body: ProposeExperimentBody, proposed_by
     for arm in body.arms:
         for v in guardrails.validate_policy_params(dict(arm.params), actor="owner"):
             problems.append(f"arm '{arm.key}': {v}")
-    canon = [sorted((k, repr(v)) for k, v in a.params.items()) for a in body.arms]
+
+    def norm(v: Any) -> Any:
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+    canon = [sorted((k, repr(norm(v))) for k, v in a.params.items()) for a in body.arms]
     if all(c == canon[0] for c in canon[1:]):
         problems.append("all arms have the same settings, so there is nothing to compare")
     n_arms = len(body.arms)
@@ -309,10 +322,13 @@ def decide_experiment(session: Session, experiment_id: int, decision: str, reaso
             if other.end_date is not None and other.end_date >= start:
                 start = other.end_date + timedelta(days=1)
         n_days = int(design["n_days"])
-        schedule = assign_days([a["key"] for a in exp.arms], start, n_days, int(design["block_days"]),
-                               int(design["seed"]))
+        schedule = assign_days(
+            [a["key"] for a in exp.arms], start, n_days, int(design["block_days"]), int(design["seed"])
+        )
         session.execute(delete(ExperimentDay).where(ExperimentDay.experiment_id == exp.id))
-        session.add_all(ExperimentDay(experiment_id=exp.id, day=d, arm=arm, included=True) for d, arm in schedule)
+        session.add_all(
+            ExperimentDay(experiment_id=exp.id, day=d, arm=arm, included=True) for d, arm in schedule
+        )
         exp.status = "approved"
         exp.start_date = start
         exp.end_date = start + timedelta(days=n_days - 1)
@@ -322,7 +338,9 @@ def decide_experiment(session: Session, experiment_id: int, decision: str, reaso
         exp.status = "rejected"
     elif decision == "stop":
         if exp.status not in _STATUSES_WITH_SCHEDULE:
-            raise ValueError(f"only an approved or running experiment can be stopped (this one is {exp.status})")
+            raise ValueError(
+                f"only an approved or running experiment can be stopped (this one is {exp.status})"
+            )
         started = exp.start_date is not None and exp.start_date <= today
         if started:
             # Today is only partly run under its arm: it and every later day are dropped.
@@ -351,7 +369,9 @@ def active_arm(session: Session, now: datetime, tz: str) -> tuple[Experiment, di
     running on its start_date and running -> completed after end_date)."""
     today = local_date(now, tz)
     flipped = False
-    for exp in session.scalars(select(Experiment).where(Experiment.status.in_(_STATUSES_WITH_SCHEDULE))).all():
+    for exp in session.scalars(
+        select(Experiment).where(Experiment.status.in_(_STATUSES_WITH_SCHEDULE))
+    ).all():
         new_status: str | None = None
         if exp.end_date is not None and exp.end_date < today:
             new_status = "completed"

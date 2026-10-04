@@ -32,10 +32,17 @@ const isDirty = (s: SensorOut) => {
   return !!d && (d.ecobee.trim() !== o.ecobee || d.aid.trim() !== o.aid)
 }
 
+// New server data replaces a row's draft unless the owner has edited that row (judged
+// against the previous server value, not the new one).
 watch(
   () => props.sensors,
-  (list) => {
-    for (const s of list) if (!drafts[s.key] || !isDirty(s)) drafts[s.key] = original(s)
+  (list, oldList) => {
+    for (const s of list) {
+      const d = drafts[s.key]
+      const prev = oldList?.find((x) => x.key === s.key)
+      const o = prev ? original(prev) : null
+      if (!d || !o || (d.ecobee.trim() === o.ecobee && d.aid.trim() === o.aid)) drafts[s.key] = original(s)
+    }
   },
   { immediate: true },
 )

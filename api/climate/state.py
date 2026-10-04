@@ -427,7 +427,7 @@ def _policy(session: Session, now: datetime, tz: str) -> tuple[PolicyParams, int
     try:
         with session.begin_nested():
             params, policy_id = changes.policy_for(session, now, tz)
-    except Exception:  # noqa: BLE001 - state must never fail on the policy lookup
+    except Exception:
         log.warning("could not load the policy; using the defaults", exc_info=True)
         params, policy_id = PolicyParams(), None
 
@@ -438,7 +438,7 @@ def _policy(session: Session, now: datetime, tz: str) -> tuple[PolicyParams, int
             arm = switchback.active_arm(session, now, tz)
     except NotImplementedError:
         arm = None
-    except Exception:  # noqa: BLE001 - an unfinished/failing experiment module never breaks state
+    except Exception:
         log.warning("experiments.switchback.active_arm failed; running without the experiment arm", exc_info=True)
         arm = None
     if arm:

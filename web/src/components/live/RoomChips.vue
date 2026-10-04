@@ -28,10 +28,11 @@ function label(r: RoomStatus): string {
       <ul class="flex flex-wrap gap-1.5">
         <li v-for="r in f.rooms" :key="r.room_key" class="min-w-0">
           <RouterLink :to="{ path: '/rooms', query: { room: r.room_key } }" :aria-label="label(r)"
-                      class="chip max-w-full border border-line bg-surface-2 !py-1 text-ink hover:border-accent">
+                      class="chip max-w-full flex-wrap !gap-x-1.5 !gap-y-0 border border-line bg-surface-2 !py-1 text-ink hover:border-accent"
+                      :class="r.has_sensor ? '' : '!rounded-xl'">
             <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: STATE_COLORS[r.state] }" aria-hidden="true" />
-            <span class="truncate" :class="r.is_priority ? 'font-semibold' : 'font-normal'">{{ r.name }}</span>
-            <span class="num shrink-0" :class="r.has_sensor && r.temp_f !== null ? '' : 'font-normal text-muted'">{{ reading(r) }}</span>
+            <span :class="r.is_priority ? 'font-semibold' : 'font-normal'">{{ r.name }}</span>
+            <span class="num" :class="r.has_sensor && r.temp_f !== null ? '' : 'font-normal text-muted'">{{ reading(r) }}</span>
             <span v-if="r.stale" class="shrink-0 text-warn" aria-hidden="true">!</span>
           </RouterLink>
         </li>

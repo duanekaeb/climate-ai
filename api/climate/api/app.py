@@ -40,6 +40,8 @@ log = logging.getLogger("climate.api")
 async def lifespan(app: FastAPI):
     logging.basicConfig(level=get_settings().log_level)
     logging.getLogger("pyecobee").setLevel(logging.INFO)  # it logs tokens at DEBUG
+    for noisy in ("httpx", "httpcore", "urllib3"):  # request URLs may carry tokens
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     if os.environ.get("CLIMATE_MIGRATE_ON_START", "1") == "1":
         from climate.house import seed
         from climate.store.migrate import migrate

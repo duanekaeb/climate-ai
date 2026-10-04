@@ -31,7 +31,7 @@ from climate.control.guardrails import validate_policy_params, within_signoff_ra
 from climate.control.policy import PolicyParams
 from climate.events import publish
 from climate.house import ROOM_BY_KEY
-from climate.store.app_settings import ControlSettings, DEFAULT_COMFORT, LocationSettings, get_setting
+from climate.store.app_settings import DEFAULT_COMFORT, ControlSettings, LocationSettings, get_setting
 from climate.store.orm import Change, PolicyVersion, RoomStateRow
 from climate.timeutil import floor_slot, in_window, to_local, utcnow
 

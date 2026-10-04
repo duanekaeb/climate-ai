@@ -117,7 +117,7 @@ async def tick(source: ThermostatSource | None, now: datetime | None = None) -> 
             return []
         try:
             targets = plan(state)
-        except Exception:  # noqa: BLE001 - room states are still saved; nothing is written
+        except Exception:
             log.exception("policy.plan failed; no control actions this tick")
             return []
         src = _source_settings(s)
@@ -129,7 +129,7 @@ async def tick(source: ThermostatSource | None, now: datetime | None = None) -> 
                 created += ids
                 if write is not None:
                     writes.append(write)
-            except Exception:  # noqa: BLE001 - one unit's failure never stops the others
+            except Exception:
                 log.exception("controller tick failed for unit %s", target.unit_key)
 
     for w in writes:
@@ -171,7 +171,7 @@ async def execute_queued(source: ThermostatSource | None, now: datetime | None =
                 publish(s, "action", row.id)
                 if write is not None:
                     writes.append(write)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("could not prepare queued action %s", row.id)
     for w in writes:
         await _perform(source, w)
@@ -343,7 +343,7 @@ async def _perform(source: ThermostatSource | None, w: _Write) -> None:
             row.error = None if result.ok else (result.error or "The read-back did not match the request.")
             row.completed_at = utcnow()
             publish(s, "action", row.id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("could not record the result of control action %s", w.action_id)
 
 
@@ -503,7 +503,6 @@ def _fail(row: ControlAction, now: datetime, error: str) -> None:
     row.status = "failed"
     row.error = error
     row.completed_at = now
-    return None
 
 
 def _source_settings(s: Session) -> SourceSettings:
@@ -530,7 +529,7 @@ def _parse_dt(v: object) -> datetime | None:
         return v
     if isinstance(v, str):
         try:
-            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            return datetime.fromisoformat(v)  # 3.11+ accepts a trailing Z
         except ValueError:
             return None
     return None

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Floor coupling: how much the main floor floating warm loads the upstairs unit, measured
 // hour by hour (with the bed wing as a placebo) and from past natural experiments.
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AsyncState from '@/components/AsyncState.vue'
 import Card from '@/components/Card.vue'
 import OpenMeteoAttribution from '@/components/OpenMeteoAttribution.vue'
@@ -23,6 +23,9 @@ const DAYS = [
 ]
 const days = ref(30)
 watch(days, (d) => analysis.loadCoupling(d), { immediate: true })
+
+// The house timezone comes from the status store; start it if the shell hasn't.
+onMounted(() => status.start())
 
 const c = computed(() => analysis.coupling.data)
 const ci = computed(() => pair(c.value?.ci90))

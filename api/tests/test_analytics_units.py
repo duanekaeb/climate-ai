@@ -335,15 +335,21 @@ def test_query_performance(db):
     db.commit()
     db.execute(text("ANALYZE runtime_5m"))
     db.execute(text("ANALYZE weather_hourly"))
+    db.execute(text("SELECT count(*) FROM runtime_5m")).scalar()  # first read after a bulk load sets hint bits
 
-    t = time.perf_counter()
-    rows90 = daily_rows(db, end - timedelta(days=89), end, TZ)
-    t90 = time.perf_counter() - t
-    t = time.perf_counter()
-    rows365 = daily_rows(db, start, end, TZ)
-    t365 = time.perf_counter() - t
+    def best_of(n: int, fn):  # other test runs may share this machine: take the best of n
+        out, best = None, math.inf
+        for _ in range(n):
+            t = time.perf_counter()
+            out = fn()
+            best = min(best, time.perf_counter() - t)
+        return out, best
+
+    rows90, t90 = best_of(3, lambda: daily_rows(db, end - timedelta(days=89), end, TZ))
+    rows365, t365 = best_of(3, lambda: daily_rows(db, start, end, TZ))
     assert len(rows90) == 90 * 3 and len(rows365) == 365 * 3
     assert all(r.slots == r.expected_slots for r in rows365)
+    assert sum(r.cool_s for r in rows90) > 0
     assert t90 < 1.0, f"90 days took {t90:.2f}s"
-    assert t365 < 2.0, f"a year took {t365:.2f}s"
+    assert t365 < 1.0, f"a year took {t365:.2f}s"
     print(f"\ndaily_rows: 90 days {t90 * 1000:.0f} ms, 365 days {t365 * 1000:.0f} ms")

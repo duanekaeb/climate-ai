@@ -40,7 +40,7 @@ const rows = computed(() => {
             </td>
             <td class="py-1.5 pr-2 text-right">{{ c.day }}</td>
             <td class="py-1.5 pr-2 text-right">{{ num(c.info_fraction * 100, 0, '%') }}</td>
-            <td class="py-1.5 pr-2 text-right">{{ num(c.alpha_spent, 3) }}</td>
+            <td class="py-1.5 pr-2 text-right">{{ num(c.alpha_spent, c.alpha_spent < 0.01 ? 4 : 3) }}</td>
             <td class="py-1.5 text-right">{{ num(c.z_crit, 2) }}</td>
           </tr>
         </tbody>

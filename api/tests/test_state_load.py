@@ -128,7 +128,7 @@ def test_experiment_arm_overlay_and_failure(db, monkeypatch):
     monkeypatch.setattr(sb, "active_arm", lambda s, now, tz: (None, {"linked_offset_f": 2.5, "unknown": 1}))
     assert load_house_state(db, NOW).policy.linked_offset_f == 2.5
 
-    def boom(*a, **k):  # noqa: ANN002, ANN003
+    def boom(*a, **k):
         raise RuntimeError("experiments not ready")
 
     monkeypatch.setattr(sb, "active_arm", boom)

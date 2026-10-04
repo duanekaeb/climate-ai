@@ -105,7 +105,7 @@ const option = computed<ChartOption>(() => {
       <div class="flex flex-wrap items-end gap-2">
         <label :for="`${uid}-day`" class="text-xs text-muted">
           Day (blank = tomorrow)
-          <input :id="`${uid}-day`" v-model="day" type="date" class="input mt-1 !w-44" :placeholder="tomorrow" />
+          <input :id="`${uid}-day`" v-model="day" type="date" class="input mt-1 !w-44 dark:[color-scheme:dark]" :placeholder="tomorrow" />
         </label>
         <button type="submit" class="btn btn-primary" :disabled="busy || problems.length > 0">
           {{ busy ? 'Simulating…' : day ? 'Simulate' : 'Simulate tomorrow' }}

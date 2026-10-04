@@ -40,12 +40,15 @@ _DEFAULT_LOOKS_FOR_POWER = 3
 
 
 def unit_weights(session: Session) -> dict[str, float]:
-    return {u.key: float(u.power_weight if u.power_weight is not None else 1.0)
-            for u in session.scalars(select(Unit).order_by(Unit.sort)).all()}
+    return {
+        u.key: float(u.power_weight if u.power_weight is not None else 1.0)
+        for u in session.scalars(select(Unit).order_by(Unit.sort)).all()
+    }
 
 
-def pooled_cv(fits: dict[tuple[str, str], Any], weights: dict[str, float],
-              mode: str | None = None) -> tuple[float | None, float, str | None]:
+def pooled_cv(
+    fits: dict[tuple[str, str], Any], weights: dict[str, float], mode: str | None = None
+) -> tuple[float | None, float, str | None]:
     """(house residual CV, lag-1 autocorrelation, mode) from the active baselines.
 
     The house CV is the expected-runtime-weighted average of the units' CV(RMSE), i.e. the
@@ -54,7 +57,7 @@ def pooled_cv(fits: dict[tuple[str, str], Any], weights: dict[str, float],
     the most expected runtime is used. Returns (None, 0, None) without usable fits."""
     best: tuple[float | None, float, str | None] = (None, 0.0, None)
     best_mean = -1.0
-    for m in (("cool", "heat") if mode is None else (mode,)):
+    for m in ("cool", "heat") if mode is None else (mode,):
         num = den = rho_num = 0.0
         for (unit, fmode), fit in fits.items():
             if fmode != m or unit not in weights:
@@ -106,8 +109,14 @@ def house_days(session: Session, start: date, end: date, tz: str) -> dict[date, 
     return out
 
 
-def _house_day(d: date, rows: dict[str, Any], units: list[str], weights: dict[str, float],
-               fits: dict[tuple[str, str], Any], tz: str) -> HouseDay:
+def _house_day(
+    d: date,
+    rows: dict[str, Any],
+    units: list[str],
+    weights: dict[str, float],
+    fits: dict[tuple[str, str], Any],
+    tz: str,
+) -> HouseDay:
     missing = [u for u in units if u not in rows]
     if missing:
         return HouseDay(d, None, None, False, f"no runtime data for {', '.join(missing)}")
@@ -169,8 +178,10 @@ def update_days(session: Session, now: datetime) -> None:
         .where(
             Experiment.status.in_(("approved", "running", "completed", "stopped")),
             ExperimentDay.day < today,
-            or_(ExperimentDay.day >= recent,
-                and_(ExperimentDay.actual_s.is_(None), ExperimentDay.note.is_(None))),
+            or_(
+                ExperimentDay.day >= recent,
+                and_(ExperimentDay.actual_s.is_(None), ExperimentDay.note.is_(None)),
+            ),
         )
     ).all()
     if not rows:
@@ -180,7 +191,9 @@ def update_days(session: Session, now: datetime) -> None:
         h = hd[r.day]
         r.actual_s = h.actual_s
         r.expected_s = h.expected_s
-        r.residual_s = (h.actual_s - h.expected_s) if h.actual_s is not None and h.expected_s is not None else None
+        r.residual_s = (
+            (h.actual_s - h.expected_s) if h.actual_s is not None and h.expected_s is not None else None
+        )
         r.included = bool(h.included and r.residual_s is not None)
         r.note = h.note
     session.flush()
@@ -210,8 +223,9 @@ def _block_design_effect(rho: float, block_days: int) -> float:
     return 1.0 + 2.0 / b * sum((b - j) * rho**j for j in range(1, b))
 
 
-def _welch(res_a: list[float], res_b: list[float], expected: list[float], z_crit: float,
-           deff: float) -> _Look | None:
+def _welch(
+    res_a: list[float], res_b: list[float], expected: list[float], z_crit: float, deff: float
+) -> _Look | None:
     """Welch interval for mean(B) - mean(A) at the two-sided nominal level of ``z_crit``,
     using the Welch-Satterthwaite degrees of freedom, widened by the block design effect."""
     n_a, n_b = len(res_a), len(res_b)
@@ -260,13 +274,21 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
     observed = [d for d in days if d.included and d.residual_s is not None and d.day < today]
 
     def none(decision: str, note: str, reached: int | None = None) -> ExperimentAnalysis:
-        return ExperimentAnalysis(days_observed=len(observed), effect_pct=None, ci_low_pct=None,
-                                  ci_high_pct=None, checkpoint_reached=reached, decision=decision,  # type: ignore[arg-type]
-                                  note=note)
+        return ExperimentAnalysis(
+            days_observed=len(observed),
+            effect_pct=None,
+            ci_low_pct=None,
+            ci_high_pct=None,
+            checkpoint_reached=reached,
+            decision=decision,  # type: ignore[arg-type]
+            note=note,
+        )
 
     if experiment.status in ("proposed", "rejected"):
-        return none("not_started", "Not approved yet." if experiment.status == "proposed"
-                    else "Rejected; it never ran.")
+        return none(
+            "not_started",
+            "Not approved yet." if experiment.status == "proposed" else "Rejected; it never ran.",
+        )
     start = experiment.start_date
     if start is None or today <= start:
         if experiment.status == "stopped":
@@ -279,8 +301,11 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
     fits = baseline_mod.active_fits(session)
     _, rho, _ = pooled_cv(fits, unit_weights(session))
     deff = _block_design_effect(rho, int(design.get("block_days", 1)))
-    corr_note = (f" Intervals are widened for day-to-day correlation within blocks (lag-1 ≈ {rho:.2f})."
-                 if deff > 1.0 else "")
+    corr_note = (
+        f" Intervals are widened for day-to-day correlation within blocks (lag-1 ≈ {rho:.2f})."
+        if deff > 1.0
+        else ""
+    )
 
     def look(cutoff: date | None, z_crit: float) -> _Look | None:
         sel = [d for d in observed if cutoff is None or d.day < cutoff]
@@ -291,9 +316,11 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
 
     def describe(lk: _Look) -> str:
         direction = "less" if lk.effect_pct < 0 else "more"
-        return (f"'{labels[arm_b]}' used {abs(lk.effect_pct):.1f}% {direction} weather-normalized runtime "
-                f"than '{labels[arm_a]}' ({lk.n_b} vs {lk.n_a} days; {lk.level * 100:.1f}% interval "
-                f"{_fmt_pct(lk.lo_pct)} to {_fmt_pct(lk.hi_pct)}).")
+        return (
+            f"'{labels[arm_b]}' used {abs(lk.effect_pct):.1f}% {direction} weather-normalized runtime "
+            f"than '{labels[arm_a]}' ({lk.n_b} vs {lk.n_a} days; {lk.level * 100:.1f}% interval "
+            f"{_fmt_pct(lk.lo_pct)} to {_fmt_pct(lk.hi_pct)})."
+        )
 
     def third_arm_note(cutoff: date | None) -> str:
         if len(arms) < 3:
@@ -306,9 +333,11 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
         lk = _welch(res_a, res_c, exp, stats.norm.isf(INFORMATIONAL_ALPHA / 2), deff)
         if lk is None:
             return ""
-        return (f" Secondary arm '{labels[arm_c]}' vs '{labels[arm_a]}': {_fmt_pct(lk.effect_pct)} "
-                f"(90% {_fmt_pct(lk.lo_pct)} to {_fmt_pct(lk.hi_pct)}; not part of the pre-planned "
-                "decision, treat it as a lead).")
+        return (
+            f" Secondary arm '{labels[arm_c]}' vs '{labels[arm_a]}': {_fmt_pct(lk.effect_pct)} "
+            f"(90% {_fmt_pct(lk.lo_pct)} to {_fmt_pct(lk.hi_pct)}; not part of the pre-planned "
+            "decision, treat it as a lead)."
+        )
 
     reached = [(i, cp) for i, cp in enumerate(checkpoints, start=1) if cp.day <= elapsed]
     n_cp = len(checkpoints)
@@ -318,25 +347,44 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
         at = f"Checkpoint {i} of {n_cp} (day {cp.day})"
         if lk is not None and lk.hi_pct < 0:
             return ExperimentAnalysis(
-                days_observed=len(observed), effect_pct=lk.effect_pct, ci_low_pct=lk.lo_pct, ci_high_pct=lk.hi_pct,
-                checkpoint_reached=i, decision="stop_win",
+                days_observed=len(observed),
+                effect_pct=lk.effect_pct,
+                ci_low_pct=lk.lo_pct,
+                ci_high_pct=lk.hi_pct,
+                checkpoint_reached=i,
+                decision="stop_win",
                 note=f"{at}: {describe(lk)} The whole interval is below zero, which clears this checkpoint's "
-                     f"pre-planned bar: the treatment wins; stop and adopt it.{corr_note}{third_arm_note(cutoff)}")
+                f"pre-planned bar: the treatment wins; stop and adopt it.{corr_note}{third_arm_note(cutoff)}",
+            )
         if i == n_cp:
             if lk is None:
-                return none("inconclusive", f"{at}: too few usable days per arm to judge "
-                            f"({len(observed)} usable of {elapsed}).", i)
+                return none(
+                    "inconclusive",
+                    f"{at}: too few usable days per arm to judge ({len(observed)} usable of {elapsed}).",
+                    i,
+                )
             if lk.effect_pct >= 0 or lk.lo_pct > 0:
-                decision, verdict = "stop_futile", (
-                    "The treatment did no better than the control, so it is not worth adopting.")
+                decision, verdict = (
+                    "stop_futile",
+                    ("The treatment did no better than the control, so it is not worth adopting."),
+                )
             else:
-                decision, verdict = "inconclusive", (
-                    "It leaned toward the treatment but the interval still includes zero; a real effect "
-                    "this small needs months of days, so judge it in the simulator instead.")
+                decision, verdict = (
+                    "inconclusive",
+                    (
+                        "It leaned toward the treatment but the interval still includes zero; a real effect "
+                        "this small needs months of days, so judge it in the simulator instead."
+                    ),
+                )
             return ExperimentAnalysis(
-                days_observed=len(observed), effect_pct=lk.effect_pct, ci_low_pct=lk.lo_pct, ci_high_pct=lk.hi_pct,
-                checkpoint_reached=i, decision=decision,  # type: ignore[arg-type]
-                note=f"{at}, the final look: {describe(lk)} {verdict}{corr_note}{third_arm_note(cutoff)}")
+                days_observed=len(observed),
+                effect_pct=lk.effect_pct,
+                ci_low_pct=lk.lo_pct,
+                ci_high_pct=lk.hi_pct,
+                checkpoint_reached=i,
+                decision=decision,  # type: ignore[arg-type]
+                note=f"{at}, the final look: {describe(lk)} {verdict}{corr_note}{third_arm_note(cutoff)}",
+            )
 
     last_reached = reached[-1][0] if reached else None
     if experiment.status == "stopped":
@@ -345,35 +393,57 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
     else:
         decision = "continue"
         nxt = next((cp for cp in checkpoints if cp.day > elapsed), None)
-        lead = (f"Day {elapsed} of {design.get('n_days', '?')}; next checkpoint on day {nxt.day}. "
-                if nxt else f"Day {elapsed}. ")
+        lead = (
+            f"Day {elapsed} of {design.get('n_days', '?')}; next checkpoint on day {nxt.day}. "
+            if nxt
+            else f"Day {elapsed}. "
+        )
         if reached:
             i, cp = reached[-1]
             lk = look(start + timedelta(days=cp.day), cp.z_crit)
             if lk is not None and cp.day == elapsed:
                 # Exactly at an interim look: report the formal checkpoint interval.
-                worse = (" The treatment used significantly MORE runtime; consider stopping it."
-                         if lk.lo_pct > 0 else "")
+                worse = (
+                    " The treatment used significantly MORE runtime; consider stopping it."
+                    if lk.lo_pct > 0
+                    else ""
+                )
                 return ExperimentAnalysis(
-                    days_observed=len(observed), effect_pct=lk.effect_pct, ci_low_pct=lk.lo_pct,
-                    ci_high_pct=lk.hi_pct, checkpoint_reached=i, decision="continue",
-                    note=f"Checkpoint {i} of {n_cp} (day {cp.day}): {describe(lk)} The interval includes zero "
-                         f"or favours the control, so it does not clear this checkpoint's bar; the test "
-                         f"continues to day {nxt.day if nxt else cp.day}.{worse}{corr_note}"
-                         f"{third_arm_note(start + timedelta(days=cp.day))}")
+                    days_observed=len(observed),
+                    effect_pct=lk.effect_pct,
+                    ci_low_pct=lk.lo_pct,
+                    ci_high_pct=lk.hi_pct,
+                    checkpoint_reached=i,
+                    decision="continue",
+                    note=f"Checkpoint {i} of {n_cp} (day {cp.day}): {describe(lk)} The interval includes "
+                    f"zero or favours the control, so it does not clear this checkpoint's bar; the test "
+                    f"continues to day {nxt.day if nxt else cp.day}.{worse}{corr_note}"
+                    f"{third_arm_note(start + timedelta(days=cp.day))}",
+                )
             if lk is not None and lk.lo_pct > 0:
-                lead += (f"At checkpoint {i} the treatment used significantly MORE runtime "
-                         f"({_fmt_pct(lk.effect_pct)}); consider stopping it. ")
+                lead += (
+                    f"At checkpoint {i} the treatment used significantly MORE runtime "
+                    f"({_fmt_pct(lk.effect_pct)}); consider stopping it. "
+                )
             else:
                 lead += f"Checkpoint {i} did not clear its bar, so the test continues. "
     info = look(None, stats.norm.isf(INFORMATIONAL_ALPHA / 2))
     if info is None:
-        return none(decision, f"{lead}Not enough usable days per arm yet for an interval "
-                    f"({len(observed)} usable of {elapsed}).", last_reached)
+        return none(
+            decision,
+            f"{lead}Not enough usable days per arm yet for an interval "
+            f"({len(observed)} usable of {elapsed}).",
+            last_reached,
+        )
     return ExperimentAnalysis(
-        days_observed=len(observed), effect_pct=info.effect_pct, ci_low_pct=info.lo_pct, ci_high_pct=info.hi_pct,
-        checkpoint_reached=last_reached, decision=decision,  # type: ignore[arg-type]
-        note=f"{lead}Informational only, do not act on it: {describe(info)}{corr_note}{third_arm_note(None)}")
+        days_observed=len(observed),
+        effect_pct=info.effect_pct,
+        ci_low_pct=info.lo_pct,
+        ci_high_pct=info.hi_pct,
+        checkpoint_reached=last_reached,
+        decision=decision,  # type: ignore[arg-type]
+        note=f"{lead}Informational only, do not act on it: {describe(info)}{corr_note}{third_arm_note(None)}",
+    )
 
 
 # ---------------------------------------------------------------------------------------
@@ -381,8 +451,14 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
 # ---------------------------------------------------------------------------------------
 
 
-def days_per_arm(effect_pct: float, resid_cv: float, rho: float, alpha: float, power_: float,
-                 n_looks: int = _DEFAULT_LOOKS_FOR_POWER) -> int:
+def days_per_arm(
+    effect_pct: float,
+    resid_cv: float,
+    rho: float,
+    alpha: float,
+    power_: float,
+    n_looks: int = _DEFAULT_LOOKS_FOR_POWER,
+) -> int:
     """Two-sample normal approximation: n = 2 (z_{1-a/2} + z_power)^2 (CV / effect)^2, inflated
     by (1+rho)/(1-rho) for lag-1 autocorrelation and by the group-sequential design's
     inflation for ``n_looks`` O'Brien-Fleming looks."""
@@ -408,25 +484,44 @@ def power(session: Session, effect_pct: float, alpha: float = 0.10, power_: floa
     fits = baseline_mod.active_fits(session)
     cv, rho, mode = pooled_cv(fits, unit_weights(session))
     if cv is None:
-        return PowerOut(effect_pct=effect_pct, alpha=alpha, power=power_, resid_cv=None, days_per_arm=None,
-                        total_days=None,
-                        note="No active weather baselines yet, so the day-to-day noise is unknown. Baselines "
-                             "need about three weeks of data; size the test once they pass their checks.")
+        return PowerOut(
+            effect_pct=effect_pct,
+            alpha=alpha,
+            power=power_,
+            resid_cv=None,
+            days_per_arm=None,
+            total_days=None,
+            note="No active weather baselines yet, so the day-to-day noise is unknown. Baselines "
+            "need about three weeks of data; size the test once they pass their checks.",
+        )
     n = days_per_arm(effect_pct, cv, rho, alpha, power_)
     n10 = days_per_arm(10.0, cv, rho, alpha, power_)
     n5 = days_per_arm(5.0, cv, rho, alpha, power_)
     if n <= 49:
         verdict = f"About {n} test days per arm ({2 * n} in all): a real test can settle it within a season."
     elif n <= 120:
-        verdict = (f"About {n} days per arm ({2 * n} in all): possible, but it takes most of a season; "
-                   "consider a bigger change or the simulator first.")
+        verdict = (
+            f"About {n} days per arm ({2 * n} in all): possible, but it takes most of a season; "
+            "consider a bigger change or the simulator first."
+        )
     else:
-        verdict = (f"About {n} days per arm: too small to confirm with real days in one season; judge it "
-                   "mainly in the simulator.")
-    note = (f"{verdict} Day-to-day noise of {mode}ing house runtime after weather: {cv * 100:.0f}% "
-            f"(lag-1 correlation {rho:.2f}). For scale, a 10% change needs about {n10} days per arm and a 5% "
-            f"change about {n5}, in line with the blueprint's expectation (10-15% within weeks, 5% takes "
-            f"months). Assumes {_DEFAULT_LOOKS_FOR_POWER} pre-planned checkpoints at two-sided alpha {alpha:g} "
-            f"(a false win for the treatment at most {alpha / 2:g}) and {power_:.0%} power.")
-    return PowerOut(effect_pct=effect_pct, alpha=alpha, power=power_, resid_cv=round(cv, 4), days_per_arm=n,
-                    total_days=2 * n, note=note)
+        verdict = (
+            f"About {n} days per arm: too small to confirm with real days in one season; judge it "
+            "mainly in the simulator."
+        )
+    note = (
+        f"{verdict} Day-to-day noise of {mode}ing house runtime after weather: {cv * 100:.0f}% "
+        f"(lag-1 correlation {rho:.2f}). For scale, a 10% change needs about {n10} days per arm and a 5% "
+        f"change about {n5}, in line with the blueprint's expectation (10-15% within weeks, 5% takes "
+        f"months). Assumes {_DEFAULT_LOOKS_FOR_POWER} pre-planned checkpoints at two-sided alpha {alpha:g} "
+        f"(a false win for the treatment at most {alpha / 2:g}) and {power_:.0%} power."
+    )
+    return PowerOut(
+        effect_pct=effect_pct,
+        alpha=alpha,
+        power=power_,
+        resid_cv=round(cv, 4),
+        days_per_arm=n,
+        total_days=2 * n,
+        note=note,
+    )

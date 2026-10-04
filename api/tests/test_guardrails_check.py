@@ -48,6 +48,7 @@ def test_hard_min_max_clamp():
 def test_step_limit_from_current_setpoint():
     g = check(target(68, 72), unit(68, 76), LIMITS, NOW)
     assert g.cool_f == 74.0 and g.clamped
+    assert g.violations == ["Cool moves at most 2°F per change: 74°F now, on the way to 72°F."]
     g = check(target(68, 80.5), unit(68, 76.3), LIMITS, NOW)
     assert g.cool_f == 78.0  # 76.3 + 2 = 78.3, rounded toward the current setpoint
 

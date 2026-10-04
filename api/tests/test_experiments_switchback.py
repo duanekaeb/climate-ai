@@ -24,7 +24,9 @@ TZ = "America/Chicago"
 # ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("n_days,k,alpha", [(28, 3, 0.10), (30, 3, 0.05), (21, 2, 0.10), (14, 1, 0.10), (60, 3, 0.2)])
+@pytest.mark.parametrize(
+    "n_days,k,alpha", [(28, 3, 0.10), (30, 3, 0.05), (21, 2, 0.10), (14, 1, 0.10), (60, 3, 0.2)]
+)
 def test_checkpoints_spend_exactly_alpha(n_days, k, alpha):
     cps = switchback.plan_checkpoints(n_days, k, alpha)
     assert len(cps) == k
@@ -78,7 +80,9 @@ def test_sequential_inflation_is_small_and_grows_with_looks():
 # ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("arms,block,n_days", [(["a", "b"], 2, 28), (["a", "b", "c"], 2, 30), (["a", "b"], 3, 20)])
+@pytest.mark.parametrize(
+    "arms,block,n_days", [(["a", "b"], 2, 28), (["a", "b", "c"], 2, 30), (["a", "b"], 3, 20)]
+)
 def test_assign_days_balanced_blocks(arms, block, n_days):
     start = date(2026, 7, 1)
     sched = switchback.assign_days(arms, start, n_days, block, seed=42)
@@ -98,8 +102,10 @@ def test_assign_days_is_seeded():
     a = switchback.assign_days(["ctl", "trt"], date(2026, 7, 1), 28, 2, seed=7)
     b = switchback.assign_days(["ctl", "trt"], date(2026, 7, 1), 28, 2, seed=7)
     assert a == b
-    others = {tuple(x for _, x in switchback.assign_days(["ctl", "trt"], date(2026, 7, 1), 28, 2, seed=s))
-              for s in range(8)}
+    others = {
+        tuple(x for _, x in switchback.assign_days(["ctl", "trt"], date(2026, 7, 1), 28, 2, seed=s))
+        for s in range(8)
+    }
     assert len(others) > 1
     with pytest.raises(ValueError):
         switchback.assign_days(["a", "a"], date(2026, 7, 1), 10, 2, seed=1)
@@ -111,10 +117,18 @@ def test_assign_days_is_seeded():
 
 
 def _body(**kw) -> ProposeExperimentBody:
-    base = {"name": "Linked offset 1 vs 2", "hypothesis": "A 2°F offset cuts upstairs runtime",
-                "arms": [ArmIn(key="ctl", label="1°F", params={"linked_offset_f": 1.0}),
-                      ArmIn(key="trt", label="2°F", params={"linked_offset_f": 2.0})],
-                "n_days": 28, "block_days": 2, "n_checkpoints": 3, "alpha": 0.10}
+    base = {
+        "name": "Linked offset 1 vs 2",
+        "hypothesis": "A 2°F offset cuts upstairs runtime",
+        "arms": [
+            ArmIn(key="ctl", label="1°F", params={"linked_offset_f": 1.0}),
+            ArmIn(key="trt", label="2°F", params={"linked_offset_f": 2.0}),
+        ],
+        "n_days": 28,
+        "block_days": 2,
+        "n_checkpoints": 3,
+        "alpha": 0.10,
+    }
     base.update(kw)
     return ProposeExperimentBody(**base)
 
@@ -140,11 +154,17 @@ def test_create_experiment_validates_and_stores_design(db, guard_ok):
     assert [c["day"] for c in d["checkpoints"]] == [9, 19, 28]
     assert sum(c["alpha_spent"] for c in d["checkpoints"]) == pytest.approx(0.10)
 
-    bad = _body(arms=[ArmIn(key="ctl", label="a", params={}), ArmIn(key="trt", label="b", params={"bogus": 1})])
+    bad = _body(
+        arms=[ArmIn(key="ctl", label="a", params={}), ArmIn(key="trt", label="b", params={"bogus": 1})]
+    )
     with pytest.raises(ValueError, match="arm 'trt'"):
         switchback.create_experiment(db, bad, "owner")
-    same = _body(arms=[ArmIn(key="ctl", label="a", params={"linked_offset_f": 1}),
-                       ArmIn(key="trt", label="b", params={"linked_offset_f": 1})])
+    same = _body(
+        arms=[
+            ArmIn(key="ctl", label="a", params={"linked_offset_f": 1}),
+            ArmIn(key="trt", label="b", params={"linked_offset_f": 1.0}),
+        ]
+    )
     with pytest.raises(ValueError, match="same settings"):
         switchback.create_experiment(db, same, "owner")
     with pytest.raises(ValueError, match="fewer than 2 days per arm"):
@@ -160,11 +180,13 @@ def test_decide_and_active_arm_lifecycle(db, guard_ok):
     today = local_date(now, TZ)
     assert exp.status == "approved" and exp.start_date == today + timedelta(days=1)
     assert exp.end_date == exp.start_date + timedelta(days=27)
-    days = db.scalars(select(ExperimentDay).where(ExperimentDay.experiment_id == exp.id)
-                      .order_by(ExperimentDay.day)).all()
+    days = db.scalars(
+        select(ExperimentDay).where(ExperimentDay.experiment_id == exp.id).order_by(ExperimentDay.day)
+    ).all()
     assert len(days) == 28 and days[0].day == exp.start_date
-    assert [x.arm for x in days] == [a for _, a in switchback.assign_days(["ctl", "trt"], exp.start_date, 28, 2,
-                                                                          exp.design["seed"])]
+    assert [x.arm for x in days] == [
+        a for _, a in switchback.assign_days(["ctl", "trt"], exp.start_date, 28, 2, exp.design["seed"])
+    ]
     with pytest.raises(ValueError):
         switchback.decide_experiment(db, exp.id, "approve", "again")
 
@@ -181,14 +203,20 @@ def test_decide_and_active_arm_lifecycle(db, guard_ok):
     assert switchback.active_arm(db, now + timedelta(days=30), TZ) is None
     assert db.get(Experiment, exp.id).status == "completed"
     assert [e["event"] for e in db.get(Experiment, exp.id).result["log"]] == [
-        "proposed", "approve", "running", "completed"]
+        "proposed",
+        "approve",
+        "running",
+        "completed",
+    ]
 
     with pytest.raises(LookupError):
         switchback.decide_experiment(db, 999_999, "approve", "missing")
 
 
 def test_second_approval_queues_after_the_first_and_stop_drops_days(db, guard_ok):
-    first = switchback.decide_experiment(db, switchback.create_experiment(db, _body(), "owner").id, "approve", "ok")
+    first = switchback.decide_experiment(
+        db, switchback.create_experiment(db, _body(), "owner").id, "approve", "ok"
+    )
     second = switchback.create_experiment(db, _body(n_days=14, n_checkpoints=2), "owner")
     second = switchback.decide_experiment(db, second.id, "approve", "ok")
     assert second.start_date == first.end_date + timedelta(days=1)
@@ -206,14 +234,32 @@ def test_second_approval_queues_after_the_first_and_stop_drops_days(db, guard_ok
 # ---------------------------------------------------------------------------------------
 
 
-def _insert_experiment(db, start: date, n_days: int, statuses: str = "running", arms=("ctl", "trt"),
-                       checkpoints: int = 3, block_days: int = 2) -> Experiment:
+def _insert_experiment(
+    db,
+    start: date,
+    n_days: int,
+    statuses: str = "running",
+    arms=("ctl", "trt"),
+    checkpoints: int = 3,
+    block_days: int = 2,
+) -> Experiment:
     cps = switchback.plan_checkpoints(n_days, checkpoints, 0.10)
-    exp = Experiment(name="test", hypothesis="h", arms=[{"key": a, "label": a.upper(), "params": {}} for a in arms],
-                     design={"n_days": n_days, "block_days": block_days, "seed": 1, "alpha": 0.10,
-                             "checkpoints": [c.model_dump() for c in cps]},
-                     status=statuses, proposed_by="owner", start_date=start,
-                     end_date=start + timedelta(days=n_days - 1))
+    exp = Experiment(
+        name="test",
+        hypothesis="h",
+        arms=[{"key": a, "label": a.upper(), "params": {}} for a in arms],
+        design={
+            "n_days": n_days,
+            "block_days": block_days,
+            "seed": 1,
+            "alpha": 0.10,
+            "checkpoints": [c.model_dump() for c in cps],
+        },
+        status=statuses,
+        proposed_by="owner",
+        start_date=start,
+        end_date=start + timedelta(days=n_days - 1),
+    )
     db.add(exp)
     db.flush()
     for d, arm in switchback.assign_days(list(arms), start, n_days, block_days, 1):
@@ -236,8 +282,18 @@ def test_update_days_fills_house_residuals(db, monkeypatch):
             for u in ("main", "up", "bed"):
                 cool = 9000.0 if sched.get(d) == "trt" else 10000.0
                 slots = 100 if (d == thin_day and u == "up") else 288
-                out.append(SimpleNamespace(day=d, unit_key=u, cool_s=cool, heat_s=0.0, aux_s=0.0, slots=slots,
-                                           mode="cool", outdoor_mean_f=85.0))
+                out.append(
+                    SimpleNamespace(
+                        day=d,
+                        unit_key=u,
+                        cool_s=cool,
+                        heat_s=0.0,
+                        aux_s=0.0,
+                        slots=slots,
+                        mode="cool",
+                        outdoor_mean_f=85.0,
+                    )
+                )
             d += timedelta(days=1)
         return out
 
@@ -354,7 +410,10 @@ def test_analyze_interval_widens_with_autocorrelated_baselines(db, monkeypatch):
     _fill(db, exp, -500.0, 800.0)
     monkeypatch.setattr("climate.analytics.baseline.active_fits", lambda s: {})
     plain = analysis.analyze(db, exp)
-    fits = {(u, "cool"): SimpleNamespace(cvrmse=0.15, resid_std_s=1500.0, resid_lag1=0.5) for u in ("main", "up", "bed")}
+    fits = {
+        (u, "cool"): SimpleNamespace(cvrmse=0.15, resid_std_s=1500.0, resid_lag1=0.5)
+        for u in ("main", "up", "bed")
+    }
     monkeypatch.setattr("climate.analytics.baseline.active_fits", lambda s: fits)
     wide = analysis.analyze(db, exp)
     assert wide.effect_pct == pytest.approx(plain.effect_pct)
@@ -372,8 +431,10 @@ def test_power_monotonic_and_honest(db, monkeypatch):
     none = analysis.power(db, 10.0)
     assert none.resid_cv is None and none.days_per_arm is None and "baselines" in none.note
 
-    fits = {(u, "cool"): SimpleNamespace(cvrmse=0.15, resid_std_s=1500.0, resid_lag1=0.2)
-            for u in ("main", "up", "bed")}
+    fits = {
+        (u, "cool"): SimpleNamespace(cvrmse=0.15, resid_std_s=1500.0, resid_lag1=0.2)
+        for u in ("main", "up", "bed")
+    }
     monkeypatch.setattr("climate.analytics.baseline.active_fits", lambda s: fits)
     out = {e: analysis.power(db, e) for e in (5.0, 10.0, 15.0, 20.0)}
     days = [out[e].days_per_arm for e in (5.0, 10.0, 15.0, 20.0)]

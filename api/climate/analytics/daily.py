@@ -205,8 +205,9 @@ def unit_weights(session: Session) -> dict[str, float]:
 
 @dataclass
 class HourlyRuntime:
-    """Per (unit, UTC hour, local day) sums from runtime_5m, as parallel numpy arrays.
-    A UTC hour only splits across two local days in half-hour-offset zones."""
+    """Per (unit, UTC hour) sums from runtime_5m, as parallel numpy arrays. ``day`` is the
+    local day of the hour's start (exact for whole-hour UTC offsets, DST included; in a
+    half-hour-offset zone the half hour after local midnight counts to the day before)."""
 
     unit: np.ndarray  # object (unit_key)
     hour: np.ndarray  # float64 epoch seconds of the UTC hour start
@@ -233,7 +234,6 @@ class HourlyRuntime:
 _HOURLY_SQL = """
 SELECT unit_key,
        extract(epoch FROM date_trunc('hour', ts, 'UTC'))::float8 AS hour_utc,
-       (ts AT TIME ZONE :tz)::date AS day,
        sum(comp_cool1)::float8 AS cool1,
        sum(comp_heat1)::float8 AS heat1,
        sum(aux_heat1)::float8 AS aux1,
@@ -246,16 +246,27 @@ SELECT unit_key,
        count(hvac_mode)::int AS known_mode_slots
 FROM runtime_5m
 WHERE ts >= :t0 AND ts < :t1 {unit_filter}
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3
+GROUP BY unit_key, date_trunc('hour', ts, 'UTC')
 """
+
+
+def local_day_ordinals(epochs: np.ndarray, t0: datetime, t1: datetime, tz: str) -> np.ndarray:
+    """Local calendar day (date ordinal) of each UTC epoch in [t0, t1], exact across DST:
+    searchsorted against the UTC starts of the local days."""
+    from climate.timeutil import local_date
+
+    d0, d1 = local_date(t0, tz), local_date(t1, tz)
+    days = [d0 + timedelta(days=i) for i in range((d1 - d0).days + 2)]
+    starts = np.array([day_bounds_utc(d, tz)[0].timestamp() for d in days])
+    idx = np.clip(np.searchsorted(starts, np.asarray(epochs, dtype=float), side="right") - 1, 0, len(days) - 1)
+    return d0.toordinal() + idx.astype(np.int64)
 
 
 def hourly_runtime(
     session: Session, t0: datetime, t1: datetime, tz: str, unit_keys: Iterable[str] | None = None,
     heat_is_comp: dict[str, bool] | None = None,
 ) -> HourlyRuntime:
-    params: dict[str, object] = {"t0": t0, "t1": t1, "tz": tz}
+    params: dict[str, object] = {"t0": t0, "t1": t1}
     unit_filter = ""
     if unit_keys is not None:
         unit_filter = "AND unit_key = ANY(:units)"
@@ -266,25 +277,27 @@ def hourly_runtime(
     if n == 0:
         z = np.zeros(0)
         return HourlyRuntime(np.zeros(0, dtype=object), z, np.zeros(0, dtype=np.int64), z, z, z, z, z, z, z, z, z, z)
+    rows.sort(key=lambda r: (r[0], r[1]))
     cols = list(zip(*rows, strict=True))
     unit = np.array(cols[0], dtype=object)
     f = lambda c: np.array([np.nan if v is None else v for v in c], dtype=float)
-    heat1, aux1 = f(cols[4]), f(cols[5])
+    hour = f(cols[1])
+    heat1, aux1 = f(cols[3]), f(cols[4])
     comp = np.array([heat_is_comp.get(u, False) for u in cols[0]], dtype=bool)
     return HourlyRuntime(
         unit=unit,
-        hour=f(cols[1]),
-        day=np.array([d.toordinal() for d in cols[2]], dtype=np.int64),
-        cool=f(cols[3]),
+        hour=hour,
+        day=local_day_ordinals(hour, t0, t1, tz),
+        cool=f(cols[2]),
         heat=np.where(comp, heat1, aux1),
         aux=np.where(comp, aux1, 0.0),
-        fan=f(cols[6]),
-        slots=f(cols[7]),
-        off_slots=f(cols[8]),
-        outdoor=f(cols[9]),
-        zone=f(cols[10]),
-        cool_mode_slots=f(cols[11]),
-        known_mode_slots=f(cols[12]),
+        fan=f(cols[5]),
+        slots=f(cols[6]),
+        off_slots=f(cols[7]),
+        outdoor=f(cols[8]),
+        zone=f(cols[9]),
+        cool_mode_slots=f(cols[10]),
+        known_mode_slots=f(cols[11]),
     )
 
 
@@ -404,8 +417,9 @@ def daily_rows(session: Session, start: date, end: date, tz: str, unit_keys: lis
     duty = np.divide(hr.stage1, covered, out=np.zeros_like(covered), where=covered > 0)
     maxed_min = np.where(duty >= MAXED_DUTY, hr.slots * 5.0, 0.0)
 
-    # Group (unit, day) with numpy: the SQL already orders by unit, hour, day.
-    keys = np.array([f"{u}|{d}" for u, d in zip(hr.unit, hr.day, strict=True)], dtype=object)
+    # Group (unit, day) with integer keys.
+    units, ucode = np.unique(hr.unit.astype(str), return_inverse=True)
+    keys = ucode.astype(np.int64) * 10_000_000 + hr.day
     uniq, inverse = np.unique(keys, return_inverse=True)
     sums = {
         name: np.bincount(inverse, weights=arr, minlength=uniq.size)
@@ -414,10 +428,9 @@ def daily_rows(session: Session, start: date, end: date, tz: str, unit_keys: lis
     }
 
     rows: list[DayRow] = []
-    for i, key in enumerate(uniq):
-        unit_key, ordinal_s = str(key).split("|")
-        ordinal = int(ordinal_s)
-        if ordinal not in exp_slots:  # a UTC hour bucket straddling the range edge
+    for i, key in enumerate(uniq.tolist()):
+        unit_key, ordinal = str(units[key // 10_000_000]), int(key % 10_000_000)
+        if ordinal not in exp_slots:  # outside the requested days
             continue
         hourly, srcs = day_weather[ordinal]
         cool, heat, aux = float(sums["cool"][i]), float(sums["heat"][i]), float(sums["aux"][i])

@@ -74,17 +74,22 @@ class Env:
 
 
 def load_env(session: Session) -> Env:
-    w = {u.key: float(u.power_weight if u.power_weight is not None else 1.0)
-         for u in session.scalars(select(Unit)).all()}
-    return Env(control=get_setting(session, "control", ControlSettings),
-               occupancy=get_setting(session, "occupancy", OccupancySettings),
-               tz=get_setting(session, "location", LocationSettings).tz,
-               weights=np.array([w.get(z, 1.0) for z in ZONES]))
+    w = {
+        u.key: float(u.power_weight if u.power_weight is not None else 1.0)
+        for u in session.scalars(select(Unit)).all()
+    }
+    return Env(
+        control=get_setting(session, "control", ControlSettings),
+        occupancy=get_setting(session, "occupancy", OccupancySettings),
+        tz=get_setting(session, "location", LocationSettings).tz,
+        weights=np.array([w.get(z, 1.0) for z in ZONES]),
+    )
 
 
 def active_policy(session: Session) -> PolicyParams:
     row = session.scalars(
-        select(PolicyVersion).where(PolicyVersion.status == "active")
+        select(PolicyVersion)
+        .where(PolicyVersion.status == "active")
         .order_by(PolicyVersion.created_at.desc(), PolicyVersion.id.desc())
     ).first()
     return PolicyParams.model_validate(row.params) if row is not None else PolicyParams()
@@ -111,8 +116,9 @@ def _is_night(env: Env, unit: str, lt: datetime) -> bool:
     return False
 
 
-def policy_setpoints(pp: PolicyParams, env: Env, lt: datetime, occ: np.ndarray,
-                     hot_sunny: bool) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def policy_setpoints(
+    pp: PolicyParams, env: Env, lt: datetime, occ: np.ndarray, hot_sunny: bool
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """(heat_f, cool_f, comfort_low, comfort_high) per zone for one local time.
 
     Approximation of ``control.policy.plan``: occupancy per unit is "any of its sensors saw
@@ -207,7 +213,7 @@ def _initial_state(s: rc.Series, d: _Day) -> tuple[int, np.ndarray] | None:
     charged for converging from whatever the real thermostats were doing. Falls back to the
     day's own first recorded temperatures when the hours before are missing."""
     j = d.i0 - WARMUP_SLOTS
-    if j >= 0 and np.isfinite(s.t_out[j:d.i0]).mean() >= 0.5:
+    if j >= 0 and np.isfinite(s.t_out[j : d.i0]).mean() >= 0.5:
         T0 = _start_temp(s, j)
         if T0 is not None:
             return j, T0
@@ -247,16 +253,25 @@ def _batch(s: rc.Series, days: list[_Day], sched: Schedule, mode: str) -> tuple[
     count = np.zeros((n_max, B), dtype=bool)
     for b, d in enumerate(days):
         k = d.i1 - d.j0
-        t_out[:k, b] = rc.fill_gaps(s.t_out[d.j0:d.i1])
-        sun[:k, b] = np.nan_to_num(rc.fill_gaps(s.sun[d.j0:d.i1]))
-        sp[:k, b] = (sched.cool if mode == "cool" else sched.heat)[d.j0:d.i1]
-        lo[:k, b], hi[:k, b] = sched.lo[d.j0:d.i1], sched.hi[d.j0:d.i1]
+        t_out[:k, b] = rc.fill_gaps(s.t_out[d.j0 : d.i1])
+        sun[:k, b] = np.nan_to_num(rc.fill_gaps(s.sun[d.j0 : d.i1]))
+        sp[:k, b] = (sched.cool if mode == "cool" else sched.heat)[d.j0 : d.i1]
+        lo[:k, b], hi[:k, b] = sched.lo[d.j0 : d.i1], sched.hi[d.j0 : d.i1]
         count[d.i0 - d.j0 : k, b] = True
     return t_out, sun, sp, lo, hi, count
 
 
-def _replay(model: rc.RCModel, T0: np.ndarray, t_out: np.ndarray, sun: np.ndarray, sp: np.ndarray,
-            lo: np.ndarray, hi: np.ndarray, count: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
+def _replay(
+    model: rc.RCModel,
+    T0: np.ndarray,
+    t_out: np.ndarray,
+    sun: np.ndarray,
+    sp: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    count: np.ndarray,
+    weights: np.ndarray,
+) -> tuple[float, float]:
     """(weighted runtime seconds, comfort-violation minutes) over the counted slots of a batch."""
     T, on = rc.emulate(model, T0, t_out, sun, sp)
     runtime = float((on * count[..., None] * rc.SLOT_S).sum(axis=(0, 1)) @ weights)
@@ -267,8 +282,15 @@ def _replay(model: rc.RCModel, T0: np.ndarray, t_out: np.ndarray, sun: np.ndarra
     return runtime, float(bad.sum()) * rc.SLOT_S / 60.0
 
 
-def _rc_backtest(s: rc.Series, env: Env, days: list[_Day], fits: dict[str, tuple[Any, rc.RCModel]],
-                 cur: Schedule, cand: Schedule, skipped: int) -> BacktestOut:
+def _rc_backtest(
+    s: rc.Series,
+    env: Env,
+    days: list[_Day],
+    fits: dict[str, tuple[Any, rc.RCModel]],
+    cur: Schedule,
+    cand: Schedule,
+    skipped: int,
+) -> BacktestOut:
     totals = {"cur": 0.0, "cand": 0.0, "vcur": 0.0, "vcand": 0.0}
     by_mode: dict[str, list[_Day]] = {}
     for d in days:
@@ -294,10 +316,18 @@ def _rc_backtest(s: rc.Series, env: Env, days: list[_Day], fits: dict[str, tuple
             totals[key] += rt
             totals["v" + key] += viol
     if used == 0 or totals["cur"] <= 0:
-        return BacktestOut(days=used, model="rc", current_runtime_min=None, candidate_runtime_min=None,
-                           delta_pct=None, ci90_pct=None, comfort_violation_min_current=None,
-                           comfort_violation_min_candidate=None, beats_model_uncertainty=False,
-                           note="The house model found no runtime to compare on these days.")
+        return BacktestOut(
+            days=used,
+            model="rc",
+            current_runtime_min=None,
+            candidate_runtime_min=None,
+            delta_pct=None,
+            ci90_pct=None,
+            comfort_violation_min_current=None,
+            comfort_violation_min_candidate=None,
+            beats_model_uncertainty=False,
+            note="The house model found no runtime to compare on these days.",
+        )
     delta = (totals["cand"] - totals["cur"]) / totals["cur"]
     delta_pct = 100.0 * delta
     main_mode = max(by_mode, key=lambda m: len(by_mode[m]))
@@ -312,28 +342,41 @@ def _rc_backtest(s: rc.Series, env: Env, days: list[_Day], fits: dict[str, tuple
         half = rc.Z90 * 100.0 * math.sqrt(float(scatter) ** 2 / used + (float(err) * delta) ** 2)
         ci: tuple[float, float] | None = (delta_pct - half, delta_pct + half)
         beats = abs(delta_pct) > half
-        unc = (f"90% interval {ci[0]:+.1f}% to {ci[1]:+.1f}% from the model's held-out runtime error "
-               f"({float(err) * 100:.0f}% per day). ")
+        unc = (
+            f"90% interval {ci[0]:+.1f}% to {ci[1]:+.1f}% from the model's held-out runtime error "
+            f"({float(err) * 100:.0f}% per day). "
+        )
     else:
         ci, beats = None, False
         unc = "This fit has no held-out runtime error, so the result cannot be judged against it. "
-    verdict = ("Beats the model's own uncertainty: worth a real trial." if beats else
-               "Does not beat the model's own uncertainty: not worth a real day yet.")
+    verdict = (
+        "Beats the model's own uncertainty: worth a real trial."
+        if beats
+        else "Does not beat the model's own uncertainty: not worth a real day yet."
+    )
     skip = f" {skipped} day(s) skipped (missing data or no active model for their mode)." if skipped else ""
-    note = (f"Replayed {used} recorded day(s) through the {main_mode}ing house model with the recorded weather "
-            f"and occupancy. Current policy {totals['cur'] / 60:.0f} min, candidate {totals['cand'] / 60:.0f} min "
-            f"({delta_pct:+.1f}%). {unc}{verdict} Comfort-violation minutes: {totals['vcur']:.0f} -> "
-            f"{totals['vcand']:.0f}.{skip} Approximation: an ideal thermostat holding the linked-floors "
-            "setpoints (each day after a 6-hour uncounted warm-up); room offsets and whole-house-empty "
-            "setbacks are not replayed.")
+    note = (
+        f"Replayed {used} recorded day(s) through the {main_mode}ing house model with the recorded weather "
+        f"and occupancy. Current policy {totals['cur'] / 60:.0f} min, "
+        f"candidate {totals['cand'] / 60:.0f} min ({delta_pct:+.1f}%). {unc}{verdict} Comfort-violation minutes: {totals['vcur']:.0f} -> "
+        f"{totals['vcand']:.0f}.{skip} Approximation: an ideal thermostat holding the linked-floors "
+        "setpoints (each day after a 6-hour uncounted warm-up); room offsets and whole-house-empty "
+        "setbacks are not replayed."
+    )
     if "open-meteo" in s.weather_sources:
         note += OPEN_METEO_NOTE
-    return BacktestOut(days=used, model="rc", current_runtime_min=round(totals["cur"] / 60, 1),
-                       candidate_runtime_min=round(totals["cand"] / 60, 1), delta_pct=round(delta_pct, 2),
-                       ci90_pct=(round(ci[0], 2), round(ci[1], 2)) if ci else None,
-                       comfort_violation_min_current=round(totals["vcur"], 1),
-                       comfort_violation_min_candidate=round(totals["vcand"], 1),
-                       beats_model_uncertainty=beats, note=note)
+    return BacktestOut(
+        days=used,
+        model="rc",
+        current_runtime_min=round(totals["cur"] / 60, 1),
+        candidate_runtime_min=round(totals["cand"] / 60, 1),
+        delta_pct=round(delta_pct, 2),
+        ci90_pct=(round(ci[0], 2), round(ci[1], 2)) if ci else None,
+        comfort_violation_min_current=round(totals["vcur"], 1),
+        comfort_violation_min_candidate=round(totals["vcand"], 1),
+        beats_model_uncertainty=beats,
+        note=note,
+    )
 
 
 def _setpoint_ref(s: rc.Series, mode: str, z: int, idx: np.ndarray, fallback: np.ndarray) -> float:
@@ -351,15 +394,27 @@ def _degree_slots(t_out: np.ndarray, bp: float, sp: np.ndarray, ref: float, mode
     return np.maximum(0.0, dd) * rc.DT_H / 24.0
 
 
-def _rule_of_thumb(session: Session, s: rc.Series, env: Env, days: list[_Day], cur: Schedule,
-                   cand: Schedule) -> BacktestOut:
+def _rule_of_thumb(
+    session: Session, s: rc.Series, env: Env, days: list[_Day], cur: Schedule, cand: Schedule
+) -> BacktestOut:
     fits = baseline_mod.active_fits(session)
-    empty = BacktestOut(days=0, model="rule_of_thumb", current_runtime_min=None, candidate_runtime_min=None,
-                        delta_pct=None, ci90_pct=None, comfort_violation_min_current=None,
-                        comfort_violation_min_candidate=None, beats_model_uncertainty=False, note="")
+    empty = BacktestOut(
+        days=0,
+        model="rule_of_thumb",
+        current_runtime_min=None,
+        candidate_runtime_min=None,
+        delta_pct=None,
+        ci90_pct=None,
+        comfort_violation_min_current=None,
+        comfort_violation_min_candidate=None,
+        beats_model_uncertainty=False,
+        note="",
+    )
     if not fits:
-        empty.note = ("No house model and no weather baselines yet, so nothing can be replayed. Baselines need "
-                      "about three weeks of runtime history.")
+        empty.note = (
+            "No house model and no weather baselines yet, so nothing can be replayed. Baselines need "
+            "about three weeks of runtime history."
+        )
         return empty
     ok = [d for d in days if all((u, d.mode) in fits for u in ZONES)]
     if not ok:
@@ -376,12 +431,15 @@ def _rule_of_thumb(session: Session, s: rc.Series, env: Env, days: list[_Day], c
             sp_cand = (cand.cool if mode == "cool" else cand.heat)[:, z]
             ref = _setpoint_ref(s, mode, z, idx, sp_cur[idx])
             for d in ds:
-                t_out = rc.fill_gaps(s.t_out[d.i0:d.i1])
-                actual = float(np.nansum(on[d.i0:d.i1, z])) * rc.SLOT_S
+                t_out = rc.fill_gaps(s.t_out[d.i0 : d.i1])
+                actual = float(np.nansum(on[d.i0 : d.i1, z])) * rc.SLOT_S
                 slope = float(fit.slope_s_per_dd)
-                change = slope * float((_degree_slots(t_out, fit.balance_point_f, sp_cand[d.i0:d.i1], ref, mode)
-                                        - _degree_slots(t_out, fit.balance_point_f, sp_cur[d.i0:d.i1], ref, mode)
-                                        ).sum())
+                change = slope * float(
+                    (
+                        _degree_slots(t_out, fit.balance_point_f, sp_cand[d.i0 : d.i1], ref, mode)
+                        - _degree_slots(t_out, fit.balance_point_f, sp_cur[d.i0 : d.i1], ref, mode)
+                    ).sum()
+                )
                 cur_s += env.weights[z] * actual
                 cand_s += env.weights[z] * max(0.0, actual + change)
     if cur_s <= 0:
@@ -394,18 +452,31 @@ def _rule_of_thumb(session: Session, s: rc.Series, env: Env, days: list[_Day], c
     cv, _, _ = pooled_cv(fits, w, main_mode)
     bar = 2.0 * cv * 100.0 if cv is not None else math.inf
     beats = abs(delta_pct) > bar
-    note = (f"Rule of thumb (no house model has passed its checks yet): {len(ok)} recorded day(s), each unit's "
-            f"weather baseline with a setpoint change treated as a balance-point shift. Recorded "
-            f"{cur_s / 60:.0f} min; candidate {cand_s / 60:.0f} min ({delta_pct:+.1f}%). "
-            + (f"The bar is twice the baselines' day-to-day noise ({bar:.0f}%): "
-               if cv is not None else "No baseline noise estimate: ")
-            + ("beats it." if beats else "does not beat it, so it needs the house model or a real test.")
-            + " It ignores floor coupling and equipment limits, so linked-floors effects on the upstairs are "
-              "invisible to it.")
-    return BacktestOut(days=len(ok), model="rule_of_thumb", current_runtime_min=round(cur_s / 60, 1),
-                       candidate_runtime_min=round(cand_s / 60, 1), delta_pct=round(delta_pct, 2), ci90_pct=None,
-                       comfort_violation_min_current=None, comfort_violation_min_candidate=None,
-                       beats_model_uncertainty=beats, note=note)
+    note = (
+        f"Rule of thumb (no house model has passed its checks yet): {len(ok)} recorded day(s), each unit's "
+        f"weather baseline with a setpoint change treated as a balance-point shift. Recorded "
+        f"{cur_s / 60:.0f} min; candidate {cand_s / 60:.0f} min ({delta_pct:+.1f}%). "
+        + (
+            f"The bar is twice the baselines' day-to-day noise ({bar:.0f}%): "
+            if cv is not None
+            else "No baseline noise estimate: "
+        )
+        + ("beats it." if beats else "does not beat it, so it needs the house model or a real test.")
+        + " It ignores floor coupling and equipment limits, so linked-floors effects on the upstairs are "
+        "invisible to it."
+    )
+    return BacktestOut(
+        days=len(ok),
+        model="rule_of_thumb",
+        current_runtime_min=round(cur_s / 60, 1),
+        candidate_runtime_min=round(cand_s / 60, 1),
+        delta_pct=round(delta_pct, 2),
+        ci90_pct=None,
+        comfort_violation_min_current=None,
+        comfort_violation_min_candidate=None,
+        beats_model_uncertainty=beats,
+        note=note,
+    )
 
 
 def backtest(session: Session, params: dict, days: int = 28) -> BacktestOut:
@@ -466,9 +537,21 @@ def _future_series(session: Session, day: date, tz: str) -> tuple[rc.Series, str
         sources = prev.weather_sources
         how = "the same day last week's weather (no forecast stored for this day)"
     nan3 = np.full((n, 3), np.nan)
-    s = rc.Series(start=rc.floor15(start), tz=tz, temp=nan3.copy(), on_cool=nan3.copy(), on_heat=nan3.copy(),
-                  cool_sp=nan3.copy(), heat_sp=nan3.copy(), hvac_off=np.zeros((n, 3), dtype=bool),
-                  t_out=t_out, sun=sun, cloud=cloud, occ=fit_len(prev.occ), weather_sources=sources)
+    s = rc.Series(
+        start=rc.floor15(start),
+        tz=tz,
+        temp=nan3.copy(),
+        on_cool=nan3.copy(),
+        on_heat=nan3.copy(),
+        cool_sp=nan3.copy(),
+        heat_sp=nan3.copy(),
+        hvac_off=np.zeros((n, 3), dtype=bool),
+        t_out=t_out,
+        sun=sun,
+        cloud=cloud,
+        occ=fit_len(prev.occ),
+        weather_sources=sources,
+    )
     return s, how
 
 
@@ -486,9 +569,12 @@ def _choose_mode(session: Session, s: rc.Series, day: date, recorded: bool, now:
     return "cool" if t.size and float(t.mean()) >= 65.0 else "heat"
 
 
-def _sim_out(day: date, model: str, units: dict[str, list[SimPoint]], total_min: float, note: str) -> SimulateOut:
+def _sim_out(
+    day: date, model: str, units: dict[str, list[SimPoint]], total_min: float, note: str
+) -> SimulateOut:
     return SimulateOut.model_validate(
-        {_SIM_DAY_FIELD: day, "model": model, "units": units, "total_runtime_min": total_min, "note": note})
+        {_SIM_DAY_FIELD: day, "model": model, "units": units, "total_runtime_min": total_min, "note": note}
+    )
 
 
 def simulate(session: Session, params: dict, day: date | None = None) -> SimulateOut:
@@ -519,8 +605,13 @@ def simulate(session: Session, params: dict, day: date | None = None) -> Simulat
     sun = np.nan_to_num(rc.fill_gaps(s.sun))
     attribution = OPEN_METEO_NOTE if "open-meteo" in s.weather_sources else ""
     if not np.isfinite(t_out).all():
-        return _sim_out(day, "rule_of_thumb", {}, 0.0, "No outdoor temperature for that day or the week before, so "
-                        "nothing can be simulated.")
+        return _sim_out(
+            day,
+            "rule_of_thumb",
+            {},
+            0.0,
+            "No outdoor temperature for that day or the week before, so nothing can be simulated.",
+        )
     span = range(w, s.n)
     fits = rc.active_rc(session)
     if mode in fits:
@@ -528,27 +619,48 @@ def simulate(session: Session, params: dict, day: date | None = None) -> Simulat
         j0, T0 = 0, (_start_temp(s, 0) if recorded else None)
         if T0 is None and recorded:
             j0, T0 = w, _start_temp(s, w)
-        start_note = ("the recorded temperatures, after a 6-hour warm-up" if T0 is not None and j0 < w else
-                      "its recorded midnight temperatures" if T0 is not None else "each unit at its setpoint")
+        start_note = (
+            "the recorded temperatures, after a 6-hour warm-up"
+            if T0 is not None and j0 < w
+            else "its recorded midnight temperatures"
+            if T0 is not None
+            else "each unit at its setpoint"
+        )
         if T0 is None:
             j0, T0 = w, sp[w].copy()
         T, on = rc.emulate(model, T0[None, :], t_out[j0:, None], sun[j0:, None], sp[j0:, None, :])
-        units = {u: [SimPoint(ts=s.ts(i), temp_f=round(float(T[i - j0, 0, z]), 2),
-                              runtime_s=round(float(on[i - j0, 0, z] * rc.SLOT_S), 1)) for i in span]
-                 for z, u in enumerate(ZONES)}
+        units = {
+            u: [
+                SimPoint(
+                    ts=s.ts(i),
+                    temp_f=round(float(T[i - j0, 0, z]), 2),
+                    runtime_s=round(float(on[i - j0, 0, z] * rc.SLOT_S), 1),
+                )
+                for i in span
+            ]
+            for z, u in enumerate(ZONES)
+        }
         total = float((on[w - j0 :, 0, :] * rc.SLOT_S).sum(axis=0) @ env.weights) / 60.0
-        note = (f"House model ({mode}ing), {how}, starting from {start_note}; an ideal thermostat holding the "
-                f"policy's setpoints. Treat the trajectory as coarse: day-ahead errors of a couple of °F are "
-                f"normal for this kind of model.{attribution}")
+        note = (
+            f"House model ({mode}ing), {how}, starting from {start_note}; an ideal thermostat holding the "
+            f"policy's setpoints. Treat the trajectory as coarse: day-ahead errors of a couple of °F are "
+            f"normal for this kind of model.{attribution}"
+        )
         return _sim_out(day, "rc", units, round(total, 1), note)
 
     fits_b = baseline_mod.active_fits(session)
     have = [u for u in ZONES if (u, mode) in fits_b]
     if not have:
-        return _sim_out(day, "rule_of_thumb", {}, 0.0,
-                        f"No house model and no {mode}ing baselines yet, so this day cannot be simulated.")
-    recent = {r.unit_key: r for r in session.execute(
-        _RECENT_SQL, {"s": now - timedelta(days=14), "e": now}).all()}
+        return _sim_out(
+            day,
+            "rule_of_thumb",
+            {},
+            0.0,
+            f"No house model and no {mode}ing baselines yet, so this day cannot be simulated.",
+        )
+    recent = {
+        r.unit_key: r for r in session.execute(_RECENT_SQL, {"s": now - timedelta(days=14), "e": now}).all()
+    }
     units = {}
     total = 0.0
     for z, u in enumerate(ZONES):
@@ -559,13 +671,19 @@ def simulate(session: Session, params: dict, day: date | None = None) -> Simulat
         rec_sp = (r.csp if mode == "cool" else r.hsp) if r is not None else None
         ref = float(rec_sp) if rec_sp is not None else float(np.mean(sp[w:, z]))
         dd = _degree_slots(t_out[w:], fit.balance_point_f, sp[w:, z], ref, mode)
-        run = np.clip(float(fit.slope_s_per_dd) * dd + float(fit.intercept_s) * rc.DT_H / 24.0, 0.0, rc.SLOT_S)
-        units[u] = [SimPoint(ts=s.ts(i), temp_f=float(sp[i, z]), runtime_s=round(float(run[i - w]), 1))
-                    for i in span]
+        run = np.clip(
+            float(fit.slope_s_per_dd) * dd + float(fit.intercept_s) * rc.DT_H / 24.0, 0.0, rc.SLOT_S
+        )
+        units[u] = [
+            SimPoint(ts=s.ts(i), temp_f=float(sp[i, z]), runtime_s=round(float(run[i - w]), 1)) for i in span
+        ]
         total += float(env.weights[z] * run.sum()) / 60.0
     missing = [u for u in ZONES if u not in have]
-    note = (f"Rule of thumb ({mode}ing baselines; no house model has passed its checks yet), {how}. Temperatures "
-            "shown are the setpoints the policy would hold, not predictions; runtime follows each unit's "
-            "degree-hours with the setpoint as a balance-point shift."
-            + (f" No baseline for {', '.join(missing)}." if missing else "") + attribution)
+    note = (
+        f"Rule of thumb ({mode}ing baselines; no house model has passed its checks yet), {how}. Temperatures "
+        "shown are the setpoints the policy would hold, not predictions; runtime follows each unit's "
+        "degree-hours with the setpoint as a balance-point shift."
+        + (f" No baseline for {', '.join(missing)}." if missing else "")
+        + attribution
+    )
     return _sim_out(day, "rule_of_thumb", units, round(total, 1), note)
