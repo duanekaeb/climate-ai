@@ -216,7 +216,8 @@ def test_runtime_daily_converts_to_minutes(owner, monkeypatch):
     def fake_rows(session, start, end, tz, unit_keys=None):
         return [
             daily.DayRow(day=d, unit_key="up", cool_s=3600, heat_s=0, aux_s=0, fan_s=4000, slots=288, mode="cool",
-                         outdoor_mean_f=81.04, outdoor_max_f=92.0, cdd65=16.0, hdd65=0.0, maxed_min=95.0),
+                         outdoor_mean_f=81.04, outdoor_max_f=92.0, cdd65=16.0, hdd65=0.0, maxed_min=95.0,
+                         hourly_outdoor_f=[81.0] * 24),  # a complete day: expectation shown
             daily.DayRow(day=d, unit_key="main", cool_s=1800, heat_s=0, aux_s=0, fan_s=1800, slots=288, mode=None,
                          outdoor_mean_f=81.0, outdoor_max_f=92.0),
         ]

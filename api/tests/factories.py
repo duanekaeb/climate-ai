@@ -25,10 +25,10 @@ COUPLING_S_PER_DEGF = 9.0  # extra upstairs seconds per 5-min slot per °F main 
 
 
 def outdoor_f(ts: datetime, base: float = 82.0, swing: float = 11.0) -> float:
-    """Diurnal sinusoid peaking at ~16:00 local-ish (UTC-5) plus a slow weekly wave."""
+    """Diurnal sinusoid peaking at ~16:00 local-ish (UTC-5) plus a slow 9.3-day wave (deliberately not 7 days, so weather never lines up with weekdays)."""
     hour = (ts.hour - 5) % 24 + ts.minute / 60
     day = ts.timetuple().tm_yday
-    return base + swing * math.sin((hour - 10) / 24 * 2 * math.pi) + 3.0 * math.sin(day / 7 * 2 * math.pi)
+    return base + swing * math.sin((hour - 10) / 24 * 2 * math.pi) + 3.0 * math.sin(day / 9.3 * 2 * math.pi)
 
 
 def make_history(session: Session, days: int = 30, end: datetime | None = None, seed: int = 1) -> dict:
@@ -40,10 +40,10 @@ def make_history(session: Session, days: int = 30, end: datetime | None = None, 
     t = start
     while t < end:
         weather.append(
-            dict(ts=t, source="open-meteo", kind="observed", temp_f=round(outdoor_f(t), 2), rh=55.0,
-                 dewpoint_f=62.0, cloud_cover=30.0,
-                 shortwave_wm2=max(0.0, 800 * math.sin(((t.hour - 5) % 24 - 6) / 12 * math.pi)), wind_mph=5.0,
-                 precip_in=0.0)
+            {"ts": t, "source": "open-meteo", "kind": "observed", "temp_f": round(outdoor_f(t), 2), "rh": 55.0,
+                 "dewpoint_f": 62.0, "cloud_cover": 30.0,
+                 "shortwave_wm2": max(0.0, 800 * math.sin(((t.hour - 5) % 24 - 6) / 12 * math.pi)), "wind_mph": 5.0,
+                 "precip_in": 0.0}
         )
         t += timedelta(hours=1)
 
@@ -62,10 +62,10 @@ def make_history(session: Session, days: int = 30, end: datetime | None = None, 
         bed_s = min(300, max(0, base * 0.8 + rng.normal(0, 10)))
         for unit, secs, zone, cool_sp in (("main", main_s, t_main, 76.0), ("up", up_s, t_up, 77.0), ("bed", bed_s, t_bed, 75.0)):
             runtime.append(
-                dict(ts=t, unit_key=unit, comp_cool1=int(secs), comp_cool2=int(secs * 0.2), fan=int(secs),
-                     hvac_mode="cool", climate_ref="home", zone_temp_f=round(zone, 2), zone_humidity=48.0,
-                     heat_sp_f=68.0, cool_sp_f=cool_sp, outdoor_temp_f=round(out, 2), outdoor_humidity=55.0,
-                     source="ecobee_report")
+                {"ts": t, "unit_key": unit, "comp_cool1": int(secs), "comp_cool2": int(secs * 0.2), "fan": int(secs),
+                     "hvac_mode": "cool", "climate_ref": "home", "zone_temp_f": round(zone, 2), "zone_humidity": 48.0,
+                     "heat_sp_f": 68.0, "cool_sp_f": cool_sp, "outdoor_temp_f": round(out, 2), "outdoor_humidity": 55.0,
+                     "source": "ecobee_report"}
             )
         for s in SENSORS:
             zone = {"main": t_main, "up": t_up, "bed": t_bed}[s.unit_key]
@@ -73,8 +73,8 @@ def make_history(session: Session, days: int = 30, end: datetime | None = None, 
             if s.has_occupancy:
                 occupied = bool(7 <= local_hour < 22 and not (s.unit_key == "main" and main_empty_afternoon))
             readings.append(
-                dict(ts=t, sensor_key=s.key, temp_f=round(zone + rng.normal(0, 0.3), 2),
-                     humidity=48.0 if s.has_humidity else None, occupied=occupied, source="ecobee_report")
+                {"ts": t, "sensor_key": s.key, "temp_f": round(zone + rng.normal(0, 0.3), 2),
+                     "humidity": 48.0 if s.has_humidity else None, "occupied": occupied, "source": "ecobee_report"}
             )
         t += timedelta(minutes=5)
 

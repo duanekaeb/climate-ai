@@ -353,3 +353,28 @@ def test_query_performance(db):
     assert t90 < 1.0, f"90 days took {t90:.2f}s"
     assert t365 < 1.0, f"a year took {t365:.2f}s"
     print(f"\ndaily_rows: 90 days {t90 * 1000:.0f} ms, 365 days {t365 * 1000:.0f} ms")
+
+
+def test_everything_degrades_gracefully_on_an_empty_database(db):
+    from climate.analytics.attribution import savings, waterfall
+    from climate.analytics.baseline import active_fits, baselines_out, daily_runtime, refit_all
+    from climate.analytics.coupling import coupling, natural_experiments
+    from climate.analytics.metrics import comfort, drift, unit_today
+    from climate.analytics.reports import build_daily_report
+    from climate.timeutil import utcnow
+
+    today = date(2026, 10, 4)
+    assert refit_all(db, utcnow()) == [] and active_fits(db) == {} and baselines_out(db) == []
+    assert daily_runtime(db, days=7) == []
+    s = savings(db, today - timedelta(days=13), today)
+    assert s.baseline_ok is False and s.savings_pct is None and s.n_days == 0
+    assert len(waterfall(db, today).items) == 2
+    c = coupling(db, days=30)
+    assert c.coef_min_per_degf is None and c.points == [] and "Not enough data" in c.interpretation
+    ne = natural_experiments(db, days=90)
+    assert ne.estimate_min_per_event is None and ne.events == []
+    assert all(r.occupied_min == 0 and r.in_band_pct is None for r in comfort(db, days=7))
+    assert drift(db).units == []
+    assert all(v["today_runtime_min"] == 0 for v in unit_today(db, utcnow(), TZ).values())
+    rid = build_daily_report(db, today)
+    assert build_daily_report(db, today) == rid

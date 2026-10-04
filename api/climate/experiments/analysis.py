@@ -136,13 +136,20 @@ def _house_day(
     actual = cool if mode == "cool" else heat
     expected = 0.0
     no_fit: list[str] = []
+    no_weather: list[str] = []
     for u in units:
         fit = fits.get((u, mode))
         if fit is None:
             no_fit.append(u)
             continue
-        expected += weights[u] * float(baseline_mod.expected_seconds(fit, rows[u]))
+        e = float(baseline_mod.expected_seconds(fit, rows[u]))
+        if not math.isfinite(e):  # no outdoor data that day: the baseline can't say anything
+            no_weather.append(u)
+            continue
+        expected += weights[u] * e
     notes: list[str] = []
+    if no_weather:
+        notes.append(f"no outdoor temperature data for {', '.join(no_weather)}")
     if thin:
         notes.append(f"under 90% of the day's data for {', '.join(thin)}")
     if mixed:
@@ -150,7 +157,7 @@ def _house_day(
     if no_fit:
         notes.append(f"no active {mode} baseline for {', '.join(no_fit)}")
     included = not notes
-    return HouseDay(d, actual, None if no_fit else expected, included, "; ".join(notes) or None)
+    return HouseDay(d, actual, None if (no_fit or no_weather) else expected, included, "; ".join(notes) or None)
 
 
 # ---------------------------------------------------------------------------------------

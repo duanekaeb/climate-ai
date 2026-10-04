@@ -7,7 +7,7 @@ Identity columns are mapped with ``Identity()`` so inserts let Postgres assign i
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlalchemy import (
     BigInteger,
@@ -28,8 +28,8 @@ TS = TIMESTAMP(timezone=True)
 
 
 class Base(DeclarativeBase):
-    __mapper_args__ = {"eager_defaults": True}
-    type_annotation_map = {dict[str, Any]: JSONB, list[Any]: JSONB, datetime: TS}
+    __mapper_args__: ClassVar[dict[str, Any]] = {"eager_defaults": True}
+    type_annotation_map: ClassVar[dict[Any, Any]] = {dict[str, Any]: JSONB, list[Any]: JSONB, datetime: TS}
 
 
 # --- house inventory -------------------------------------------------------------------

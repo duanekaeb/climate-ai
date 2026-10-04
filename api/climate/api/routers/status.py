@@ -9,6 +9,7 @@ room list) instead of failing the whole page. Rooms without a sensor never get a
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Annotated
@@ -437,10 +438,13 @@ def room_history(
 
 
 def _expected_min(fit: baseline.BaselineFit | None, row: daily.DayRow) -> float | None:
-    if fit is None:
+    """The weather-expected runtime for a COMPLETE day; None for today and other partial days
+    (a partial day's expectation depends on which hours are missing)."""
+    if fit is None or not daily.is_complete(row):
         return None
     try:
-        return _r(baseline.expected_seconds(fit, row) / 60.0)
+        e = baseline.expected_seconds(fit, row)
+        return None if not math.isfinite(e) else _r(e / 60.0)
     except Exception:
         log.warning("expected runtime failed for %s %s", row.unit_key, row.day, exc_info=True)
         return None

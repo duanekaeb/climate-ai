@@ -106,31 +106,31 @@ def _judge(
         if any(u not in units or not is_complete(units[u]) for u in p.units):
             p.skipped_days.append(d)
             continue
-        a_day = e_day = 0.0
-        usable = True
+        per_unit: dict[str, tuple[float, float]] = {}
+        left_out = 0.0
         for u in p.units:
-            r, w = units[u], weights.get(u, 1.0)
+            r = units[u]
             a_u = e_u = 0.0
             for m in MODES:
                 if (u, m) not in involved:
-                    p.left_out_s += mode_seconds(r, m)
+                    left_out += mode_seconds(r, m)
                     continue
                 a_u += mode_seconds(r, m)
                 fit = fits.get((u, m))
                 if fit is not None:
-                    e = expected_covered_seconds(fit, r)
-                    if math.isnan(e):
-                        usable = False
-                    e_u += e
-            if not usable:
-                break
+                    e_u += expected_covered_seconds(fit, r)
+            per_unit[u] = (a_u, e_u)
+        if any(math.isnan(e) for _, e in per_unit.values()):  # no outdoor data: can't judge the day
+            p.skipped_days.append(d)
+            continue
+        a_day = e_day = 0.0
+        for u, (a_u, e_u) in per_unit.items():
+            w = weights.get(u, 1.0)
             p.unit_actual[u] += a_u
             p.unit_expected[u] += e_u
             a_day += w * a_u
             e_day += w * e_u
-        if not usable:
-            p.skipped_days.append(d)
-            continue
+        p.left_out_s += left_out
         p.days.append(d)
         p.actual[d] = a_day
         p.expected[d] = e_day
