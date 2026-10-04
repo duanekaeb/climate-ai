@@ -6,6 +6,16 @@ notes describe: put_characteristics returns an entry for EVERY row (status 0 on 
 pairing objects echo writes optimistically to listeners, a paired device refuses pair-setup
 with UnavailableError, a wrong code raises AuthenticationError.
 
+Addresses mirror aiohomekit 4.0.1 (tests/test_homekit_dhcp.py checks the real library does
+this): a ``FakeDevice`` sits at ``address``:``port``; the controller holds what mDNS last told it
+(``known``, stale after a silent ``move``); a loaded pairing connects to the addresses of its
+mDNS description, or to the pairing data's ``AccessoryIP(s)`` / ``AccessoryPort`` before it has
+one; a description update redirects a pairing that is not connected and reconnects it at once
+(listeners get ``{}``), while a pairing still connected to an address the device left only
+fails when its next request times out. ``FakeMdns`` stands in for zeroconf: a browser signal
+fired on announcements / goodbyes, and ``async_send`` that records queries and lets devices that
+``answers`` announce themselves in reply.
+
 (This module holds helpers only; pytest collects no tests from it.)
 """
 
@@ -28,8 +38,11 @@ from aiohomekit.exceptions import (
     AuthenticationError,
     UnavailableError,
 )
+from zeroconf import ServiceStateChange
 
 from climate.sources.homekit import CHAR_TYPES, FORBIDDEN_WRITE_TYPES
+
+HAP_TCP = "_hap._tcp.local."
 
 HOME_TARGET_HEAT = "E4489BBC-5227-4569-93E5-B345E3E5508F"
 HOME_TARGET_COOL = "7D381BAA-20F9-40E5-9BE9-AEB92D4BECEF"
@@ -69,6 +82,8 @@ class FakeDevice:
         vendor_ev: bool = False,
         code: str = "123-45-678",
         status_flags: int = 1,
+        address: str = "192.168.1.50",
+        port: int = 51826,
     ) -> None:
         self.id = device_id
         self.name = name
@@ -76,7 +91,12 @@ class FakeDevice:
         self.code = code
         self.status_flags = status_flags
         self.paired = not (status_flags & 1)
-        self.visible = True
+        self.visible = True  # the controller has an mDNS record of it
+        self.address = address  # where the device is now (DHCP may move it)
+        self.port = port
+        self.config_num = 3
+        self.reachable = True  # accepts HAP connections at its address
+        self.answers = True  # answers mDNS queries
         self.suffix = suffix
         self.start_error: BaseException | None = None
         self.accessories: list[dict[str, Any]] = []
@@ -167,22 +187,33 @@ class FakeDevice:
         else:
             self.values[(aid, iid)] = value
 
+    @property
+    def service(self) -> str:
+        return f"{self.name}.{HAP_TCP}"
+
+    @property
+    def host(self) -> str:
+        return f"ecobee-{self.id.replace(':', '')}.local."
+
     def pairing_data(self) -> dict[str, Any]:
+        """What aiohomekit's finish_pairing returns: the keys plus the address of the moment."""
         return {
             "AccessoryPairingID": self.id.upper(),
             "AccessoryLTPK": "aa" * 32,
             "iOSPairingId": "11111111-2222-3333-4444-555555555555",
             "iOSDeviceLTSK": SECRET_LTSK,
             "iOSDeviceLTPK": "bb" * 32,
-            "AccessoryIP": "192.168.1.50",
-            "AccessoryIPs": ["192.168.1.50"],
-            "AccessoryPort": 51826,
+            "AccessoryIP": self.address,
+            "AccessoryIPs": [self.address],
+            "AccessoryPort": self.port,
             "Connection": "IP",
         }
 
     def description(self) -> SimpleNamespace:
-        return SimpleNamespace(id=self.id, name=self.name, model=self.model, category=9, address="192.168.1.50",
-                               port=51826, status_flags=self.status_flags, config_num=3)
+        """What an mDNS announcement of the device says right now (aiohomekit's HomeKitService)."""
+        return SimpleNamespace(id=self.id, name=self.name, model=self.model, category=9, address=self.address,
+                               addresses=[self.address], port=self.port, status_flags=self.status_flags,
+                               config_num=self.config_num, type=HAP_TCP)
 
 
 class FakePairing:
@@ -205,6 +236,44 @@ class FakePairing:
         self.closed = False
         self.shut_down = False
         self.temporary = False
+        self.description: SimpleNamespace | None = None  # set by the controller from mDNS
+        self.connected_host: str | None = None
+        self.connection = self  # aiohomekit: pairing.connection.connected_host
+        self.connects: list[tuple[list[str], int]] = []  # (hosts, port) of every connection attempt
+        self.timeouts = 0  # requests lost on a connection to an address the device had left
+
+    @property
+    def hosts(self) -> list[str]:
+        """aiohomekit: the mDNS description's addresses once there is one, else the pairing data's."""
+        if self.description is not None:
+            return list(self.description.addresses)
+        return list(self.pairing_data.get("AccessoryIPs") or [self.pairing_data["AccessoryIP"]])
+
+    @property
+    def port(self) -> int:
+        return int(self.description.port if self.description is not None else self.pairing_data["AccessoryPort"])
+
+    @property
+    def is_connected(self) -> bool:
+        return self.connected_host is not None
+
+    def _connect(self) -> bool:
+        hosts, port = self.hosts, self.port
+        self.connects.append((hosts, port))
+        dev = self.device
+        if dev.reachable and dev.address in hosts and dev.port == port:
+            self.connected_host = dev.address
+            return True
+        return False
+
+    def _async_description_update(self, description: SimpleNamespace) -> None:
+        """aiohomekit IpPairing: new mDNS data; reconnect_soon() when not connected, and
+        connection_made() tells the listeners with an empty event."""
+        self.description = description
+        if self.shut_down or self.is_connected:
+            return
+        if self._connect():
+            self.push({})
 
     async def _request(self, kind: str, payload: Any) -> None:
         self.calls.append((kind, payload))
@@ -216,6 +285,13 @@ class FakePairing:
                 raise self.fail_always
             if self.fail_next:
                 raise self.fail_next.pop(0)
+            dev = self.device
+            if self.connected_host is not None and (self.connected_host != dev.address or not dev.reachable):
+                self.connected_host = None  # the device left that address: the request times out
+                self.timeouts += 1
+                raise AccessoryDisconnectedError("Timeout while waiting for response")
+            if self.connected_host is None and not self._connect():
+                raise AccessoryDisconnectedError(f"Error while connecting to device {self.hosts}:{self.port}")
         finally:
             self.in_flight -= 1
 
@@ -290,6 +366,7 @@ class FakePairing:
             if self.device.on_temp_close is not None:
                 self.device.on_temp_close()
         self.closed = True
+        self.connected_host = None
 
     async def shutdown(self) -> None:
         self.shut_down = True
@@ -307,7 +384,7 @@ class FakeDiscovery:
     def __init__(self, controller: FakeController, device: FakeDevice) -> None:
         self.controller = controller
         self.device = device
-        self.description = device.description()
+        self.description = controller.description_of(device)
         self.closed = False
 
     async def async_start_pairing(self, alias: str) -> Callable[[str], Any]:
@@ -335,6 +412,68 @@ class FakeDiscovery:
         self.closed = True
 
 
+class FakeSignal:
+    """zeroconf's SignalRegistrationInterface + fire (handlers get keyword arguments)."""
+
+    def __init__(self) -> None:
+        self.handlers: list[Callable[..., None]] = []
+
+    def register_handler(self, handler: Callable[..., None]) -> FakeSignal:
+        self.handlers.append(handler)
+        return self
+
+    def unregister_handler(self, handler: Callable[..., None]) -> FakeSignal:
+        self.handlers.remove(handler)
+        return self
+
+    def fire(self, **kwargs: Any) -> None:
+        for h in self.handlers[:]:
+            h(**kwargs)
+
+
+class FakeMdns:
+    """Stands in for AsyncZeroconf (``.zeroconf`` is itself) and its HAP browser."""
+
+    def __init__(self, controller: FakeController) -> None:
+        self.controller = controller
+        self.zeroconf = self
+        self.cache = self
+        self.browser = SimpleNamespace(types=[HAP_TCP, "_hap._udp.local."], service_state_changed=FakeSignal(),
+                                       async_cancel=self._noop)
+        self.sent: list[list[tuple[str, int]]] = []  # questions (name, type) of every query sent
+        self.closed = False
+
+    @staticmethod
+    async def _noop() -> None:
+        return None
+
+    async def async_close(self) -> None:
+        self.closed = True
+
+    def get_by_details(self, name: str, type_: int, class_: int) -> SimpleNamespace | None:
+        """zeroconf DNSCache: the SRV record of a device the controller has heard of."""
+        for dev in self.controller.devices.values():
+            if type_ == 33 and class_ == 1 and dev.visible and name.lower() == dev.service.lower():
+                return SimpleNamespace(name=dev.service, server=dev.host)
+        return None
+
+    def async_send(self, out: Any, addr: str | None = None, port: int = 5353) -> None:
+        """A query goes out; every device it asks about that ``answers`` replies a moment later
+        (an announcement of where it is now)."""
+        assert out.is_query() and out.packets(), "must be a query zeroconf can encode"
+        questions = [(q.name, q.type) for q in out.questions]
+        self.sent.append(questions)
+        names = {n.lower() for n, _ in questions}
+        loop = asyncio.get_running_loop()
+        for dev in self.controller.devices.values():
+            if dev.answers and names & {dev.service.lower(), dev.host.lower(), HAP_TCP}:
+                loop.call_soon(self.controller.announce, dev)
+
+    def fire(self, dev: FakeDevice, change: ServiceStateChange) -> None:
+        self.browser.service_state_changed.fire(zeroconf=self, service_type=HAP_TCP, name=dev.service,
+                                                state_change=change)
+
+
 class FakeController:
     """Shaped like aiohomekit.Controller (top level, with the IP transport's dict folded in)."""
 
@@ -345,6 +484,47 @@ class FakeController:
         self.loaded: list[FakePairing] = []
         self.started = False
         self.stopped = False
+        self.known: dict[str, SimpleNamespace] = {}  # mDNS descriptions frozen by a silent move
+        self.mdns = FakeMdns(self)
+
+    def zeroconf(self) -> tuple[FakeMdns, Any]:
+        """For HomekitBridge(zeroconf_factory=...)."""
+        return self.mdns, self.mdns.browser
+
+    def description_of(self, dev: FakeDevice) -> SimpleNamespace:
+        """What the controller believes (aiohomekit's discovery): the last announcement heard."""
+        return self.known.get(dev.id) or dev.description()
+
+    def announce(self, dev: FakeDevice) -> None:
+        """The device announces itself and the browser hears it: the discovery and the loaded
+        pairing get the new description (aiohomekit), then the browser's handlers fire."""
+        dev.visible = True
+        desc = self.known[dev.id] = dev.description()
+        for pairing in list(self.aliases.values()):
+            if pairing.device is dev:
+                pairing._async_description_update(desc)
+        self.mdns.fire(dev, ServiceStateChange.Updated)
+
+    def move(self, dev: FakeDevice, address: str, *, port: int | None = None, announce: bool = True,
+             reboot: bool = True) -> None:
+        """DHCP gives the device a new address. ``reboot``: it dropped off the network to get it,
+        so connections to the old address are dead (refused). ``announce=False``: nobody hears
+        the announcement (lost multicast); the controller keeps the old description."""
+        self.known[dev.id] = self.description_of(dev)
+        dev.address = address
+        if port is not None:
+            dev.port = port
+        if reboot:
+            for pairing in self.aliases.values():
+                if pairing.device is dev:
+                    pairing.connected_host = None
+        if announce:
+            self.announce(dev)
+
+    def goodbye(self, dev: FakeDevice) -> None:
+        """The device's service goes away (goodbye, or its records expired). Like aiohomekit,
+        the controller keeps its discovery; only the browser reports the removal."""
+        self.mdns.fire(dev, ServiceStateChange.Removed)
 
     async def async_start(self) -> None:
         self.started = True
@@ -366,6 +546,8 @@ class FakeController:
     def load_pairing(self, alias: str, pairing_data: dict[str, Any]) -> FakePairing:
         dev = self.devices[str(pairing_data["AccessoryPairingID"]).lower()]
         pairing = FakePairing(self, dev, pairing_data)
+        if dev.visible:  # IpController.load_pairing applies the discovery it already has
+            pairing.description = self.description_of(dev)
         self.pairings[dev.id] = pairing
         self.aliases[alias] = pairing
         self.loaded.append(pairing)
@@ -395,6 +577,7 @@ __all__ = [
     "FakeController",
     "FakeDevice",
     "FakeDiscovery",
+    "FakeMdns",
     "FakePairing",
     "disconnected",
 ]

@@ -89,7 +89,9 @@ _AUTH_PATTERN = re.compile(
     r"authenticat|oauth|invalid (api )?key|not logged in|/login|setup-token|unauthori[sz]ed|token (has )?expired",
     re.IGNORECASE,
 )
-_SECRET_PATTERN = re.compile(r"sk-ant-[A-Za-z0-9_\-]{6,}")
+# Anthropic keys and Climate AI API tokens (``cai_<id hex>_<secret>``) are redacted wherever
+# they appear, even ones this process was not configured with.
+_SECRET_PATTERN = re.compile(r"sk-ant-[A-Za-z0-9_\-]{6,}|\bcai_[0-9a-fA-F]+_[A-Za-z0-9_\-]{8,}")
 
 
 class SubscriptionGuardError(RuntimeError):
@@ -150,6 +152,8 @@ def redact(text: str, env: Mapping[str, str] | None = None) -> str:
     out = _SECRET_PATTERN.sub("[redacted]", text)
     for name in (OAUTH_ENV_VAR, "CLIMATE_AGENT_TOKEN", "CLIMATE_MCP_TOKEN", *BILLING_ENV_VARS):
         secret = (env.get(name) or "").strip()
+        if secret[:7].lower() == "bearer ":
+            secret = secret[7:].strip()
         if len(secret) >= 8:
             out = out.replace(secret, "[redacted]")
     return out[:ERROR_TEXT_MAX]

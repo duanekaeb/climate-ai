@@ -1,10 +1,19 @@
 """Analytics on the factories' synthetic history (65°F balance point, known slope, known
 main->upstairs coupling). One history is built per module; tests that change data do it
 inside a savepoint and roll it back.
+
+The module is deterministic: the history ends at a fixed UTC midnight (``END``) and the clock
+the analytics read is pinned to it (``frozen_clock``), so every run fits the same 64 days with
+the same noise and the same windows, whatever the wall clock says. Built from
+``datetime.now()`` the alignment of the seeded noise with the weather wave, the weekdays and
+the local days moved with the hour of the run, and the bed wing's balance point (weakly
+identified: every hour of the factories' weather is at or above 68°F, so 65-68°F fit identically)
+came out 69°F on about one start time in eight.
 """
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -16,20 +25,51 @@ from tests.factories import BALANCE_F, COUPLING_S_PER_DEGF, SLOPE_S_PER_DD, make
 
 TZ = "America/Chicago"
 HISTORY_DAYS = 64
+# 19:00 CDT on Jul 29: "today" (Jul 29) is a partial local day and yesterday (Jul 28) the last
+# complete one; the history (May 26 - Jul 29 UTC) has no DST change in it.
+END = datetime(2026, 7, 30, tzinfo=UTC)
+NOW = END  # what climate.timeutil.utcnow() returns in this module
+
+
+@pytest.fixture(scope="module", autouse=True)
+def frozen_clock() -> Iterator[datetime]:
+    """Pin ``climate.timeutil.utcnow`` to NOW for this module: in timeutil itself and in every
+    loaded ``climate`` module that bound it by name (``from climate.timeutil import utcnow``,
+    as baseline, coupling and metrics do). Afterwards the real function goes back everywhere
+    the pinned one is found, including modules first imported while it was pinned."""
+    from climate import timeutil
+
+    real = timeutil.utcnow
+
+    def pinned() -> datetime:
+        return NOW
+
+    def swap(old, new) -> None:
+        for name, mod in list(sys.modules.items()):
+            if mod is None or not (name == "climate" or name.startswith("climate.")):
+                continue
+            for attr, value in list(vars(mod).items()):
+                if value is old:
+                    setattr(mod, attr, new)
+
+    swap(real, pinned)
+    try:
+        yield NOW
+    finally:
+        swap(pinned, real)
 
 
 @pytest.fixture(scope="module")
-def hist(database_url):
+def hist(database_url, frozen_clock):
     from climate.store.db import _factory
     from tests.conftest import reset_db
 
     reset_db()
     s = _factory()()
-    end = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     # 4-day chunks keep each insert under Postgres' 65,535 bind-parameter limit whatever
     # batch size make_history uses (SQLAlchemy binds every table column per row).
     for i in range(0, HISTORY_DAYS, 4):
-        make_history(s, days=4, end=end - timedelta(days=i), seed=i + 1)
+        make_history(s, days=4, end=END - timedelta(days=i), seed=i + 1)
     s.commit()
     try:
         yield s
@@ -90,8 +130,8 @@ def test_daily_rows_from_history(hist):
 def test_baseline_recovers_factory_balance_point_and_slope(hist):
     """The bed wing's runtime is pure weather in the factories (0.8 x the slope, no coupling,
     no weekday effect), so it is the clean recovery check. The other two units carry
-    weekday-only effects that the factories' exactly-weekly weather wave aliases with
-    temperature; they must still fit, and every fit keeps its residual stats."""
+    weekday-only effects that a 64-day history partly aliases with the factories' 9.3-day
+    weather wave; they must still fit, and every fit keeps its residual stats."""
     from climate.analytics.baseline import fit_window
 
     y = _yesterday()
@@ -305,7 +345,7 @@ def test_daily_runtime_and_unit_today_on_history(hist):
         refit_all(hist, utcnow())
         out = daily_runtime(hist, days=7)
     today = local_date(utcnow(), TZ)
-    assert len(out) in (18, 21)  # today is present unless the history ends before its first slot
+    assert len(out) == 21  # 7 days x 3 units; today (19:00 local at NOW) is present, partial
     for r in out:
         if r.date == today:
             assert r.expected_min is None  # partial day: no expectation

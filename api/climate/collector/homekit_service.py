@@ -1,6 +1,9 @@
 """Entry point of the host-networked HomeKit service: ``python -m climate.collector.homekit_service``.
 
-Loops: mDNS discovery -> homekit_devices; the pairing handshake driven by the web UI
+Loops: mDNS discovery -> homekit_devices (every minute and within seconds of any mDNS change:
+a thermostat's address follows DHCP, its HAP device id is its identity; a pairing still
+connected to an address its thermostat left is reconnected at the new one, and one that keeps
+failing makes the bridge ask mDNS where its device id is now); the pairing handshake driven by the web UI
 (pairing_state requested -> start pair-setup -> awaiting_code; code_submitted -> finish ->
 save pairing encrypted -> paired; unpair_requested -> remove pairing); for each pairing:
 populate accessories, map aids to sensors (by name), subscribe 'ev' characteristics, poll
@@ -137,12 +140,17 @@ class DeviceRow:
     pairing_state: str
     pairing_code: str | None
     pairing_error: str | None
+    # where mDNS last reported the device (display, and a hint for loading its pairing; the
+    # bridge prefers the live mDNS record)
+    address: str | None = None
+    port: int | None = None
 
 
 def load_device_rows(session: Session) -> list[DeviceRow]:
     rows = session.execute(select(HomekitDevice).order_by(HomekitDevice.device_id)).scalars()
     return [
-        DeviceRow(d.device_id, d.name, d.alias, d.unit_key, d.pairing_state, d.pairing_code, d.pairing_error)
+        DeviceRow(d.device_id, d.name, d.alias, d.unit_key, d.pairing_state, d.pairing_code, d.pairing_error,
+                  d.address, d.port)
         for d in rows
     ]
 
@@ -187,7 +195,12 @@ def set_pairing_error(session: Session, device_id: str, error: str | None) -> bo
 def upsert_discovered(
     session: Session, devices: list[DiscoveredDevice], loaded_device_ids: set[str], now: datetime
 ) -> bool:
-    """Upsert what mDNS shows. ``online`` of a loaded pairing is owned by its polls."""
+    """Upsert what mDNS shows: name, model, the address / port the device announced last (DHCP
+    may change them; the device id is its identity), status flags and config number, and
+    ``last_seen_at``. Runs every ``discover_seconds`` and within seconds of any mDNS change, so
+    Setup shows where each thermostat is now. These columns are display only: connections
+    always follow the live mDNS record. ``online`` of a loaded pairing is owned by its polls;
+    another device not shown any more (it said goodbye, or its records expired) goes offline."""
     existing = {d.device_id: d for d in session.execute(select(HomekitDevice)).scalars()}
     changed = False
     seen: set[str] = set()
@@ -943,7 +956,9 @@ class HomekitService:
         now = self.clock()
         self._errors = {}
         await self._guard("pairing", self.process_pairing)
-        if self._next_discover is None or now >= self._next_discover:
+        # every discover_s, and promptly after any mDNS change (a new address, port or config)
+        mdns_changed = self.bridge.discovery_due()
+        if self._next_discover is None or now >= self._next_discover or mdns_changed:
             self._next_discover = now + timedelta(seconds=self.discover_s)
             await self._guard("discovery", self.sync_discovery)
         await self._guard("reconcile", self.reconcile)
@@ -971,9 +986,15 @@ class HomekitService:
     # --- discovery --------------------------------------------------------------------
 
     async def sync_discovery(self) -> None:
+        """Store what mDNS shows now (``upsert_discovered``). A pairing still connected to an
+        address its thermostat has left (``bridge.is_moved``) is polled at once: ``poll_due``
+        replaces its connection with one to the new address."""
         devices = await self.bridge.discover()
         loaded = {self.bridge.device_id(a) for a in self.bridge.aliases()}
         await self._db(upsert_discovered, devices, loaded, self.clock())
+        for st in self._states.values():
+            if self.bridge.is_moved(st.alias):
+                st.next_poll = None
 
     # --- pairing handshake ------------------------------------------------------------
 
@@ -1063,7 +1084,7 @@ class HomekitService:
                                "consider itself paired: choose Disconnect from HomeKit on it before pairing again.")
                 return
             if data is not None:
-                await self.bridge.load(alias, data)
+                await self.bridge.load(alias, data, address=r.address, port=r.port)
         if alias and self.bridge.is_loaded(alias):
             try:
                 await self.bridge.remove(alias)
@@ -1102,7 +1123,9 @@ class HomekitService:
             if data is None:
                 await self._db(set_pairing_state, r.device_id, "failed", expect=["paired"], error=KEYS_MISSING_MSG)
                 return
-            await self.bridge.load(alias, data)
+            # the bridge looks the device id up in the live mDNS browser first; the stored
+            # address (last mDNS sighting) is only the fallback hint
+            await self.bridge.load(alias, data, address=r.address, port=r.port)
             self._states[alias] = _AliasState(alias, r.device_id, r.unit_key)
         st = self._states.get(alias)
         if st is None or st.device_id != r.device_id:
@@ -1113,6 +1136,10 @@ class HomekitService:
         if self.bridge.take_config_changed(alias):
             log.info("homekit %r: accessory configuration changed; re-reading the inventory", alias)
             st.ready = False
+        if not st.ready and alias in self._reconnected:
+            # (re)connected after the inventory failed (e.g. it was found at a new address)
+            self._reconnected.discard(alias)
+            st.next_inventory = None
         if not st.ready and (st.next_inventory is None or now >= st.next_inventory):
             await self._prepare(st, now)
 
@@ -1150,8 +1177,11 @@ class HomekitService:
             return
         for st in due:
             self._reconnected.discard(st.alias)
-            if self.bridge.needs_recreate(st.alias):
-                await self.bridge.recreate(st.alias)
+            moved = self.bridge.take_moved(st.alias)
+            if moved or self.bridge.needs_recreate(st.alias):
+                address, port = self.bridge.endpoint(st.alias)
+                await self.bridge.recreate(
+                    st.alias, f"to follow it to {address}:{port}" if moved else "to restore push events")
                 with contextlib.suppress(HomekitError):
                     await self.bridge.subscribe(st.alias)
         results = await asyncio.gather(*(self.bridge.read(st.alias) for st in due), return_exceptions=True)

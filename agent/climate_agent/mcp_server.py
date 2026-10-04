@@ -2,13 +2,21 @@
 Claude Desktop, served with the mcp package's MCPServer (FastMCP, renamed in mcp 2.x).
 
 Same toolkit as the agent service: read, compute and gated tools over the API, none of which
-can reach a thermostat. It authenticates to the API with ``CLIMATE_MCP_TOKEN`` (falls back to
-``CLIMATE_AGENT_TOKEN``), which gives it the API's agent role.
+can reach a thermostat. Two tokens, two jobs:
+
+- **Outbound, to the API:** ``CLIMATE_AGENT_TOKEN`` (falls back to ``CLIMATE_MCP_TOKEN``):
+  any token the API accepts with the agent role, i.e. a ``cai_...`` agent token made in the
+  app (More → Security → API tokens) or the legacy env token. Its format is never inspected.
+- **Inbound, from MCP clients** (``--http`` only): ``CLIMATE_MCP_TOKEN`` (falls back to the
+  API token). Every request must carry ``Authorization: Bearer <it>``. A client holding the
+  API token could call the API directly with the same rights, so this grants nothing extra.
+
+Local only: the HTTP transport answers 403 to any client that is not on this machine, the LAN,
+Docker's networks or Tailscale (private, loopback, link-local and 100.64.0.0/10 addresses);
+it is never put behind the public gateway. stdio has no listener at all.
 
 - stdio (default): for ``claude mcp add house -- python -m climate_agent.mcp_server``.
-- ``--http HOST:PORT``: streamable HTTP at ``/mcp``. Every request must carry
-  ``Authorization: Bearer <the same token>``; anyone holding it could call the API directly
-  with the same rights, so this grants nothing extra.
+- ``--http HOST:PORT``: streamable HTTP at ``/mcp``.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ import argparse
 import asyncio
 import hmac
 import inspect
+import ipaddress
 import logging
 import os
 import sys
@@ -28,7 +37,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from climate_agent import __version__
-from climate_agent.api import ApiClient
+from climate_agent.api import AGENT_TOKEN_ENV, ApiClient, normalize_token
 from climate_agent.config import DEFAULT_API_URL
 from climate_agent.toolkit import TOOLS, Toolkit, ToolSpec, tool_parameters
 
@@ -83,8 +92,40 @@ def build_server(toolkit: Toolkit) -> MCPServer:
     return server
 
 
+MCP_TOKEN_ENV = "CLIMATE_MCP_TOKEN"
+_TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_local_client(host: str | None) -> bool:
+    """A client on this machine, the LAN, a Docker network or Tailscale. No address (a Unix
+    socket, or an in-process test) counts as local."""
+    if not host:
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip("[]").split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_private or ip.is_loopback or ip.is_link_local or (ip.version == 4 and ip in _TAILSCALE)
+
+
+async def _send_json(send: Send, status: int, body: bytes, extra: list[tuple[bytes, bytes]] | None = None) -> None:
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+            *(extra or []),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
 class BearerAuth:
-    """ASGI middleware: HTTP requests need ``Authorization: Bearer <token>``."""
+    """ASGI middleware: HTTP requests must come from a local address (``is_local_client``)
+    and carry ``Authorization: Bearer <token>`` (constant-time compared)."""
 
     def __init__(self, app: ASGIApp, token: str):
         if not token:
@@ -102,19 +143,22 @@ class BearerAuth:
         return False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope.get("type") == "http" and not self._authorized(scope):
-            body = b'{"detail":"Bearer token required."}'
-            await send({
-                "type": "http.response.start",
-                "status": 401,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"www-authenticate", b"Bearer"),
-                    (b"content-length", str(len(body)).encode()),
-                ],
-            })
-            await send({"type": "http.response.body", "body": body})
-            return
+        if scope.get("type") in ("http", "websocket"):
+            client = scope.get("client")
+            if not is_local_client(client[0] if client else None):
+                if scope["type"] == "http":
+                    await _send_json(
+                        send, 403,
+                        b'{"detail":"The MCP server only answers this machine, the home network and Tailscale."}',
+                    )
+                return
+            if scope["type"] == "http" and not self._authorized(scope):
+                await _send_json(
+                    send, 401,
+                    b'{"detail":"Bearer token required (CLIMATE_MCP_TOKEN on the MCP server)."}',
+                    [(b"www-authenticate", b"Bearer")],
+                )
+                return
         await self.app(scope, receive, send)
 
 
@@ -125,15 +169,36 @@ def parse_hostport(value: str) -> tuple[str, int]:
     return host.strip("[]"), int(port)
 
 
+def _env_token(env: Mapping[str, str], name: str) -> str:
+    return normalize_token(env.get(name) or "")
+
+
+def api_token_source(env: Mapping[str, str]) -> tuple[str, str]:
+    """``(variable name, token)`` the tools call the API with: ``CLIMATE_AGENT_TOKEN``, else
+    ``CLIMATE_MCP_TOKEN`` (a legacy MCP token the API also accepts). ``("", "")`` when unset."""
+    for name in (AGENT_TOKEN_ENV, MCP_TOKEN_ENV):
+        token = _env_token(env, name)
+        if token:
+            return name, token
+    return "", ""
+
+
 def api_token(env: Mapping[str, str]) -> str:
-    return (env.get("CLIMATE_MCP_TOKEN") or "").strip() or (env.get("CLIMATE_AGENT_TOKEN") or "").strip()
+    """The token the tools send to the API (see ``api_token_source``)."""
+    return api_token_source(env)[1]
+
+
+def inbound_token(env: Mapping[str, str]) -> str:
+    """The bearer token MCP clients must present over HTTP: ``CLIMATE_MCP_TOKEN``, else the
+    API token."""
+    return _env_token(env, MCP_TOKEN_ENV) or api_token(env)
 
 
 def build_http_app(server: MCPServer, host: str, token: str) -> BearerAuth:
     return BearerAuth(server.streamable_http_app(host=host, streamable_http_path="/mcp"), token)
 
 
-async def _serve(server: MCPServer, api: ApiClient, http: tuple[str, int] | None, token: str) -> None:
+async def _serve(server: MCPServer, api: ApiClient, http: tuple[str, int] | None, client_token: str) -> None:
     try:
         if http is None:
             await server.run_stdio_async()
@@ -141,8 +206,11 @@ async def _serve(server: MCPServer, api: ApiClient, http: tuple[str, int] | None
         import uvicorn
 
         host, port = http
-        config = uvicorn.Config(build_http_app(server, host, token), host=host, port=port, log_level="info")
-        log.info("serving MCP over streamable HTTP at http://%s:%d/mcp (bearer token required)", host, port)
+        config = uvicorn.Config(build_http_app(server, host, client_token), host=host, port=port, log_level="info")
+        log.info(
+            "serving MCP over streamable HTTP at http://%s:%d/mcp (local clients only, bearer token required)",
+            host, port,
+        )
         await uvicorn.Server(config).serve()
     finally:
         await api.aclose()
@@ -155,13 +223,22 @@ def main(argv: list[str] | None = None) -> int:
     # stdio carries the protocol on stdout: logs go to stderr only.
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    token = api_token(os.environ)
-    if not token:
-        log.error("set CLIMATE_MCP_TOKEN (or CLIMATE_AGENT_TOKEN) so the tools can reach the API")
+    try:
+        token_name, token = api_token_source(os.environ)
+        client_token = inbound_token(os.environ)
+    except ValueError as exc:
+        log.error("bad token: %s", exc)
         return 2
-    api = ApiClient(os.environ.get("CLIMATE_API_URL") or DEFAULT_API_URL, token)
+    if not token:
+        log.error(
+            "set CLIMATE_AGENT_TOKEN (or CLIMATE_MCP_TOKEN) so the tools can reach the API: create an agent token "
+            "in More → Security → API tokens, or use the one scripts/bootstrap.sh put in .env"
+        )
+        return 2
+    api = ApiClient(os.environ.get("CLIMATE_API_URL") or DEFAULT_API_URL, token, token_name=token_name)
+    log.info("calling the API at %s with the token in %s", api.base_url, token_name)
     server = build_server(Toolkit(api))
-    asyncio.run(_serve(server, api, args.http, token))
+    asyncio.run(_serve(server, api, args.http, client_token))
     return 0
 
 

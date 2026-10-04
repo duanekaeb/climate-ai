@@ -6,8 +6,8 @@ the same web app a browser gets.
 
 **You may not need it.** The web app is a PWA: open it in Safari, tap Share → **Add to Home
 Screen**, and you get a full-screen app icon without Xcode or a developer account. Build this
-wrapper if you prefer a real app (it keeps its own session cookie, has pull to refresh, and
-opens outside links in Safari).
+wrapper if you prefer a real app (it keeps its own sign-in, has pull to refresh, and opens
+outside links in Safari).
 
 ## Build
 
@@ -32,11 +32,19 @@ generated `.xcodeproj` is not meant to be edited by hand or committed).
 ## Use
 
 - **First run** asks for the server address: the same URL you use in a browser, e.g.
-  `https://climate.example.home` (behind your nginx) or `http://192.168.1.20:8470` (directly on
-  the LAN, if you set `APP_BIND=0.0.0.0` and `CLIMATE_COOKIE_SECURE=false`). **Test and save**
-  calls `GET /api/health` and saves the address when the server answers.
+  `https://climate.example.com` (your public HTTPS name through your gateway, see
+  `docs/PUBLIC_ACCESS.md`), `https://climate.example.home` (behind your nginx at home) or
+  `http://192.168.1.20:8470` (directly on the LAN, if you set `APP_BIND=0.0.0.0` and
+  `CLIMATE_COOKIE_SECURE=false`; WebKit drops a `Secure` cookie over plain http, so sign-in
+  would not stick). **Test and save** calls `GET /api/health` and saves the address when the
+  server answers.
 - iOS asks once for **Local Network** access: allow it, or the app cannot reach the server.
-- Sign in with the owner password; the session cookie is kept between launches.
+- Sign in with the owner password (there is one login; no user accounts). The app itself
+  stores nothing but the server URL: the web app keeps its short-lived bearer token in memory
+  and, on each launch, gets a new one from the HttpOnly refresh cookie (`Path=/api/auth`) that
+  WebKit keeps in the app's persistent website data. You stay signed in until you sign out,
+  sign this phone out from More → Security → signed-in devices, change the password, or the
+  sign-in lapses (by default 30 days unused, 90 days at most).
 - **Pull down** to reload, **swipe from the edge** to go back/forward.
 - **Shake the phone** to change the server address. If the server can't be reached, the app
   shows a screen with *Try again* and *Server settings*.
@@ -44,11 +52,13 @@ generated `.xcodeproj` is not meant to be edited by hand or committed).
 
 ## Notes
 
-- Plain `http://` is only allowed to local addresses (IP addresses, `*.local` and single-label
-  host names) via `NSAllowsLocalNetworking`; anything else must be `https://`. Over Tailscale use
-  the HTTPS name your nginx (or `tailscale serve`) provides.
+- Away from home: the public HTTPS name on your gateway (protected by the owner password and
+  real bearer tokens), or Tailscale. Plain `http://` is only allowed to local addresses (IP
+  addresses, `*.local` and single-label host names) via `NSAllowsLocalNetworking`, so use it
+  on your home network only; anything else must be `https://`. Over Tailscale use the HTTPS
+  name your nginx (or `tailscale serve`) provides.
 - The web view uses the persistent `WKWebsiteDataStore.default()`. Signing out in the web app
-  clears the session; deleting the app clears everything.
+  ends this phone's sign-in and clears the refresh cookie; deleting the app clears everything.
 - Service workers are not available inside a third-party WKWebView, so the wrapper has no
   offline cache; it always shows live data.
 - In Debug builds the web view is inspectable from Safari's Develop menu on a Mac.
@@ -59,7 +69,7 @@ generated `.xcodeproj` is not meant to be edited by hand or committed).
 |---|---|
 | `project.yml` | XcodeGen spec (iOS 17, iPhone + iPad, portrait + landscape) |
 | `ClimateAI/ClimateAIApp.swift` | App entry, first-run routing, shake-to-settings |
-| `ClimateAI/WebView.swift` | The WKWebView: cookies, gestures, pull to refresh, external links, JS dialogs, offline screen |
+| `ClimateAI/WebView.swift` | The WKWebView: persistent sign-in cookie, gestures, pull to refresh, external links, JS dialogs, offline screen |
 | `ClimateAI/SettingsView.swift` | Server URL (UserDefaults), health check |
 | `ClimateAI/Info.plist` | ATS local networking, local-network prompt text, orientations |
 | `ClimateAI/Assets.xcassets` | App icon (the web app's thermometer) |

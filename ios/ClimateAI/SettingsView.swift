@@ -115,7 +115,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Server")
                 } footer: {
-                    Text("The address you open Climate AI at in a browser, e.g. https://climate.example.home behind your nginx, or http://<server-ip>:8470 on your home network.")
+                    Text("The address you open Climate AI at in a browser: your HTTPS name through your gateway (e.g. https://climate.example.com), or http://<server-ip>:8470 on your home network.")
                 }
 
                 Section {
@@ -142,7 +142,8 @@ struct SettingsView: View {
                 Section {
                     Label("Shake your phone to come back here.", systemImage: "iphone.radiowaves.left.and.right")
                     Label("If iOS asks for Local Network access, allow it, then test again.", systemImage: "network")
-                    Label("Away from home, use Tailscale. Don't expose the server to the internet.", systemImage: "lock.shield")
+                    Label("Away from home, use your gateway's HTTPS name (your owner password protects it) or Tailscale. Plain http:// is for your home network only.", systemImage: "lock.shield")
+                    Label("You stay signed in between launches; sign this phone out in More → Security.", systemImage: "key")
                 } header: {
                     Text("Tips")
                 }

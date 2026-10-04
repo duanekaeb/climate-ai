@@ -1,19 +1,26 @@
 /* Generated from api/climate/api/schemas.py by web/scripts/gen-types.mjs. Do not edit by hand. */
 
 export interface ApiTypes {
+  AccessTokenOut?: AccessTokenOut
   AgentFinishBody?: AgentFinishBody
   AgentHeartbeatBody?: AgentHeartbeatBody
   AgentInfo?: AgentInfo
   AgentRunOut?: AgentRunOut
   AgentSettings?: AgentSettings
   AlertOut?: AlertOut
+  ApiTokenCreateBody?: ApiTokenCreateBody
+  ApiTokenCreated?: ApiTokenCreated
+  ApiTokenOut?: ApiTokenOut
   ArmIn?: ArmIn
   AskBody?: AskBody
+  AuditEventOut?: AuditEventOut
+  AuthErrorDetail?: AuthErrorDetail
   AuthState?: AuthState
   BacktestBody?: BacktestBody
   BacktestOut?: BacktestOut
   BaselineOut?: BaselineOut
   ChangeOut?: ChangeOut
+  ChangePasswordBody?: ChangePasswordBody
   Checkpoint?: Checkpoint
   ComfortBand?: ComfortBand
   ComfortRow?: ComfortRow
@@ -58,13 +65,13 @@ export interface ApiTypes {
   LocationSettings?: LocationSettings
   LoginBody?: LoginBody
   ManualHoldBody?: ManualHoldBody
+  MeOut?: MeOut
   ModeBody?: ModeBody
   ModelFitOut?: ModelFitOut
   NaturalEvent?: NaturalEvent
   NaturalExperiments?: NaturalExperiments
   OccupancySettings?: OccupancySettings
   OutdoorPoint?: OutdoorPoint
-  PasswordBody?: PasswordBody
   PersonHold?: PersonHold
   PlanOut?: PlanOut
   PlanRow?: PlanRow
@@ -74,6 +81,7 @@ export interface ApiTypes {
   ProposeExperimentBody?: ProposeExperimentBody
   ProposePolicyBody?: ProposePolicyBody
   PublishReportBody?: PublishReportBody
+  ReauthBody?: ReauthBody
   ReportOut?: ReportOut
   RoomHistory?: RoomHistory
   RoomOut?: RoomOut
@@ -86,9 +94,11 @@ export interface ApiTypes {
   Schedule?: Schedule
   SensorMapBody?: SensorMapBody
   SensorOut?: SensorOut
+  SessionOut?: SessionOut
   SetpointPoint?: SetpointPoint
   SettingsOut?: SettingsOut
   SettingsUpdate?: SettingsUpdate
+  SetupBody?: SetupBody
   SetupState?: SetupState
   SimPoint?: SimPoint
   SimulateBody?: SimulateBody
@@ -113,6 +123,21 @@ export interface ApiTypes {
   WeatherOut?: WeatherOut
   WeatherPoint?: WeatherPoint
   WsEvent?: WsEvent
+  WsTicketOut?: WsTicketOut
+}
+/**
+ * Setup / login / refresh result. The access token is a 15-minute signed bearer token the
+ * web app keeps in memory (never stored); the refresh token travels only as the HttpOnly
+ * ``climate_refresh`` cookie (Path=/api/auth) and rotates on every refresh.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "AccessTokenOut".
+ */
+export interface AccessTokenOut {
+  access_token: string
+  expires_in: number
+  session_id: number
+  token_type: 'bearer'
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -210,6 +235,49 @@ export interface AlertOut {
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "ApiTokenCreateBody".
+ */
+export interface ApiTokenCreateBody {
+  expires_in_days?: number | null
+  local_only?: boolean
+  name: string
+  role?: 'agent' | 'viewer' | 'control'
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "ApiTokenCreated".
+ */
+export interface ApiTokenCreated {
+  created_at: string
+  expires_at: string | null
+  id: number
+  last_used_at: string | null
+  last_used_ip: string | null
+  local_only: boolean
+  name: string
+  revoked_at: string | null
+  role: 'agent' | 'viewer' | 'control'
+  token: string
+  token_hint: string
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "ApiTokenOut".
+ */
+export interface ApiTokenOut {
+  created_at: string
+  expires_at: string | null
+  id: number
+  last_used_at: string | null
+  last_used_ip: string | null
+  local_only: boolean
+  name: string
+  revoked_at: string | null
+  role: 'agent' | 'viewer' | 'control'
+  token_hint: string
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "ArmIn".
  */
 export interface ArmIn {
@@ -228,12 +296,46 @@ export interface AskBody {
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "AuditEventOut".
+ */
+export interface AuditEventOut {
+  actor_label: string
+  actor_type: 'owner' | 'api_token' | 'system'
+  event_type: string
+  id: number
+  ip: string | null
+  payload: {
+    [k: string]: unknown
+  }
+  target_id: string | null
+  target_type: string | null
+  ts: string
+}
+/**
+ * ``detail`` of a 401/403/429/503 from the auth layer, so clients react precisely:
+ * TOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to the
+ * sign-in page), REAUTHENTICATION_REQUIRED (ask for the password, then replay),
+ * INVALID_CREDENTIALS, LOGIN_PAUSED, FORBIDDEN, SETUP_NOT_ALLOWED, AUTH_NOT_CONFIGURED.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "AuthErrorDetail".
+ */
+export interface AuthErrorDetail {
+  code: string
+  message: string
+}
+/**
+ * GET /api/auth/state (public). ``password_set`` False = first run: show "choose a
+ * password", which only works from a private address unless allowed (``setup_allowed``).
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "AuthState".
  */
 export interface AuthState {
   authenticated: boolean
   password_set: boolean
-  role: ('owner' | 'agent') | null
+  role: ('owner' | 'agent' | 'viewer' | 'control') | null
+  setup_allowed: boolean
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -305,6 +407,14 @@ export interface ChangeOut {
   title: string
   trial_end: string | null
   trial_start: string | null
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "ChangePasswordBody".
+ */
+export interface ChangePasswordBody {
+  current_password: string
+  new_password: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1077,12 +1187,13 @@ export interface LocationSettings {
   zip: string | null
 }
 /**
- * Signing in. No minimum here: CLIMATE_OWNER_PASSWORD may predate the 8-character rule.
+ * Signing in. No minimum here: an existing password may predate the length rule.
  *
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "LoginBody".
  */
 export interface LoginBody {
+  device_name?: string
   password: string
 }
 /**
@@ -1094,6 +1205,17 @@ export interface ManualHoldBody {
   heat_f: number
   hours?: number
   unit_key: string
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "MeOut".
+ */
+export interface MeOut {
+  recently_authenticated: boolean
+  role: 'owner' | 'agent' | 'viewer' | 'control'
+  session_id: number | null
+  token_id: number | null
+  token_name: string | null
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1170,15 +1292,6 @@ export interface SleepWindow {
   days: number[]
   end: string
   start: string
-}
-/**
- * Choosing a password (first-run setup).
- *
- * This interface was referenced by `ApiTypes`'s JSON-Schema
- * via the `definition` "PasswordBody".
- */
-export interface PasswordBody {
-  password: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1262,6 +1375,13 @@ export interface PublishReportBody {
   period_end?: string | null
   period_start?: string | null
   title: string
+}
+/**
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "ReauthBody".
+ */
+export interface ReauthBody {
+  password: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1395,6 +1515,22 @@ export interface SensorOut {
   unit_key: string
 }
 /**
+ * A signed-in device.
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "SessionOut".
+ */
+export interface SessionOut {
+  created_at: string
+  current: boolean
+  device_name: string
+  expires_at: string
+  id: number
+  ip: string | null
+  last_seen_at: string
+  user_agent: string
+}
+/**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
  * via the `definition` "SettingsOut".
  */
@@ -1449,6 +1585,16 @@ export interface SettingsUpdate {
   location?: LocationSettings | null
   occupancy?: OccupancySettings | null
   utility_events?: UtilityEventSettings | null
+}
+/**
+ * First run: choose the owner password (only while none is set).
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "SetupBody".
+ */
+export interface SetupBody {
+  device_name?: string
+  password: string
 }
 /**
  * This interface was referenced by `ApiTypes`'s JSON-Schema
@@ -1592,4 +1738,15 @@ export interface WeatherPoint {
 export interface WsEvent {
   id: number | null
   type: 'status' | 'action' | 'agent_run' | 'alert' | 'homekit' | 'change' | 'report' | 'ping'
+}
+/**
+ * POST /api/auth/ws-ticket: a single-use ticket for /api/ws?ticket=… (browsers cannot set
+ * a bearer header on a WebSocket).
+ *
+ * This interface was referenced by `ApiTypes`'s JSON-Schema
+ * via the `definition` "WsTicketOut".
+ */
+export interface WsTicketOut {
+  expires_in: number
+  ticket: string
 }

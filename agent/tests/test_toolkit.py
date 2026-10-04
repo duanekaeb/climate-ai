@@ -147,6 +147,19 @@ def test_gated_403_comes_back_as_tool_error(make_api):
     res = call(api, "sign_off_change", {"change_id": 8, "decision": "approve", "reason": "looks fine"})
     assert res.is_error
     assert "Refused (403)" in res.text and "outside sign-off range" in res.text
+    assert "leave it for the owner" in res.text and "API tokens" not in res.text  # not a token problem
+
+
+def test_refused_token_tells_the_owner_how_to_fix_it(make_api):
+    revoked = httpx.Response(401, json={"detail": {"code": "NOT_AUTHENTICATED", "message": "This API token has been revoked."}})
+    wrong_role = httpx.Response(403, json={"detail": {"code": "FORBIDDEN", "message": "Only the agent can do this."}})
+    api, _ = make_api({("GET", "/api/analytics/savings"): revoked, ("POST", "/api/changes/8/decision"): wrong_role})
+    res = call(api, "savings_report")
+    assert res.is_error and "401" in res.text and "This API token has been revoked." in res.text
+    assert "More → Security → API tokens" in res.text and "scripts/bootstrap.sh put in .env as CLIMATE_AGENT_TOKEN" in res.text
+    api, _ = make_api({("POST", "/api/changes/8/decision"): wrong_role})
+    res = call(api, "sign_off_change", {"change_id": 8, "decision": "approve", "reason": "looks fine"})
+    assert res.is_error and "Refused (403)" in res.text and "agent role" in res.text and "More → Security" in res.text
 
 
 def test_gated_422_and_500_and_unreachable(make_api):

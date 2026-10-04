@@ -8,9 +8,18 @@ hand-back is a ``jobs`` row the worker runs (``controller.hand_back``). Nothing 
 process talks to a thermostat.
 
 This module also holds the few helpers the other routers share (``safe``, ``unprocessable``,
-``actor_for``, ``house_tz``, ``active_policy``, ``controller_info``, ``job_out`` and the
-settings checks), so the import direction stays one-way: other routers import from here,
+``actor_for``, ``house_tz``, ``active_policy``, ``controller_info``, ``job_out``, the
+settings checks and the control-token attribution ``token_ref`` / ``by_caller`` /
+``audit_token``), so the import direction stays one-way: other routers import from here,
 never the reverse.
+
+A control token acts with the owner's everyday controls but is recorded as itself: its
+holds, resumes and presence changes carry ``request["by_token"] = {"id", "name"}`` and a
+reason that starts ``Control token "<name>":``, and each one writes an audit row
+(``control.hold`` / ``control.resume`` / ``control.automatic`` / ``control.presence``).
+Settings read by a viewer or control token leave out the house's coordinates and the
+household's schedule (``settings_out(full=False)``). The owner and the agent (which reasons
+about sleep windows and presence) see them in full.
 """
 
 from __future__ import annotations
@@ -21,14 +30,14 @@ from datetime import datetime
 from typing import Annotated, Literal, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi import status as http
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from climate import events
-from climate.api.auth import OwnerDep, ReaderDep, Role, WriterDep
+from climate import auth_service, events
+from climate.api.auth import ControlCallerDep, OwnerDep, Principal, ReaderDep, Role, WriterDep, client_ip
 from climate.api.schemas import (
     ChangeOut,
     ControlActionOut,
@@ -114,6 +123,32 @@ def unprocessable(violations: list[tuple[str, str]]) -> HTTPException:
 def actor_for(role: Role) -> Literal["owner", "claude"]:
     """The agent bearer token acts as Claude; the signed-in browser acts as the owner."""
     return "claude" if role == "agent" else "owner"
+
+
+def token_ref(principal: Principal) -> dict | None:
+    """``{"id", "name"}`` of the API token behind a caller, or None for the owner."""
+    if principal.kind not in ("api_token", "env_token"):
+        return None
+    return {"id": principal.token_id, "name": principal.label}
+
+
+def by_caller(principal: Principal, owner_text: str, token_text: str) -> str:
+    """The owner's sentence, or the token's one prefixed ``Control token "<name>": ``."""
+    if token_ref(principal) is None:
+        return owner_text
+    return f'Control token "{principal.label}": {token_text}'
+
+
+def audit_token(
+    session: Session, principal: Principal, event_type: str, request: Request, *, target_type: str,
+    target_id: str | int | None, payload: dict | None = None,
+) -> None:
+    """An audit row for an everyday control made with an API token (the owner's own controls
+    are not audited), in the caller's transaction."""
+    if token_ref(principal) is None:
+        return
+    auth_service.audit(session, principal, event_type, target_type=target_type, target_id=target_id,
+                       payload=payload, ip=client_ip(request))
 
 
 def valid_tz(tz: str) -> bool:
@@ -250,12 +285,24 @@ def location_violations(loc: LocationSettings, prefix: str = "location") -> list
     return out
 
 
-def settings_out(session: Session) -> SettingsOut:
+# The agent verifies comfort against sleep windows (sleep counts as occupied) and presence.
+FULL_SETTINGS_ROLES = frozenset({"owner", "agent"})
+
+
+def settings_out(session: Session, *, full: bool = True) -> SettingsOut:
+    """The settings page. ``full=False`` (viewer and control tokens) keeps the time zone but
+    leaves out the house's coordinates, ZIP and label, the sleep windows (the household's
+    schedule) and whether the adults' phones are away."""
     policy, policy_id = active_policy(session)
+    location = get_setting(session, "location", LocationSettings)
+    occupancy = get_setting(session, "occupancy", OccupancySettings)
+    if not full:
+        location = LocationSettings(tz=location.tz, confirmed=location.confirmed)
+        occupancy = occupancy.model_copy(update={"sleep_windows": {}, "phones_away": None, "phones_updated_at": None})
     return SettingsOut(
         control=get_setting(session, "control", ControlSettings),
-        occupancy=get_setting(session, "occupancy", OccupancySettings),
-        location=get_setting(session, "location", LocationSettings),
+        occupancy=occupancy,
+        location=location,
         agent=get_setting(session, "agent", AgentSettings),
         utility_events=get_setting(session, "utility_events", UtilityEventSettings),
         policy=policy,
@@ -282,8 +329,10 @@ def action_out(row: ControlAction) -> ControlActionOut:
 
 
 @router.get("/control/settings", response_model=SettingsOut)
-def get_settings_route(_: Role = ReaderDep, session: Session = SessionDep) -> SettingsOut:
-    return settings_out(session)
+def get_settings_route(role: Role = ReaderDep, session: Session = SessionDep) -> SettingsOut:
+    """Every role may read the settings; only the owner and the agent see the house's location
+    beyond its time zone, the sleep windows and the phones (``settings_out``)."""
+    return settings_out(session, full=role in FULL_SETTINGS_ROLES)
 
 
 @router.put("/control/settings", response_model=SettingsOut)
@@ -363,13 +412,21 @@ def list_actions(
     return [action_out(r) for r in session.execute(q).scalars()]
 
 
-def _queue_action(session: Session, unit_key: str, action: str, reason: str, request: dict) -> ControlActionOut:
+def _queue_action(
+    session: Session, unit_key: str, action: str, reason: str, request: dict, *, principal: Principal,
+    http_request: Request, event_type: str,
+) -> ControlActionOut:
     """Queue the owner's action for the worker, on the source's channel. While the ecobee cloud
     circuit is open and HomeKit has taken over (``controller._homekit_fallback``), a resume
     ("Resume schedule" / "Back to automatic") goes on channel 'homekit' instead, keeping its
     ``request.kind``: the homekit service clears the hold locally, so a person's hold seen
     during the outage can still be ended from the app (the cloud call would only fail).
-    Owner holds stay on the source's channel."""
+    Owner holds stay on the source's channel. A control token's action keeps ``actor`` 'owner'
+    (the worker runs it like the owner's) but names the token in ``request.by_token`` and is
+    audited (``event_type``)."""
+    token = token_ref(principal)
+    if token is not None:
+        request = {**request, "by_token": token}
     src = get_setting(session, "source", SourceSettings)
     kind = src.kind
     if action == "resume_program" and controller._homekit_fallback(src, None, utcnow()):
@@ -387,6 +444,8 @@ def _queue_action(session: Session, unit_key: str, action: str, reason: str, req
     )
     session.add(row)
     session.flush()
+    audit_token(session, principal, event_type, http_request, target_type="control_action", target_id=row.id,
+                payload={"unit_key": unit_key, "action": action, "reason": reason})
     events.publish(session, "action", row.id)
     out = action_out(row)
     session.commit()
@@ -402,7 +461,10 @@ def _live_settings(session: Session, unit_key: str) -> dict:
 
 
 @router.post("/control/hold", response_model=ControlActionOut)
-def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+def manual_hold(
+    body: ManualHoldBody, http_request: Request, principal: Principal = ControlCallerDep,
+    session: Session = SessionDep,
+) -> ControlActionOut:
     """Queue the owner's hold: exactly what was typed, checked here against the hard envelope
     only (min/max heat and cool, the deadband or the thermostat's own heatCoolMinDelta when
     larger, the 0.5°F grid). No step limit, humidity guard, rate limit or back-off applies to
@@ -426,9 +488,11 @@ def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = Ses
         violations.append(("hours", f"Holds last {lim.min_hold_hours}-{lim.max_hold_hours} hours."))
     if violations:
         raise unprocessable(violations)
-    reason = f"Owner hold: heat {heat:g}°F / cool {cool:g}°F for {body.hours} h"
+    what = f"heat {heat:g}°F / cool {cool:g}°F for {body.hours} h"
+    reason = by_caller(principal, f"Owner hold: {what}", f"hold {what}")
     request = HoldRequest(unit_key=body.unit_key, heat_f=heat, cool_f=cool, hours=body.hours, reason=reason)
-    return _queue_action(session, body.unit_key, "set_hold", reason, request.model_dump(mode="json"))
+    return _queue_action(session, body.unit_key, "set_hold", reason, request.model_dump(mode="json"),
+                         principal=principal, http_request=http_request, event_type="control.hold")
 
 
 def _hours(h: float) -> str:
@@ -436,40 +500,60 @@ def _hours(h: float) -> str:
 
 
 @router.post("/control/resume", response_model=ControlActionOut)
-def resume(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+def resume(
+    body: UnitBody, http_request: Request, principal: Principal = ControlCallerDep, session: Session = SessionDep,
+) -> ControlActionOut:
     """The owner's "Resume schedule": cancel the running plain hold, whoever set it, and let
     the ecobee schedule run; the controller waits ``resume_backoff_hours`` after the resume is
     verified."""
     require_unit(session, body.unit_key)
     wait = get_setting(session, "control", ControlSettings).resume_backoff_hours
     if wait > 0:
-        reason = f"Owner: resume schedule (the ecobee schedule runs; the controller waits {_hours(wait)})"
+        what = f"resume schedule (the ecobee schedule runs; the controller waits {_hours(wait)})"
     else:
-        reason = "Owner: resume schedule (no wait after a resume is set, so the controller steers again at once)"
+        what = "resume schedule (no wait after a resume is set, so the controller steers again at once)"
+    reason = by_caller(principal, f"Owner: {what}", what)
     request = {"kind": RESUME_SCHEDULE, "unit_key": body.unit_key, "reason": reason}
-    return _queue_action(session, body.unit_key, "resume_program", reason, request)
+    return _queue_action(session, body.unit_key, "resume_program", reason, request,
+                         principal=principal, http_request=http_request, event_type="control.resume")
 
 
 @router.post("/control/automatic", response_model=ControlActionOut)
-def automatic(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+def automatic(
+    body: UnitBody, http_request: Request, principal: Principal = ControlCallerDep, session: Session = SessionDep,
+) -> ControlActionOut:
     """The owner's "Back to automatic": cancel the running plain hold, whoever set it, and let
     the controller steer again at once (it also ends a resume back-off). With no hold running
     it is a verified no-op that still ends the back-off. It does not delay the controller's
     next write (it is not counted toward the rate limit)."""
     require_unit(session, body.unit_key)
-    reason = "Owner: back to automatic (the controller steers again now)"
+    what = "back to automatic (the controller steers again now)"
+    reason = by_caller(principal, f"Owner: {what}", what)
     request = {"kind": AUTOMATIC, "unit_key": body.unit_key, "reason": reason}
-    return _queue_action(session, body.unit_key, "resume_program", reason, request)
+    return _queue_action(session, body.unit_key, "resume_program", reason, request,
+                         principal=principal, http_request=http_request, event_type="control.automatic")
 
 
 @router.post("/control/presence", response_model=SettingsOut)
-def presence(body: PresenceBody, _: Role = OwnerDep, session: Session = SessionDep) -> SettingsOut:
+def presence(
+    body: PresenceBody, http_request: Request, principal: Principal = ControlCallerDep,
+    session: Session = SessionDep,
+) -> SettingsOut:
+    """Set whether the adults' phones are away. A control token's change is recorded as the
+    token's (``updated_by`` 'token:<id>', audit ``control.presence``) and answered with the
+    settings as a non-owner reads them, plus the phones value it just wrote."""
     occ = get_setting(session, "occupancy", OccupancySettings)
     occ.phones_away = body.phones_away
     occ.phones_updated_at = utcnow()
-    put_setting(session, "occupancy", occ, updated_by="owner")
+    token = token_ref(principal)
+    put_setting(session, "occupancy", occ, updated_by="owner" if token is None else f"token:{token['id']}")
+    audit_token(session, principal, "control.presence", http_request, target_type="setting", target_id="occupancy",
+                payload={"phones_away": body.phones_away})
     events.publish(session, "status")
-    out = settings_out(session)
+    out = settings_out(session, full=principal.role in FULL_SETTINGS_ROLES)
+    if principal.role != "owner":  # its own answer, nothing it did not just write
+        out.occupancy = out.occupancy.model_copy(
+            update={"phones_away": occ.phones_away, "phones_updated_at": occ.phones_updated_at})
     session.commit()
     return out
 

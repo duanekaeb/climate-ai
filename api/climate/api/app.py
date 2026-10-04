@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from climate import __version__
+from climate import __version__, auth_service
 from climate.api.routers import (
     agent,
     analytics,
@@ -27,10 +27,12 @@ from climate.api.routers import (
     reports,
     setup,
     status,
+    tokens,
     utility_events,
     ws,
 )
 from climate.api.schemas import Health
+from climate.api.security import AuthError
 from climate.config import get_settings
 from climate.store.db import session_scope
 
@@ -50,6 +52,10 @@ async def lifespan(app: FastAPI):
         migrate()
         with session_scope() as s:
             seed(s)
+        auth_service.import_env_password()  # CLIMATE_OWNER_PASSWORD -> Argon2id hash, once
+    problem = auth_service.auth_config_problem()
+    if problem:
+        log.error("sign-in is disabled until this is fixed: %s", problem)
     await ws.hub.start()
     try:
         yield
@@ -77,7 +83,7 @@ def create_app() -> FastAPI:
             db_ok = False
         return Health(ok=db_ok, version=__version__, db=db_ok)
 
-    for module in (auth, status, analytics, control, utility_events, experiments, reports, agent, setup, ws):
+    for module in (auth, tokens, status, analytics, control, utility_events, experiments, reports, agent, setup, ws):
         app.include_router(module.router, prefix="/api")
 
     @app.middleware("http")
@@ -99,6 +105,12 @@ def create_app() -> FastAPI:
     @app.exception_handler(PermissionError)
     async def _perm(_: Request, exc: PermissionError) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=403)
+
+    @app.exception_handler(AuthError)
+    async def _auth_error(_: Request, exc: AuthError) -> JSONResponse:
+        # The service layer raises AuthError; clients get {"detail": {"code", "message"}}.
+        http_exc = exc.to_http()
+        return JSONResponse({"detail": http_exc.detail}, status_code=http_exc.status_code, headers=http_exc.headers)
 
     _mount_web(app)
     return app

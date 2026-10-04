@@ -14,6 +14,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/guardrails', name: 'guardrails', component: () => import('@/views/GuardrailsView.vue'), meta: { title: 'Guardrails', nav: 'more', icon: 'guardrails' } },
   { path: '/reports', name: 'reports', component: () => import('@/views/ReportsView.vue'), meta: { title: 'Reports', nav: 'more', icon: 'reports' } },
   { path: '/setup', name: 'setup', component: () => import('@/views/SetupView.vue'), meta: { title: 'Setup', nav: 'more', icon: 'setup' } },
+  { path: '/security', name: 'security', component: () => import('@/views/SecurityView.vue'), meta: { title: 'Security', nav: 'more', icon: 'lock' } },
   { path: '/more', name: 'more', component: () => import('@/views/MoreView.vue'), meta: { title: 'More' } },
   { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: 'Sign in', public: true } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -21,11 +22,13 @@ export const routes: RouteRecordRaw[] = [
 
 export const router = createRouter({ history: createWebHistory(), routes })
 
+// The first navigation waits for bootstrap() (refresh cookie -> access token), so a reload or
+// the iOS app relaunch lands where it was instead of on the sign-in page.
 router.beforeEach(async (to) => {
   const auth = useAuth()
-  if (!auth.loaded) await auth.refresh()
+  if (!auth.loaded) await auth.bootstrap()
   if (to.meta.public) return true
-  if (!auth.state?.authenticated) return { path: '/login', query: { next: to.fullPath } }
+  if (!auth.signedIn) return { path: '/login', query: { next: to.fullPath } }
   return true
 })
 

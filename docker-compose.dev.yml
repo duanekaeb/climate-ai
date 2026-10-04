@@ -1,0 +1,29 @@
+# Development overlay: the API reloads on every Python change, and is published on
+# 127.0.0.1:${DEV_API_PORT:-8000} for the Vite dev server (web/vite.config.ts proxies /api and
+# the websocket there).
+#
+#   make dev        # = docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#                   #   then scripts/web-dev.sh (Vite with hot reload on http://localhost:5173)
+#   make up         # back to the normal stack
+#
+# The app and worker import the climate package from the bind-mounted source (PYTHONPATH
+# comes before the installed copy). The worker does not reload by itself:
+# `docker compose restart worker` after changing it. Never use this overlay on the server.
+
+services:
+  app:
+    command: ["uvicorn", "climate.api.app:app", "--host", "0.0.0.0", "--port", "8000",
+              "--proxy-headers", "--forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-172.16.0.0/12}",
+              "--reload", "--reload-dir", "/src/api/climate"]
+    environment:
+      PYTHONPATH: /src/api
+    volumes:
+      - ./api:/src/api:ro
+    ports:
+      - "127.0.0.1:${DEV_API_PORT:-8000}:8000"
+
+  worker:
+    environment:
+      PYTHONPATH: /src/api
+    volumes:
+      - ./api:/src/api:ro

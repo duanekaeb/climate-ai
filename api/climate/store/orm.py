@@ -21,7 +21,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, REAL, TIMESTAMP
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, REAL, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 TS = TIMESTAMP(timezone=True)
@@ -422,3 +422,58 @@ class HomekitDevice(Base):
     online: Mapped[bool] = mapped_column(Boolean, default=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(TS)
     updated_at: Mapped[datetime] = mapped_column(TS, server_default=func.now())
+
+
+# --- sign-in sessions, API tokens, audit (migration 004) --------------------------------
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    refresh_token_hash: Mapped[str] = mapped_column(Text)
+    previous_token_hash: Mapped[str | None] = mapped_column(Text)
+    # Every retired refresh token's hash, newest last, capped (auth_service._MAX_RETIRED).
+    retired_token_hashes: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
+    family_id: Mapped[str] = mapped_column(Text)
+    rotation_counter: Mapped[int] = mapped_column(Integer, default=0)
+    rotated_at: Mapped[datetime | None] = mapped_column(TS)
+    device_name: Mapped[str] = mapped_column(Text, default="")
+    user_agent: Mapped[str] = mapped_column(Text, default="")
+    ip: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS, server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(TS, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(TS)
+    absolute_expires_at: Mapped[datetime] = mapped_column(TS)
+    reauthenticated_at: Mapped[datetime | None] = mapped_column(TS)
+    revoked_at: Mapped[datetime | None] = mapped_column(TS)
+    revoked_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class ApiToken(Base):
+    __tablename__ = "api_tokens"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    token_hint: Mapped[str] = mapped_column(Text)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True)
+    role: Mapped[str] = mapped_column(Text)
+    local_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(TS, server_default=func.now())
+    expires_at: Mapped[datetime | None] = mapped_column(TS)
+    last_used_at: Mapped[datetime | None] = mapped_column(TS)
+    last_used_ip: Mapped[str | None] = mapped_column(Text)
+    revoked_at: Mapped[datetime | None] = mapped_column(TS)
+    revoked_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(TS, server_default=func.now())
+    actor_type: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[int | None] = mapped_column(BigInteger)
+    actor_label: Mapped[str] = mapped_column(Text, default="")
+    event_type: Mapped[str] = mapped_column(Text)
+    target_type: Mapped[str | None] = mapped_column(Text)
+    target_id: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    ip: Mapped[str | None] = mapped_column(Text)

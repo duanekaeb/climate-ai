@@ -4,7 +4,8 @@ Claude Opus 5.5 as the house's analyst, through the Claude Agent SDK on the owne
 **subscription** (no API key, no per-token bill). It verifies yesterday's decisions, signs off
 or holds model-queued changes inside pre-approved ranges, proposes changes and experiments, and
 writes reports. It is never in the control path and has no tool that writes to a thermostat.
-It has no database credentials: it talks to the API with a bearer token (role `agent`).
+It has no database credentials: it talks to the API with a bearer token that has the `agent`
+role (see [The API token](#the-api-token)).
 
 - `python -m climate_agent.scheduler`: the agent service. Checks sign-in once at start,
   heartbeats every 60 s, claims a queued run every 20 s, runs it, reports the result (every
@@ -12,7 +13,47 @@ It has no database credentials: it talks to the API with a bearer token (role `a
   keeps heartbeating "not signed in" and re-checks at most every 30 minutes; a run that fails
   sign-in is deferred 30 minutes, not failed.
 - `python -m climate_agent.mcp_server [--http HOST:PORT]`: the same tools for Claude Code or
-  Claude Desktop (stdio by default; streamable HTTP at `/mcp` with a bearer token).
+  Claude Desktop (stdio by default; streamable HTTP at `/mcp` with a bearer token, local
+  clients only).
+
+## The API token
+
+There is one login for people (the owner password); services such as this agent use API
+tokens. Either of these works as `CLIMATE_AGENT_TOKEN`, and nothing in the agent depends on
+which one it is (the token is sent as `Authorization: Bearer <token>`; the API decides):
+
+- **An agent token made in the app** (recommended): More → Security → API tokens → create,
+  role **agent**, keep "home network only" on. It looks like `cai_..._...`, is shown once, and
+  can be revoked from the same page; the page shows when it was last used.
+- **The legacy env token** that `scripts/bootstrap.sh` put in `.env` as `CLIMATE_AGENT_TOKEN`.
+  The API accepts it as the agent role from private addresses only (home network, Docker,
+  Tailscale).
+
+The agent role reads everything the tools summarize, proposes changes and experiments, signs
+off or holds model-queued changes inside its ranges, and claims and finishes its own runs. It
+can never write to a thermostat, change the controller mode or settings, run set-up, or touch
+tokens. A `viewer` or `control` token cannot run the agent (its claims are refused).
+
+After changing the token in `.env`, recreate the service so it reads it: `docker compose up -d`.
+
+**When the API refuses the token** the agent says how to fix it instead of failing quietly:
+
+- At start it asks the API who it is (`GET /api/auth/me`) and logs `API token accepted (agent
+  role, ...)`, or an error naming the problem (refused, or a token with another role).
+- A 401 (mistyped, revoked, expired, or made on another server) or a 403 from the auth layer
+  (wrong role, or a home-network-only token used from the internet) is logged as an error that
+  names the variable and says "Create an agent token in More → Security → API tokens, or keep
+  the one scripts/bootstrap.sh put in .env as CLIMATE_AGENT_TOKEN". It is logged when it first
+  appears and then every 30 minutes, not on every 20-second retry.
+- A tool that hits a refused token tells Claude the same, so a chat answer or report says what
+  to fix. A plain 403 (e.g. approving a change outside Claude's ranges) is a refusal of that
+  request, not a token problem, and Claude leaves it for the owner.
+
+**Proxies.** The internal API URL (`http://app:8000`, `localhost`, a private or Tailscale IP, a
+single-label, `.local`, `.lan`, `.internal`, `.home.arpa` or `.ts.net` name) is always called
+directly: `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` set on the host are ignored for it (a
+host proxy cannot reach the Compose network and broke these calls). A public HTTPS URL keeps the
+usual environment handling (`NO_PROXY`, `SSL_CERT_FILE`).
 
 ## Subscription setup (once)
 
@@ -33,12 +74,12 @@ It has no database credentials: it talks to the API with a bearer token (role `a
 | `CLAUDE_CODE_OAUTH_TOKEN` | required | from `claude setup-token`; read by the CLI, never logged |
 | `CLAUDE_TOKEN_CREATED` | unset | `YYYY-MM-DD`; expiry = +1 year, warned within 30 days |
 | `CLIMATE_API_URL` | `http://app:8000` | the API (paths under `/api`) |
-| `CLIMATE_AGENT_TOKEN` | required | bearer token for the API's agent role |
+| `CLIMATE_AGENT_TOKEN` | required | API token with the agent role: a `cai_...` agent token from the app, or the legacy one from `scripts/bootstrap.sh` |
 | `CLIMATE_AGENT_MODEL` | `claude-opus-5-5` | |
 | `CLIMATE_AGENT_FALLBACK_MODEL` | `claude-sonnet-5-5` | used on overload, and for a rerun when only the Opus limit is hit |
 | `CLIMATE_AGENT_CWD` | `/srv/climate/agent-empty` | created if missing; must stay empty |
 | `CLIMATE_AGENT_MAX_TURNS` | `30` | capped at 30 |
-| `CLIMATE_MCP_TOKEN` | falls back to `CLIMATE_AGENT_TOKEN` | MCP server's API token (and its HTTP bearer token) |
+| `CLIMATE_MCP_TOKEN` | falls back to `CLIMATE_AGENT_TOKEN` | the bearer token MCP clients must send to `--http`; also the MCP server's API token when `CLIMATE_AGENT_TOKEN` is unset (the API accepts the legacy MCP token as the agent role) |
 
 ## How a run is isolated
 
@@ -62,12 +103,27 @@ decides rejections.
 
 ## Claude Code
 
+The MCP server stays local: stdio runs on your own machine, and the HTTP transport answers only
+clients on that machine, the home network, Docker's networks or Tailscale (anything else gets
+403, before the token is even checked). It is never put behind the public gateway. Two tokens,
+two jobs:
+
+- **To the API** it sends `CLIMATE_AGENT_TOKEN` (else `CLIMATE_MCP_TOKEN`): an agent token from
+  More → Security → API tokens works, as does the legacy one.
+- **From MCP clients** (`--http` only) it requires `Authorization: Bearer <CLIMATE_MCP_TOKEN>`
+  (else the API token).
+
 ```bash
-claude mcp add house --env CLIMATE_API_URL=https://climate.example --env CLIMATE_MCP_TOKEN=... \
+# stdio, on a machine at home (or on Tailscale): point it at the app on the LAN
+claude mcp add house --env CLIMATE_API_URL=http://192.168.1.20:8470 --env CLIMATE_AGENT_TOKEN=cai_... \
   -- python -m climate_agent.mcp_server
-# or, against a running `--http 0.0.0.0:8765` service:
-claude mcp add --transport http house http://server:8765/mcp --header "Authorization: Bearer ..."
+# or, against the running `mcp` service (docker compose --profile mcp up -d):
+claude mcp add --transport http house http://server:8471/mcp --header "Authorization: Bearer <CLIMATE_MCP_TOKEN>"
 ```
+
+A home-network-only token is refused when the API sees a public address, so away from home use
+Tailscale rather than the public HTTPS name. The local-address check sees whatever address
+Docker hands the container, so keep `MCP_BIND` on `127.0.0.1` or a Tailscale/LAN address.
 
 ## Tests
 
@@ -75,5 +131,5 @@ claude mcp add --transport http house http://server:8765/mcp --header "Authoriza
 pip install -e '.[test]' && pytest -q
 ```
 
-Tests never call Claude or the network: the API is an `httpx.MockTransport` and the runner gets
-a fake `query` function.
+Tests never call Claude or the network: the API is an `httpx.MockTransport` (or, for the proxy
+test, a tiny server on 127.0.0.1) and the runner gets a fake `query` function.

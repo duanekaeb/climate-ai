@@ -1,16 +1,32 @@
-# Optional override: attach the `app` service to the Docker network of a CONTAINERIZED nginx
-# (e.g. the one fronting your GrowWise services), so nginx can proxy to it by name.
-# Not needed when nginx runs on the host (use deploy/nginx/climate.conf instead).
+# Optional override: attach the `app` service to the Docker network of a CONTAINERIZED nginx,
+# so nginx can proxy to it by name. Not needed when nginx runs on the host (use
+# deploy/nginx/climate.conf instead).
 #
-#   docker network ls                       # find nginx's network, e.g. growwise_default
-#   # in .env:
-#   NGINX_NETWORK=growwise_default
+# The usual case is the GrowWise AppRelay gateway (a public name such as
+# https://climate.apprelay.net; the whole path is in docs/PUBLIC_ACCESS.md). In .env:
+#
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.nginx.yml
+#   NGINX_NETWORK=apprelay_gateway
 #   docker compose up -d
 #
-# nginx then reaches the app at http://climate-ai-app:8000
-# (deploy/nginx/climate-docker-network.conf). The alias is deliberately specific: a plain
-# `app` could collide with another project's service on the shared network.
+# For any other nginx container, NGINX_NETWORK is that container's network
+# (`docker network ls`, `docker inspect <nginx-container>`).
+#
+# nginx then reaches the app at http://climate-ai-app:8000: the gateway's apps.conf line says
+# web=climate-ai-app:8000, and deploy/nginx/climate-docker-network.conf uses the same name. The
+# alias is deliberately specific: every stack on a shared network brings its own service names,
+# and a plain `app` is one collision away from routing somewhere else.
+#
+# Only `app` joins. The database, agent, MCP server and ntfy stay on Climate's own networks,
+# out of reach of anything else on the shared network.
+#
+# FORWARDED_ALLOW_IPS (.env) must cover the address nginx connects from, or the app would see
+# every visitor as nginx's own private address and treat the internet as "home". On the
+# AppRelay gateway set it to the shared network's subnet, which outlives container restarts:
+#
+#   docker network inspect apprelay_gateway -f '{{(index .IPAM.Config 0).Subnet}}'
+#
+# not to the nginx container's IP, which changes whenever that container is recreated.
 
 services:
   app:
@@ -21,5 +37,5 @@ services:
 
 networks:
   nginx:
-    name: ${NGINX_NETWORK:?set NGINX_NETWORK in .env to your nginx container's Docker network}
+    name: ${NGINX_NETWORK:?set NGINX_NETWORK in .env to your nginx container's Docker network (apprelay_gateway for the GrowWise AppRelay gateway)}
     external: true

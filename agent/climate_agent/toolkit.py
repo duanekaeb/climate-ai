@@ -1,9 +1,11 @@
 """Claude's tools as plain async functions over the Climate AI API.
 
-Each tool calls the API with the agent's bearer token and returns a SHORT text summary:
-numbers rounded, lists capped (about 20 rows), units spelled out (°F, minutes), every 90%
-interval the API reports, and the Open-Meteo attribution wherever weather is summarized.
-None of these tools can reach a thermostat: the agent role cannot call any control write.
+Each tool calls the API with the agent's bearer token (an ``agent``-role API token from the
+app, or the legacy ``CLIMATE_AGENT_TOKEN``) and returns a SHORT text summary: numbers rounded,
+lists capped (about 20 rows), units spelled out (°F, minutes), every 90% interval the API
+reports, and the Open-Meteo attribution wherever weather is summarized. None of these tools
+can reach a thermostat: the agent role reads, proposes and signs off inside its ranges; it
+cannot call any control write (holds, mode, settings), set-up step or token endpoint.
 
 ``TOOLS`` is the registry both servers are built from (``tools.py`` for the Agent SDK,
 ``mcp_server.py`` for Claude Code / Desktop). A tool's parameters are its method signature;
@@ -220,10 +222,26 @@ def check_policy_params(params: dict[str, Any], what: str = "params") -> dict[st
 
 
 def format_api_error(exc: ApiError) -> str:
+    """The text Claude reads for a failed call. A refused token (401, or a 403/503 from the
+    API's auth layer) says how the owner fixes it; a plain 403 is the API declining the
+    request itself (e.g. a sign-off outside Claude's ranges) and is left to the owner."""
     if exc.status_code is None:
         return f"The API could not be reached ({exc.detail}). Carry on without this data and say so in the report."
+    hint = exc.auth_hint
+    if hint and exc.status_code == 401:
+        return (
+            f"The API refused this tool's token (401: {exc.detail}). Every API tool will fail until the owner "
+            f"fixes it; stop and tell the owner: {hint}"
+        )
+    if hint and exc.status_code == 403:
+        return (
+            f"Refused (403): {exc.detail}. This tool's API token may not do that; leave it for the owner. "
+            f"If Claude should be able to: {hint}"
+        )
+    if hint:
+        return f"API error {exc.status_code}: {exc.detail}. {hint}"
     if exc.status_code == 403:
-        return f"Refused (403): {exc.detail}. This role may not do that; leave it for the owner."
+        return f"Refused (403): {exc.detail}. The API does not let Claude do that; leave it for the owner."
     if exc.status_code == 404:
         return f"Not found (404): {exc.detail}."
     if exc.status_code == 409:

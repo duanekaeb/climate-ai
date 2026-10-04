@@ -1,133 +1,114 @@
-"""The role matrix from docs/BUILD.md: every route is public, reader, writer, owner or agent.
+"""What each role can actually do, with real request bodies (the exhaustive every-route matrix
+is tests/test_route_guard.py). Spec: docs/specs/users-and-tokens.md, "Who may call what".
 
-The agent may never call /control/* writes, /utility-events/* skips, /setup/*, /agent/ask|run,
-/experiments/{id}/decision or /alerts/*/resolve. Readers need a session or a token.
+- owner: everything except the agent's own run bookkeeping
+- control token: reads + everyday controls (hold, resume, back to automatic, presence, skip a
+  utility event); never mode, settings, hand-back, proposals, setup or tokens
+- agent token (``cai_`` or the legacy env token): reads + the gated agent writes (propose, sign
+  off, reports, refits) + its own runs; never a thermostat write, mode, settings or setup
+- viewer token: reads only
 """
 
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 
-PUBLIC = {
-    ("GET", "/api/health"),
-    ("GET", "/api/auth/state"),
-    ("POST", "/api/auth/setup"),
-    ("POST", "/api/auth/login"),
-    ("POST", "/api/auth/logout"),
-}
+from climate.store.db import session_scope
+from climate.store.orm import ControlAction
+from tests.conftest import make_client
 
-READER = [
-    ("GET", "/api/status"),
-    ("GET", "/api/rooms/{room_key}/history"),
-    ("GET", "/api/runtime/daily"),
-    ("GET", "/api/runtime/intraday"),
-    ("GET", "/api/weather"),
-    ("GET", "/api/analytics/savings"),
-    ("GET", "/api/analytics/waterfall"),
-    ("GET", "/api/analytics/baselines"),
-    ("GET", "/api/analytics/coupling"),
-    ("GET", "/api/analytics/comfort"),
-    ("GET", "/api/analytics/drift"),
-    ("GET", "/api/analytics/natural-experiments"),
-    ("GET", "/api/control/settings"),
-    ("GET", "/api/control/plan"),
-    ("GET", "/api/control/actions"),
-    ("GET", "/api/control/handback"),
-    ("GET", "/api/utility-events"),
-    ("GET", "/api/changes"),
-    ("GET", "/api/experiments"),
-    ("GET", "/api/experiments/power"),
-    ("GET", "/api/experiments/{experiment_id}"),
-    ("GET", "/api/models"),
-    ("GET", "/api/jobs/{job_id}"),
-    ("GET", "/api/reports"),
-    ("GET", "/api/reports/{report_id}"),
-    ("GET", "/api/alerts"),
-    ("GET", "/api/agent/status"),
-    ("GET", "/api/agent/runs"),
-    ("GET", "/api/agent/runs/{run_id}"),
-]
-
-WRITER = [
-    ("POST", "/api/changes"),
-    ("POST", "/api/changes/{change_id}/decision"),
-    ("POST", "/api/experiments"),
-    ("POST", "/api/models/refit"),
-    ("POST", "/api/models/backtest"),
-    ("POST", "/api/models/simulate"),
-    ("POST", "/api/reports"),
-]
-
-OWNER_ONLY = [
-    ("POST", "/api/auth/logout-everywhere"),
-    ("PUT", "/api/control/settings"),
-    ("POST", "/api/control/mode"),
-    ("POST", "/api/control/hold"),
-    ("POST", "/api/control/resume"),
-    ("POST", "/api/control/automatic"),
-    ("POST", "/api/control/presence"),
-    ("POST", "/api/control/handback"),
-    ("POST", "/api/utility-events/{event_id}/skip"),
-    ("POST", "/api/utility-events/{event_id}/unskip"),
-    ("POST", "/api/experiments/{experiment_id}/decision"),
-    ("POST", "/api/alerts/{alert_id}/resolve"),
-    ("POST", "/api/agent/ask"),
-    ("POST", "/api/agent/run"),
-    ("GET", "/api/setup"),
-    ("POST", "/api/setup/source"),
-    ("PUT", "/api/setup/location"),
-    ("POST", "/api/setup/ecobee/login"),
-    ("POST", "/api/setup/ecobee/mfa"),
-    ("POST", "/api/setup/ecobee/signout"),
-    ("POST", "/api/setup/ecobee/map"),
-    ("POST", "/api/setup/sensors/map"),
-    ("POST", "/api/setup/homekit/pair"),
-    ("POST", "/api/setup/homekit/code"),
-    ("POST", "/api/setup/homekit/unpair"),
-]
-
-AGENT_ONLY = [
-    ("POST", "/api/agent/claim"),
-    ("POST", "/api/agent/runs/{run_id}/finish"),
-    ("POST", "/api/agent/heartbeat"),
-]
-
-SAMPLE = {"room_key": "hallway", "experiment_id": "1", "job_id": "1", "report_id": "1", "run_id": "1",
-          "change_id": "1", "alert_id": "1", "event_id": "1"}
+HOLD = {"unit_key": "main", "heat_f": 68, "cool_f": 76}
 
 
-def concrete(path: str) -> str:
-    return path.format(**SAMPLE)
+def code(r) -> str | None:
+    detail = r.json().get("detail")
+    return detail.get("code") if isinstance(detail, dict) else None
 
 
-def test_every_route_is_classified():
-    from climate.api.app import create_app
-
-    spec = create_app().openapi()
-    routes = {(m.upper(), p) for p, ops in spec["paths"].items() for m in ops}
-    classified = PUBLIC | set(READER) | set(WRITER) | set(OWNER_ONLY) | set(AGENT_ONLY)
-    assert routes == classified, f"unclassified: {routes - classified}; stale: {classified - routes}"
+@pytest.fixture
+def agent_api(agent_token):
+    """The agent with an API token from the app (instead of the legacy env token)."""
+    with make_client(token=agent_token) as c:
+        yield c
 
 
-@pytest.mark.parametrize(("method", "path"), OWNER_ONLY)
-def test_agent_is_forbidden_on_owner_routes(agent, method, path):
-    r = agent.request(method, concrete(path), json={})
-    assert r.status_code == 403, r.text
+def test_control_token_runs_everyday_controls(control):
+    r = control.post("/api/control/hold", json=HOLD)
+    assert r.status_code == 200, r.text
+    assert control.post("/api/control/resume", json={"unit_key": "main"}).status_code == 200
+    assert control.post("/api/control/automatic", json={"unit_key": "main"}).status_code == 200
+    assert control.post("/api/control/presence", json={"phones_away": True}).json()["occupancy"]["phones_away"] is True
+    # auth passes for the utility-event skip; the event simply does not exist
+    assert control.post("/api/utility-events/999/skip", json={}).status_code == 404
+    with session_scope() as s:
+        kinds = [a.action for a in s.execute(select(ControlAction).order_by(ControlAction.id)).scalars()]
+    assert kinds == ["set_hold", "resume_program", "resume_program"]
 
 
-@pytest.mark.parametrize(("method", "path"), AGENT_ONLY)
-def test_owner_is_forbidden_on_agent_routes(owner, method, path):
-    r = owner.request(method, concrete(path), json={})
-    assert r.status_code == 403, r.text
+def test_control_token_cannot_change_how_the_house_is_run(control):
+    for method, path, body in [
+        ("POST", "/api/control/mode", {"mode": "act"}),
+        ("PUT", "/api/control/settings", {}),
+        ("POST", "/api/control/handback", None),
+        ("POST", "/api/changes", {"title": "x", "params": {"linked_offset_f": 1}}),
+        ("POST", "/api/agent/ask", {"question": "hi"}),
+        ("GET", "/api/setup", None),
+        ("GET", "/api/tokens", None),
+        ("GET", "/api/audit", None),
+    ]:
+        r = control.request(method, path, json=body)
+        assert r.status_code == 403 and code(r) == "FORBIDDEN", (method, path, r.text)
 
 
-@pytest.mark.parametrize(("method", "path"), READER + WRITER + OWNER_ONLY + AGENT_ONLY)
-def test_anonymous_gets_401(client, method, path):
-    r = client.request(method, concrete(path), json={})
-    assert r.status_code == 401, r.text
+@pytest.mark.parametrize("who", ["agent", "agent_api"])
+def test_agent_reads_and_makes_gated_writes_only(request, who):
+    c = request.getfixturevalue(who)
+    assert c.get("/api/status").status_code == 200
+    assert c.get("/api/control/settings").status_code == 200
+    assert c.get("/api/agent/status").status_code == 200
+    assert c.post("/api/agent/heartbeat", json={}).status_code == 200
+    assert c.post("/api/agent/claim").status_code == 200
+    r = c.post("/api/reports", json={"kind": "note", "title": "Filter", "body_md": "ok"})
+    assert r.status_code == 200 and r.json()["author"] == "claude"
+    for method, path, body in [
+        ("POST", "/api/control/hold", HOLD),
+        ("POST", "/api/control/resume", {"unit_key": "main"}),
+        ("POST", "/api/control/automatic", {"unit_key": "main"}),
+        ("POST", "/api/control/presence", {"phones_away": False}),
+        ("POST", "/api/control/mode", {"mode": "act"}),
+        ("POST", "/api/utility-events/1/skip", {}),
+        ("GET", "/api/setup", None),
+        ("POST", "/api/tokens", {"name": "more", "role": "control"}),
+    ]:
+        r = c.request(method, path, json=body)
+        assert r.status_code == 403 and code(r) == "FORBIDDEN", (who, method, path, r.text)
+    with session_scope() as s:
+        assert s.execute(select(ControlAction)).first() is None
 
 
-def test_agent_reads_status_and_settings(agent):
-    assert agent.get("/api/status").status_code == 200
-    assert agent.get("/api/control/settings").status_code == 200
-    assert agent.get("/api/agent/status").status_code == 200
+def test_viewer_token_reads_only(viewer):
+    assert viewer.get("/api/status").status_code == 200
+    assert viewer.get("/api/analytics/savings").status_code == 200
+    for method, path, body in [
+        ("POST", "/api/control/hold", HOLD),
+        ("POST", "/api/control/presence", {"phones_away": True}),
+        ("POST", "/api/reports", {"kind": "note", "title": "x", "body_md": "x"}),
+        ("POST", "/api/models/refit", None),
+        ("POST", "/api/agent/claim", None),
+    ]:
+        r = viewer.request(method, path, json=body)
+        assert r.status_code == 403 and code(r) == "FORBIDDEN", (method, path, r.text)
+
+
+def test_owner_is_not_the_agent_service(owner):
+    for path in ("/api/agent/claim", "/api/agent/heartbeat", "/api/agent/runs/1/finish"):
+        r = owner.post(path, json={})
+        assert r.status_code == 403 and code(r) == "FORBIDDEN", path
+    assert owner.post("/api/control/hold", json=HOLD).status_code == 200
+
+
+def test_anonymous_is_asked_to_sign_in(client):
+    r = client.get("/api/status")
+    assert r.status_code == 401 and code(r) == "NOT_AUTHENTICATED"
+    assert r.headers["www-authenticate"] == "Bearer"

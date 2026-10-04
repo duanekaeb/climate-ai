@@ -28,7 +28,10 @@ from climate.store.app_settings import (
 )
 
 OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com"
-Role = Literal["owner", "agent"]
+# Who is calling: the owner (the one password; signed in on any device) or an API token
+# (agent / viewer / control; never the owner's full rights). docs/specs/users-and-tokens.md.
+Role = Literal["owner", "agent", "viewer", "control"]
+TokenRole = Literal["agent", "viewer", "control"]
 
 # ---------------------------------------------------------------------------------------
 # auth / health
@@ -36,21 +39,122 @@ Role = Literal["owner", "agent"]
 
 
 class AuthState(BaseModel):
+    """GET /api/auth/state (public). ``password_set`` False = first run: show "choose a
+    password", which only works from a private address unless allowed (``setup_allowed``)."""
+
     authenticated: bool
     role: Role | None = None
-    password_set: bool  # False -> show the first-run "choose a password" screen
+    password_set: bool
+    setup_allowed: bool = False
 
 
-class PasswordBody(BaseModel):
-    """Choosing a password (first-run setup)."""
+class SetupBody(BaseModel):
+    """First run: choose the owner password (only while none is set)."""
 
-    password: str = Field(min_length=8, max_length=200)
+    password: str = Field(min_length=8, max_length=200)  # the server enforces password_min_length
+    device_name: str = Field(default="", max_length=100)
 
 
 class LoginBody(BaseModel):
-    """Signing in. No minimum here: CLIMATE_OWNER_PASSWORD may predate the 8-character rule."""
+    """Signing in. No minimum here: an existing password may predate the length rule."""
 
     password: str = Field(min_length=1, max_length=200)
+    device_name: str = Field(default="", max_length=100)  # e.g. "iPhone"; defaults from the user agent
+
+
+class AccessTokenOut(BaseModel):
+    """Setup / login / refresh result. The access token is a 15-minute signed bearer token the
+    web app keeps in memory (never stored); the refresh token travels only as the HttpOnly
+    ``climate_refresh`` cookie (Path=/api/auth) and rotates on every refresh."""
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int  # seconds
+    session_id: int
+
+
+class MeOut(BaseModel):
+    role: Role
+    session_id: int | None = None  # the owner's signed-in device
+    token_id: int | None = None  # an API token caller
+    token_name: str | None = None
+    recently_authenticated: bool = False  # password re-entered within reauth_window_minutes
+
+
+class SessionOut(BaseModel):
+    """A signed-in device."""
+
+    id: int
+    device_name: str
+    user_agent: str
+    ip: str | None = None
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    current: bool = False
+
+
+class ReauthBody(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+class ApiTokenCreateBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    role: TokenRole = "agent"
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)  # None = no expiry
+    local_only: bool = True  # refused from public (internet) addresses
+
+
+class ApiTokenOut(BaseModel):
+    id: int
+    name: str
+    token_hint: str  # last 4 characters
+    role: TokenRole
+    local_only: bool
+    created_at: datetime
+    expires_at: datetime | None = None
+    last_used_at: datetime | None = None
+    last_used_ip: str | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiTokenCreated(ApiTokenOut):
+    token: str  # "cai_<id hex>_<secret>"; shown exactly once
+
+
+class AuditEventOut(BaseModel):
+    id: int
+    ts: datetime
+    actor_type: Literal["owner", "api_token", "system"]
+    actor_label: str
+    event_type: str
+    target_type: str | None = None
+    target_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    ip: str | None = None
+
+
+class WsTicketOut(BaseModel):
+    """POST /api/auth/ws-ticket: a single-use ticket for /api/ws?ticket=… (browsers cannot set
+    a bearer header on a WebSocket)."""
+
+    ticket: str
+    expires_in: int  # seconds (30)
+
+
+class AuthErrorDetail(BaseModel):
+    """``detail`` of a 401/403/429/503 from the auth layer, so clients react precisely:
+    TOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to the
+    sign-in page), REAUTHENTICATION_REQUIRED (ask for the password, then replay),
+    INVALID_CREDENTIALS, LOGIN_PAUSED, FORBIDDEN, SETUP_NOT_ALLOWED, AUTH_NOT_CONFIGURED."""
+
+    code: str
+    message: str
 
 
 class Health(BaseModel):

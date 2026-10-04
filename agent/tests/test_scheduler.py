@@ -42,7 +42,12 @@ def test_refuses_bare_mode_but_idles_on_missing_tokens():
         check_startup({**GOOD_ENV, "CLAUDE_CODE_SIMPLE": "1"})
     # Missing tokens don't exit (the default-on service would restart in a loop): it idles.
     assert "CLAUDE_CODE_OAUTH_TOKEN is not set" in idle_reason(check_startup({"CLIMATE_AGENT_TOKEN": "agent-token"}))
-    assert "CLIMATE_AGENT_TOKEN" in idle_reason(check_startup({"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth"}))
+    missing = idle_reason(check_startup({"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth"})) or ""
+    assert "CLIMATE_AGENT_TOKEN is not set" in missing and "More → Security → API tokens" in missing
+    broken = idle_reason(check_startup({"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth", "CLIMATE_AGENT_TOKEN": "cai_1_ab\ncd"}))
+    assert broken is not None and "malformed" in broken
+    pasted = check_startup({"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth", "CLIMATE_AGENT_TOKEN": " Bearer cai_1f_secret "})
+    assert pasted.agent_token == "cai_1f_secret" and idle_reason(pasted) is None
     assert idle_reason(check_startup(dict(GOOD_ENV))) is None
 
 
@@ -382,3 +387,59 @@ def test_reclaimed_deferred_run_resumes_its_session(make_api, agent_config, subs
     (_, opts1), (prompt2, opts2) = fake.calls
     assert opts1.resume is None and opts2.resume == "sess-46"
     assert "resumed" in prompt2 and "nothing needs skipping" in prompt2
+
+
+# -- the API token ---------------------------------------------------------------------
+
+
+def _check(make_api, route: Any) -> bool | None:
+    api, _ = make_api({("GET", "/api/auth/me"): route})
+
+    async def go():
+        try:
+            return await scheduler_mod.check_api_access(api)
+        finally:
+            await api.aclose()
+
+    return asyncio.run(go())
+
+
+def test_startup_token_check(make_api, caplog):
+    import httpx
+
+    with caplog.at_level(logging.INFO, logger="climate_agent.scheduler"):
+        assert _check(make_api, {"role": "agent", "token_id": 3, "token_name": "agent on the server"}) is True
+    assert "API token accepted (agent role, app token 'agent on the server')" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger="climate_agent.scheduler"):
+        revoked = httpx.Response(401, json={"detail": {"code": "NOT_AUTHENTICATED", "message": "This API token has been revoked."}})
+        assert _check(make_api, revoked) is False
+        assert _check(make_api, {"role": "viewer", "token_id": 4, "token_name": "wall tablet"}) is False
+    assert "revoked" in caplog.text and "viewer role" in caplog.text
+    assert caplog.text.count("More → Security → API tokens") == 2 and "test-agent-token" not in caplog.text
+    assert _check(make_api, httpx.Response(404, json={"detail": "Not Found"})) is None  # an older API
+
+
+def test_refused_token_logged_once_not_every_retry(make_api, agent_config, subscription_env, caplog):
+    import httpx
+
+    clock = {"now": NOW}
+    refused = httpx.Response(401, json={"detail": {"code": "NOT_AUTHENTICATED", "message": "Unknown API token."}})
+    api, _ = make_api({("POST", "/api/agent/claim"): refused, ("POST", "/api/agent/heartbeat"): refused})
+    sched = Scheduler(agent_config, api, query_fn=FakeQuery(), now=lambda: clock["now"])
+    sched.signed_in = True
+
+    async def go(n: int):
+        for _ in range(n):
+            assert await sched.claim_once() is False
+            assert await sched.heartbeat() is False
+            clock["now"] += timedelta(seconds=20)
+
+    with caplog.at_level(logging.WARNING, logger="climate_agent.scheduler"):
+        asyncio.run(go(10))
+        assert caplog.text.count("Unknown API token") == 1 and "refused" in caplog.text
+        clock["now"] += scheduler_mod.AUTH_RELOG
+        asyncio.run(go(1))
+        assert caplog.text.count("Unknown API token") == 2  # reminded after AUTH_RELOG
+    asyncio.run(api.aclose())
+
