@@ -1,0 +1,35 @@
+[project]
+name = "climate-agent"
+version = "0.1.0"
+description = "Claude analyst for Climate AI: the agent service (Claude Agent SDK on the owner's subscription) and an MCP server with the same tools."
+requires-python = ">=3.11"
+dependencies = [
+    # Pinned: the SDK bundles the Claude Code CLI (2.1.286 in 0.2.163); upgrade deliberately.
+    "claude-agent-sdk==0.2.163",
+    "httpx==0.28.1",
+    # FastMCP is mcp.server.mcpserver.MCPServer in mcp 2.x; the SDK accepts mcp>=1.23,<3.
+    "mcp==2.3.0",
+    "pydantic==2.13.5",
+    "uvicorn==0.54.0",
+    "tzdata>=2025.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[project.scripts]
+climate-agent = "climate_agent.scheduler:main"
+climate-mcp = "climate_agent.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["climate_agent"]
+
+[tool.setuptools.package-data]
+climate_agent = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
