@@ -112,8 +112,9 @@ services:
     # Migrates and seeds on start, then serves the API (/api), the websocket (/api/ws) and the
     # built web app (/). X-Forwarded-* is trusted only from FORWARDED_ALLOW_IPS: the default
     # covers Docker's bridge networks, where a host nginx's connection arrives (via the
-    # 127.0.0.1 port binding) and where an nginx container sits. Narrow it to your nginx
-    # container's address when nginx runs in Docker on a shared network.
+    # 127.0.0.1 port binding) and where an nginx container sits. Behind the GrowWise AppRelay
+    # gateway, set it to the apprelay_gateway subnet (docs/PUBLIC_ACCESS.md), not one container's
+    # address: that changes when nginx is recreated and would then fail open.
     command: ["uvicorn", "climate.api.app:app", "--host", "0.0.0.0", "--port", "8000",
               "--proxy-headers", "--forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-172.16.0.0/12}"]
     restart: unless-stopped
