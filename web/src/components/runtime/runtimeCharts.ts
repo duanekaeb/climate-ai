@@ -16,6 +16,12 @@ function asList(raw: TooltipComponentFormatterCallbackParams) {
   return Array.isArray(raw) ? raw : [raw]
 }
 
+/** Whole-hour tick step giving at most ~5 ticks for a maximum of maxMin minutes. */
+function hourStep(maxMin: number): number {
+  const hours = maxMin / 60
+  return [1, 2, 3, 4, 6, 8, 12, 24].find((s) => hours / s <= 5) ?? 24
+}
+
 export interface DailyChartInput {
   days: RuntimeDay[]
   unitKeys: string[]
@@ -108,7 +114,7 @@ export function dailyRuntimeOption({ days, unitKeys, selectedDate, theme: t }: D
     yAxis: [
       {
         type: 'value',
-        minInterval: 60,
+        interval: hourStep(Math.max(0, ...days.map((d) => Math.max(d.total, d.expected ?? 0)))) * 60,
         ...ax,
         axisLabel: { ...ax.axisLabel, formatter: (v: number) => `${Math.round(v / 60)} h` },
       },

@@ -97,10 +97,10 @@ const pickerDays = computed(() => [...days.value].reverse())
               <dd class="num font-semibold">{{ minutes(summary.total) }}</dd>
             </div>
             <div class="rounded-xl bg-surface-2 p-2">
-              <dt class="text-[11px] text-muted">Expected<span v-if="summary.coveredDays && summary.coveredDays < days.length"> ({{ summary.coveredDays }} d)</span></dt>
+              <dt class="text-[11px] text-muted">Expected</dt>
               <dd class="num font-semibold">{{ minutes(summary.expected) }}</dd>
-              <dd v-if="summary.expected !== null && summary.coveredDays < days.length" class="num text-[11px] text-muted">
-                vs {{ minutes(summary.actualCovered) }} actual
+              <dd v-if="summary.expected !== null && summary.coveredDays < days.length" class="num text-[11px] leading-tight text-muted">
+                {{ summary.coveredDays }} of {{ days.length }} days · actual {{ minutes(summary.actualCovered) }}
               </dd>
             </div>
             <div class="rounded-xl p-2" :class="summary.upMaxed > 0 ? 'bg-bad/10 ring-1 ring-bad/40' : 'bg-surface-2'">

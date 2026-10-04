@@ -41,7 +41,7 @@ const partial = computed(() => totals.value.some((u) => u.expected !== null && u
           <th scope="col" class="hidden py-2 pl-1 text-right font-medium md:table-cell">Fan</th>
         </tr>
       </thead>
-      <tbody class="num">
+      <tbody class="num whitespace-nowrap">
         <tr v-for="u in totals" :key="u.unit_key" class="border-b border-line/60">
           <th scope="row" class="py-2 pr-2 text-left font-medium">
             <span class="flex items-center gap-1.5">
@@ -60,7 +60,7 @@ const partial = computed(() => totals.value.some((u) => u.expected !== null && u
           <td class="hidden py-2 pl-1 text-right md:table-cell">{{ minutes(u.fan) }}</td>
         </tr>
       </tbody>
-      <tfoot class="num font-semibold">
+      <tfoot class="num font-semibold whitespace-nowrap">
         <tr>
           <th scope="row" class="py-2 pr-2 text-left">House</th>
           <td class="px-1 py-2 text-right">{{ minutes(house.active) }}</td>

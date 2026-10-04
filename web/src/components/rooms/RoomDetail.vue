@@ -57,6 +57,12 @@ const stats = computed(() => {
   }
 })
 
+const subtitle = computed(() => {
+  const floor = floorLabel(props.room.floor)
+  const unit = UNIT_NAMES[props.room.unit_key] ?? props.room.unit_key
+  return floor.startsWith(unit) ? floor : `${floor} · ${unit} unit`
+})
+
 const offsetText = computed(() => {
   const o = props.room.offset_f
   if (o === null || !props.room.has_sensor) return ''
@@ -68,7 +74,7 @@ const offsetText = computed(() => {
   <div class="space-y-4">
     <div class="flex items-start gap-3">
       <div class="min-w-0 flex-1">
-        <p class="text-xs text-muted">{{ floorLabel(room.floor) }} · {{ UNIT_NAMES[room.unit_key] ?? room.unit_key }} unit</p>
+        <p class="text-xs text-muted">{{ subtitle }}</p>
         <h2 id="room-detail-title" class="text-lg font-semibold">{{ room.name }}</h2>
       </div>
       <button ref="closeBtn" type="button" class="btn shrink-0 !p-1.5" aria-label="Close room details" @click="emit('close')">
