@@ -190,3 +190,23 @@ wide without horizontal scrolling, and labels rooms without sensors as "no senso
 | Guardrails | controller mode switch, hard limits, comfort bands, sleep windows, policy params with Claude's sign-off ranges, pending changes with approve/hold/reject, action log with read-back |
 | Reports | daily / nightly / weekly reports (markdown) |
 | Setup | location, data source (simulator ↔ ecobee), ecobee sign-in with MFA, thermostat → unit mapping, sensor mapping, HomeKit devices and pairing (enter the code shown on the thermostat) |
+
+## Runtime contracts (JSON stored in the database)
+
+| Where | Shape |
+|---|---|
+| `app_settings['heartbeat:worker'].detail` | `source`, `source_ok`, `source_error`, `source_last_success_at`, `source_consecutive_failures`, `last_poll_at`, `last_tick_at` |
+| `app_settings['heartbeat:homekit'].detail` | `paired`, `online` (counts) |
+| `app_settings['heartbeat:agent'].detail` | `AgentHeartbeatBody` fields (`signed_in`, `sdk_version`, `cli_version`, `token_expires_at`) plus `detail` (`idle`, `last_error`, `busy_run_id`, ...) |
+| `app_settings['ecobee_status']` | `{signed_in_at, last_error, error_at}` (written by the sign-in path; signed-in = the encrypted refresh token exists) |
+| `app_settings['ecobee_holds']` | `{unit_key: {heat_f, cool_f, end, hours, written_at}}`: the last hold we wrote, used to tell our holds from manual ones |
+| `app_settings['simulator_state']` | simulator physics state (only in simulator mode) |
+| `changes.payload` (policy) | `{"params": {partial PolicyParams}, "base_policy_version_id": int, "current": {...}}` |
+| `changes.gates` | `validation` (list of violations), `validated_at`, `backtest` (BacktestOut or `{error}`), `shadow` `{start, days}`, `decision` `{actor, decision, reason, at}`, `trial` `{start, end, verdict...}` |
+| `control_actions.request` (HomeKit channel) | `{"kind": "climate_hold", "climate": "home"\|"sleep"\|"away", "until": ISO-8601}` or `{"kind": "clear_hold"}` |
+| `model_fits` kind `rc` | `metrics`: `rmse_1h`, `rmse_24h`, `persistence_rmse_1h/24h`, `bias_*`, `n_points`; `params.unidentified`: `["zone.param", ...]` |
+| `model_fits` kind `room_offsets` | `params.offsets`: `{room_key: {"day": °F, "night": °F}}` |
+| `UnitSnapshot.settings` | `autoAway`, `followMeComfort`, `heatCoolMinDelta` (°F), `program_heat_f`/`program_cool_f` (what the schedule holds now), `timeZone` (ecobee) |
+
+Compose networks: `db` sits on a private `data` network shared only with `app` and `worker`; the
+agent and MCP containers reach the API over the default network and never see the database.
