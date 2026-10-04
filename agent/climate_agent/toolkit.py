@@ -31,6 +31,9 @@ from climate_agent.api import ApiClient, ApiError
 OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com"
 MAX_ROWS = 20
 COMPUTE_TIMEOUT_S = 120.0
+ACTIONS_MAX = 500  # list_actions summarizes up to this many (the API allows 1000)
+ACTIONS_LISTED = 15  # anomalies listed in full
+ACTIONS_NEWEST = 5  # plus the newest few others
 
 UnitKey = Literal["main", "up", "bed"]
 RoomKey = Literal[
@@ -122,6 +125,24 @@ def spans_zero(lo: Any, hi: Any) -> bool:
 def clip(text: Any, n: int = 120) -> str:
     s = " ".join(str(text or "").split())
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def yes_no(value: Any) -> str:
+    """Booleans spelled out (``clip(False)`` would print nothing)."""
+    return "yes" if value else "no"
+
+
+def metric(value: Any) -> str:
+    """One model-fit metric: booleans as yes/no, numbers rounded, anything else clipped."""
+    if isinstance(value, bool):
+        return yes_no(value)
+    if isinstance(value, int):
+        return num(value, 0)
+    if isinstance(value, float):
+        return num(value, 3)
+    if value is None:
+        return "n/a"
+    return clip(value, 30)
 
 
 def compact(value: Any, n: int = 300) -> str:
@@ -362,48 +383,77 @@ class Toolkit:
             rows = [r for r in rows if r.get("unit_key") == unit_key]
         if not rows:
             return f"No runtime rows in the last {days} days."
+        # Expected minutes from a baseline that fails its checks are not comparable.
+        failing: set[tuple[str, str]] = set()
+        baselines_read = True
+        try:
+            for b in await self.api.get("/analytics/baselines") or []:
+                if isinstance(b, dict) and not b.get("passes"):
+                    failing.add((str(b.get("unit_key")), str(b.get("mode"))))
+        except ApiError:
+            baselines_read = False
         per_unit: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        failing_modes: dict[str, set[str]] = defaultdict(set)
         per_day: dict[str, dict[str, Any]] = {}
         for r in rows:
             run = float(r.get("cool_min") or 0) + float(r.get("heat_min") or 0)
-            u = per_unit[str(r.get("unit_key"))]
+            key = str(r.get("unit_key"))
+            u = per_unit[key]
             u["actual"] += run
             u["aux"] += float(r.get("aux_min") or 0)
             u["maxed"] += float(r.get("maxed_min") or 0)
-            if r.get("expected_min") is not None:
+            fails = (key, str(r.get("mode"))) in failing
+            comparable = r.get("expected_min") is not None and not fails
+            if comparable:
                 u["actual_with_exp"] += run
                 u["expected"] += float(r["expected_min"])
                 u["days_with_exp"] += 1
+            elif fails:
+                u["days_failing"] += 1
+                failing_modes[key].add(str(r.get("mode")))
             d = per_day.setdefault(row_date(r), {"actual": 0.0, "expected": 0.0, "exp_n": 0, "units": 0,
                                                    "modes": set(), "out": r.get("outdoor_mean_f"),
-                                                   "max": r.get("outdoor_max_f"), "maxed": 0.0})
+                                                   "max": r.get("outdoor_max_f"), "maxed": 0.0, "failing": 0})
             d["actual"] += run
             d["units"] += 1
             d["maxed"] += float(r.get("maxed_min") or 0)
             if r.get("mode"):
                 d["modes"].add(r["mode"])
-            if r.get("expected_min") is not None:
+            if comparable:
                 d["expected"] += float(r["expected_min"])
                 d["exp_n"] += 1
+            elif fails:
+                d["failing"] += 1
         scope = unit_name(unit_key) if unit_key else "house"
         lines = [f"Runtime, last {days} days, {scope} (stage-1 minutes; expected = weather-normalized baseline):"]
         for key, u in per_unit.items():
-            exp_txt = "no baseline"
+            parts = []
             if u["days_with_exp"]:
                 diff = (u["actual_with_exp"] - u["expected"]) / u["expected"] * 100 if u["expected"] else None
-                exp_txt = f"{minutes(u['actual_with_exp'])} vs {minutes(u['expected'])} expected on {int(u['days_with_exp'])} baseline days ({pct(diff, 1, signed=True)})"
+                parts.append(f"{minutes(u['actual_with_exp'])} vs {minutes(u['expected'])} expected on {int(u['days_with_exp'])} baseline days ({pct(diff, 1, signed=True)})")
+            if u["days_failing"]:
+                modes = "/".join(sorted(failing_modes[key]))
+                parts.append(f"{int(u['days_failing'])} day(s) not comparable: the {modes} baseline fails its checks")
+            exp_txt = "; ".join(parts) or "no baseline"
             aux = f", aux {minutes(u['aux'])}" if u["aux"] else ""
             lines.append(f"- {unit_name(key)}: {minutes(u['actual'])} total{aux}, maxed {minutes(u['maxed'])}; {exp_txt}")
         lines.append("Daily totals (newest first):")
         day_rows = []
         for day in sorted(per_day, reverse=True):
             d = per_day[day]
-            exp = minutes(d["expected"]) if d["exp_n"] == d["units"] and d["exp_n"] else "n/a"
+            if d["exp_n"] == d["units"] and d["exp_n"]:
+                exp = minutes(d["expected"])
+            elif d["failing"]:
+                exp = "n/a, a baseline fails its checks"
+            else:
+                exp = "n/a"
             modes = "/".join(sorted(d["modes"])) or "-"
             day_rows.append(
                 f"{day} {modes}: {minutes(d['actual'])} (exp {exp}), outdoor mean {temp(d['out'], 0)} max {temp(d['max'], 0)}, maxed {minutes(d['maxed'])}"
             )
         lines += capped(day_rows)
+        if not baselines_read:
+            lines.append("Could not read the baseline checks: treat expected minutes as unverified (see baseline_report).")
         lines.append("Raw actual-vs-expected is not a savings claim; use savings_report for the 90% interval.")
         return "\n".join(lines)
 
@@ -637,24 +687,59 @@ class Toolkit:
             lines.append(f"Note: {clip(n.get('note'), 300)}")
         return "\n".join(lines)
 
+    async def _action_line(self, a: dict[str, Any]) -> str:
+        rb = "readback ok" if a.get("readback_ok") else ("READBACK FAILED" if a.get("readback_ok") is False else "no readback")
+        err = f", error: {clip(a.get('error'), 60)}" if a.get("error") else ""
+        return (
+            f"#{a.get('id')} {await self.local(a.get('ts'))} {a.get('unit_key')} {a.get('action')} {a.get('status')} "
+            f"({a.get('mode')}, {a.get('channel')}, rule {a.get('rule') or '-'}) {rb}{err}: {clip(a.get('reason'), 80)}"
+        )
+
     async def list_actions(
         self,
-        limit: Annotated[int, Field(ge=1, le=100, description="How many recent actions")] = 20,
+        limit: Annotated[int, Field(ge=1, le=ACTIONS_MAX, description="How many recent actions to summarize (1-500)")] = 20,
         unit_key: Annotated[UnitKey | None, Field(description="Only this unit")] = None,
     ) -> str:
         rows = await self.api.get("/control/actions", {"limit": limit, "unit_key": unit_key})
         if not rows:
             return "No control actions recorded."
-        lines = [f"Control actions (newest first, {len(rows)}):"]
-        out = []
+        # Counts cover EVERY fetched row; only anomalies and the newest few are listed.
+        by_unit: dict[str, Counter[str]] = defaultdict(Counter)
+        readback_failed = blocked = skipped = failed = 0
+        anomalies: list[dict[str, Any]] = []
         for a in rows:
-            rb = "readback ok" if a.get("readback_ok") else ("READBACK FAILED" if a.get("readback_ok") is False else "no readback")
-            err = f", error: {clip(a.get('error'), 60)}" if a.get("error") else ""
-            out.append(
-                f"#{a.get('id')} {await self.local(a.get('ts'))} {a.get('unit_key')} {a.get('action')} {a.get('status')} "
-                f"({a.get('mode')}, {a.get('channel')}, rule {a.get('rule') or '-'}) {rb}{err}: {clip(a.get('reason'), 80)}"
-            )
-        return "\n".join(lines + capped(out))
+            status = str(a.get("status"))
+            by_unit[str(a.get("unit_key"))][status] += 1
+            is_blocked = status == "failed" and str(a.get("error") or "").startswith("Not sent")
+            blocked += int(is_blocked)
+            failed += int(status == "failed" and not is_blocked)
+            skipped += int(status == "skipped")
+            readback_failed += int(a.get("readback_ok") is False)
+            if status in ("failed", "skipped") or a.get("readback_ok") is False:
+                anomalies.append(a)
+        first, last = rows[-1].get("ts"), rows[0].get("ts")
+        lines = [
+            f"Control actions: the newest {len(rows)} (asked for up to {limit}), "
+            f"{await self.local(first)} to {await self.local(last)} local time.",
+            "By unit and status: " + "; ".join(
+                f"{key} " + ", ".join(f"{st} {n}" for st, n in sorted(c.items())) for key, c in sorted(by_unit.items())
+            ) + ".",
+            f"Read-back failures {readback_failed}; blocked by guardrails (not sent) {blocked}; other failures {failed}; "
+            f"skipped {skipped}.",
+        ]
+        if anomalies:
+            lines.append(f"Anomalies (failed, read-back mismatch or skipped; newest first, {len(anomalies)}):")
+            lines += [await self._action_line(a) for a in anomalies[:ACTIONS_LISTED]]
+            if len(anomalies) > ACTIONS_LISTED:
+                lines.append(f"(+{len(anomalies) - ACTIONS_LISTED} more anomalies not shown; counted above)")
+        else:
+            lines.append("No anomalies: nothing failed, skipped or mismatched on read-back.")
+        listed = {a.get("id") for a in anomalies[:ACTIONS_LISTED]}
+        newest = [a for a in rows[:ACTIONS_NEWEST] if a.get("id") not in listed]
+        if newest:
+            lines.append("Newest other actions:")
+            lines += [await self._action_line(a) for a in newest]
+        return "\n".join(lines)
 
     async def explain_action(
         self,
@@ -811,7 +896,7 @@ class Toolkit:
             return "No model fits yet."
         out = []
         for m in rows:
-            metrics = ", ".join(f"{k} {num(v, 3) if isinstance(v, (int, float)) and not isinstance(v, bool) else clip(v, 30)}" for k, v in list((m.get("metrics") or {}).items())[:6])
+            metrics = ", ".join(f"{k} {metric(v)}" for k, v in list((m.get("metrics") or {}).items())[:6])
             scope = "/".join(str(x) for x in (m.get("unit_key"), m.get("mode")) if x)
             notes = f" Notes: {clip(m.get('notes'), 120)}" if m.get("notes") else ""
             out.append(f"#{m.get('id')} {m.get('kind')} {scope or 'house'} [{m.get('status')}] trained {m.get('train_start')}..{m.get('train_end')}: {metrics or 'no metrics'}.{notes}")
@@ -903,7 +988,7 @@ class Toolkit:
                 ranges = {}
         if not mine:
             return f"No changes await your sign-off. {len(owners)} await the owner."
-        lines = [f"{len(mine)} change(s) await your sign-off ({len(owners)} more await the owner):"]
+        lines = [f"{len(mine)} change(s) await your sign-off ({len(owners)} more await the owner). Approve or hold each; only the owner can reject:"]
         for c in mine[:MAX_ROWS]:
             payload = c.get("payload") or {}
             params = payload.get("params", payload) if isinstance(payload, dict) else {}
@@ -937,7 +1022,11 @@ class Toolkit:
     async def sign_off_change(
         self,
         change_id: Annotated[int, Field(ge=1, description="Change id from review_pending_changes")],
-        decision: Annotated[Literal["approve", "hold", "reject"], Field(description="approve = start its trial window; hold = wait for more evidence or the owner; reject = drop it")],
+        decision: Annotated[
+            Literal["approve", "hold"],
+            Field(description="approve = start its trial window; hold = wait for more evidence or the owner. You cannot "
+                              "reject: if the evidence shows harm, hold it with that evidence in the reason and the owner decides."),
+        ],
         reason: Annotated[str, Field(min_length=3, max_length=2000, description="Why, citing the gate numbers and intervals")],
     ) -> str:
         c = await self.api.post(f"/changes/{change_id}/decision", {"decision": decision, "reason": reason})
@@ -1040,7 +1129,8 @@ TOOLS: tuple[ToolSpec, ...] = (
           "open alerts. Start most runs here."),
     _spec(Toolkit.query_runtime, "read",
           "Daily stage-1 runtime (minutes) per unit and for the house over N days (1-120) with the weather-normalized "
-          "expected minutes, outdoor temps and maxed-out minutes. Lists up to 20 days. Not a savings claim."),
+          "expected minutes (only where that unit/mode baseline passes its checks), outdoor temps and maxed-out "
+          "minutes. Lists up to 20 days. Not a savings claim."),
     _spec(Toolkit.query_room, "read",
           "One room's history over N hours (1-168): temperature min/mean/max (or unknown when it has no sensor), "
           "occupancy share and states, the unit's setpoint range, and up to 12 time buckets."),
@@ -1067,8 +1157,9 @@ TOOLS: tuple[ToolSpec, ...] = (
           "History study of warm-main-floor afternoons: extra upstairs runtime per event with 90% interval, the placebo "
           "and bed-wing checks, and up to 10 events."),
     _spec(Toolkit.list_actions, "read",
-          "Recent controller actions (newest first, up to 100): unit, action, status, mode, channel, rule, read-back "
-          "result and reason."),
+          "Recent controller actions (up to 500): counts per unit and status over all of them, read-back failures, "
+          "guardrail blocks and skips, then the anomalies (failed, read-back mismatch, skipped) and the newest few in "
+          "full (unit, action, status, mode, channel, rule, read-back result, reason)."),
     _spec(Toolkit.explain_action, "read",
           "Full detail of one controller action: why, before/request/read-back values, errors."),
     _spec(Toolkit.get_plan, "read",
@@ -1099,8 +1190,10 @@ TOOLS: tuple[ToolSpec, ...] = (
           "Changes waiting for YOUR sign-off, with their gate results (backtest, shadow days) and whether every changed "
           "parameter sits inside your sign-off ranges. Read-only."),
     _spec(Toolkit.sign_off_change, "gated",
-          "Approve, hold or reject one change that awaits your sign-off, with a reason. The API refuses (403) anything "
-          "outside your ranges; approval starts a limited trial window, it never writes a thermostat."),
+          "Approve or hold one model-proposed change that awaits your sign-off, with a reason citing the numbers. You "
+          "cannot reject: when the evidence shows harm, hold it with the evidence in the reason; the owner decides "
+          "rejections. The API refuses (403) anything outside your ranges; approval starts a limited trial window, it "
+          "never writes a thermostat."),
     _spec(Toolkit.propose_policy_change, "gated",
           "Propose a policy parameter change (only the keys being changed). It must pass backtest and shadow days, and "
           "the owner decides. Back it with numbers and 90% intervals."),

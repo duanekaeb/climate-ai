@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -13,7 +13,8 @@ import pytest
 from climate_agent import scheduler as scheduler_mod
 from climate_agent.config import AgentConfig, StartupRefused, add_one_year, check_startup, idle_reason
 from climate_agent.scheduler import Scheduler
-from test_runner import FakeQuery, init, result_message, usage_limit_error
+from climate_agent import runner as runner_mod
+from test_runner import FakeQuery, auth_error, init, rate_limit, result_message, usage_limit_error
 
 NOW = datetime(2026, 10, 4, 8, 30, tzinfo=timezone.utc)
 GOOD_ENV = {"CLAUDE_CODE_OAUTH_TOKEN": "fake-oauth", "CLIMATE_AGENT_TOKEN": "agent-token"}
@@ -249,3 +250,135 @@ def test_stop_mid_run_hands_the_run_back(make_api, agent_config, subscription_en
     assert asyncio.run(go()) is True
     body = router.bodies("POST", "/api/agent/runs/44/finish")[0]
     assert body["status"] == "deferred" and body["terminal_reason"] == "service_stopped"
+
+
+def test_claimed_run_is_finished_even_when_running_it_crashes(make_api, agent_config, subscription_env, monkeypatch):
+    run = {"id": 47, "kind": "nightly"}
+    routes = {("POST", "/api/agent/claim"): run, ("POST", "/api/agent/runs/47/finish"): {}}
+    sched, router, api = make_scheduler(make_api, agent_config, routes, FakeQuery())
+
+    async def crash(*args: Any, **kwargs: Any):
+        raise RuntimeError("unexpected sk-ant-oat01-zzzzzzzzzzzzzzzz")
+
+    monkeypatch.setattr(scheduler_mod, "execute_run", crash)
+
+    async def go():
+        try:
+            return await sched.claim_once()
+        finally:
+            await api.aclose()
+
+    assert asyncio.run(go()) is True
+    body = router.bodies("POST", "/api/agent/runs/47/finish")[0]
+    assert body["status"] == "failed" and body["terminal_reason"] == "agent_error"
+    assert "RuntimeError" in body["error"] and "zzzzzzzz" not in body["error"]
+    assert sched.current_run_id is None
+
+
+class Clock:
+    def __init__(self, at: datetime):
+        self.at = at
+
+    def __call__(self) -> datetime:
+        return self.at
+
+
+def test_signed_out_claims_nothing_and_rechecks_every_30_minutes(make_api, agent_config, subscription_env):
+    run = {"id": 48, "kind": "nightly"}
+    routes = {("POST", "/api/agent/claim"): run, ("POST", "/api/agent/runs/48/finish"): {},
+              ("POST", "/api/agent/heartbeat"): {}}
+    fake = FakeQuery([init(), result_message(result="OK", num_turns=1)], [init(), result_message()])
+    api, router = make_api(routes)
+    clock = Clock(NOW)
+    sched = Scheduler(agent_config, api, query_fn=fake, now=clock)
+    sched.signin_checked, sched.signed_in, sched.signin_checked_at = True, False, NOW
+
+    async def go():
+        try:
+            steps = [await sched.work_once()]
+            clock.at = NOW + timedelta(minutes=29)
+            steps.append(await sched.work_once())
+            assert router.requests == [] and fake.calls == []  # signed out: nothing claimed, no Claude run
+            clock.at = NOW + timedelta(minutes=30)
+            steps.append(await sched.work_once())  # the sign-in re-check (one tiny run)
+            steps.append(await sched.work_once())  # signed in again: claims
+            return steps
+        finally:
+            await api.aclose()
+
+    assert asyncio.run(go()) == [False, False, True, True]
+    assert fake.calls[0][1].max_turns == 1 and fake.calls[0][1].mcp_servers == {}
+    assert router.paths() == ["POST /api/agent/heartbeat", "POST /api/agent/claim", "POST /api/agent/runs/48/finish"]
+    assert router.bodies("POST", "/api/agent/heartbeat")[0]["signed_in"] is True
+    assert router.bodies("POST", "/api/agent/runs/48/finish")[0]["status"] == "completed"
+
+
+def test_failed_signin_check_does_not_claim(make_api, agent_config, subscription_env):
+    routes = {("POST", "/api/agent/claim"): {"id": 49, "kind": "nightly"}, ("POST", "/api/agent/heartbeat"): {}}
+    fake = FakeQuery([init(), auth_error()])
+    sched, router, api = make_scheduler(make_api, agent_config, routes, fake)
+
+    async def go():
+        try:
+            await sched.signin_check()
+            return await sched.work_once()
+        finally:
+            await api.aclose()
+
+    assert asyncio.run(go()) is False
+    assert sched.signed_in is False and len(fake.calls) == 1
+    assert "POST /api/agent/claim" not in router.paths()
+
+
+def test_auth_failure_mid_run_defers_it_and_stops_claiming(make_api, agent_config, subscription_env):
+    run = {"id": 45, "kind": "nightly"}
+    routes = {("POST", "/api/agent/claim"): run, ("POST", "/api/agent/runs/45/finish"): {},
+              ("POST", "/api/agent/heartbeat"): {}}
+    fake = FakeQuery([init(), auth_error()])
+    sched, router, api = make_scheduler(make_api, agent_config, routes, fake)
+    sched.signin_checked, sched.signed_in = True, True
+
+    async def go():
+        try:
+            return [await sched.work_once(), await sched.work_once()]
+        finally:
+            await api.aclose()
+
+    assert asyncio.run(go()) == [True, False]
+    body = router.bodies("POST", "/api/agent/runs/45/finish")[0]
+    assert body["status"] == "deferred" and body["not_before"] == "2026-10-04T09:00:00+00:00"
+    assert "claude setup-token" in body["error"]
+    assert sched.signed_in is False and sched.signin_checked_at == NOW
+    assert router.bodies("POST", "/api/agent/heartbeat")[0]["signed_in"] is False  # reported right away
+    assert router.paths().count("POST /api/agent/claim") == 1  # nothing more is claimed while signed out
+
+
+def test_reclaimed_deferred_run_resumes_its_session(make_api, agent_config, subscription_env, monkeypatch):
+    monkeypatch.setattr(runner_mod, "session_exists", lambda session_id, cwd: session_id == "sess-46")
+    first = {"id": 46, "kind": "weekly", "created_at": "2026-10-04T08:00:00Z"}
+    again = {**first, "not_before": "2026-10-04T11:31:00Z", "terminal_reason": "api_error", "model": "claude-opus-5-5"}
+    claims = [first, again]
+    routes = {
+        ("POST", "/api/agent/claim"): lambda request: claims.pop(0),
+        ("POST", "/api/agent/runs/46/finish"): {},
+        ("GET", "/api/reports"): [], ("GET", "/api/changes"): [], ("GET", "/api/experiments"): [],
+    }
+    fake = FakeQuery(
+        [init(session_id="sess-46"), rate_limit("five_hour", NOW + timedelta(hours=3), "sess-46"),
+         usage_limit_error(session_id="sess-46")],
+        [init(), result_message()],
+    )
+    sched, router, api = make_scheduler(make_api, agent_config, routes, fake)
+
+    async def go():
+        try:
+            await sched.claim_once()
+            await sched.claim_once()
+        finally:
+            await api.aclose()
+
+    asyncio.run(go())
+    assert [b["status"] for b in router.bodies("POST", "/api/agent/runs/46/finish")] == ["deferred", "completed"]
+    (_, opts1), (prompt2, opts2) = fake.calls
+    assert opts1.resume is None and opts2.resume == "sess-46"
+    assert "resumed" in prompt2 and "nothing needs skipping" in prompt2

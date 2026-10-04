@@ -191,11 +191,104 @@ def test_weather_cites_open_meteo_and_runtime_rounds(make_api):
     api, _ = make_api({("GET", "/api/weather"): weather, ("GET", "/api/control/settings"): SETTINGS})
     w = call(api, "get_weather").text
     assert w.rstrip().endswith("Weather data by Open-Meteo.com") and "93°F" in w
-    api, _ = make_api({("GET", "/api/runtime/daily"): runtime})
+    api, _ = make_api({("GET", "/api/runtime/daily"): runtime, ("GET", "/api/analytics/baselines"): BASELINES})
     r = call(api, "query_runtime", {"days": 3}).text
     assert "2026-10-02 cool: 451 min (exp 450 min)" in r
     assert "Upstairs: 300 min total, maxed 45 min; 300 min vs 280 min expected on 1 baseline days (+7.3%)" in r
-    assert "not a savings claim" in r
+    assert "not a savings claim" in r and "Could not read" not in r
+
+
+BASELINES = [
+    {"unit_key": "main", "mode": "cool", "passes": True},
+    {"unit_key": "up", "mode": "cool", "passes": True},
+]
+
+
+def test_runtime_suppresses_expected_where_the_baseline_fails(make_api):
+    runtime = [
+        {"Date": "2026-10-02", "unit_key": "up", "cool_min": 300.0, "heat_min": 0.0, "expected_min": 280.0, "mode": "cool",
+         "outdoor_mean_f": 81.0, "outdoor_max_f": 93.0, "maxed_min": 45.0},
+        {"Date": "2026-10-02", "unit_key": "main", "cool_min": 150.0, "heat_min": 0.0, "expected_min": 170.0, "mode": "cool",
+         "outdoor_mean_f": 81.0, "outdoor_max_f": 93.0, "maxed_min": 0.0},
+    ]
+    failing = [{"unit_key": "main", "mode": "cool", "passes": True}, {"unit_key": "up", "mode": "cool", "passes": False}]
+    api, router = make_api({("GET", "/api/runtime/daily"): runtime, ("GET", "/api/analytics/baselines"): failing})
+    r = call(api, "query_runtime", {"days": 3}).text
+    up = next(line for line in r.splitlines() if line.startswith("- Upstairs"))
+    main = next(line for line in r.splitlines() if line.startswith("- Main floor"))
+    assert "expected" not in up and "not comparable: the cool baseline fails its checks" in up and "%" not in up
+    assert "150 min vs 170 min expected on 1 baseline days (-11.8%)" in main
+    assert "2026-10-02 cool: 450 min (exp n/a, a baseline fails its checks)" in r
+    assert router.paths().count("GET /api/analytics/baselines") == 1
+    # Baselines unreadable: comparisons are flagged as unverified.
+    api, _ = make_api({("GET", "/api/runtime/daily"): runtime})
+    assert "Could not read the baseline checks" in call(api, "query_runtime", {"days": 3}).text
+
+
+def test_model_fits_spell_out_booleans(make_api):
+    fits = [
+        {"id": 12, "kind": "baseline", "unit_key": "bed", "mode": "cool", "train_start": "2026-08-20", "train_end": "2026-10-02",
+         "metrics": {"r2": 0.9037, "passes": False}, "status": "active"},
+        {"id": 8, "kind": "baseline", "unit_key": "main", "mode": "cool", "train_start": "2026-08-20", "train_end": "2026-10-02",
+         "metrics": {"r2": 0.9715, "passes": True, "note": None}, "status": "active"},
+    ]
+    api, _ = make_api({("GET", "/api/models"): fits})
+    text = call(api, "model_fits").text
+    assert "#12 baseline bed/cool [active] trained 2026-08-20..2026-10-02: r2 0.904, passes no." in text
+    assert "r2 0.972, passes yes, note n/a." in text
+
+
+def action(aid: int, unit: str, status: str = "verified", readback_ok: bool | None = True, error: str | None = None) -> dict[str, Any]:
+    return {"id": aid, "ts": f"2026-10-03T{aid // 4:02d}:{aid % 4 * 15:02d}:00Z", "unit_key": unit, "actor": "controller",
+            "mode": "act", "channel": "ecobee", "action": "set_hold", "status": status, "rule": "linked_floors",
+            "reason": f"reason {aid}", "readback_ok": readback_ok, "error": error}
+
+
+def test_list_actions_counts_every_row_and_lists_anomalies(make_api):
+    rows = []
+    for aid in range(40, 0, -1):  # newest first
+        unit = "main" if aid % 2 else "up"
+        if aid == 3:
+            rows.append(action(aid, unit, "failed", False, "read-back mismatch: cool 76.0 != 75.0"))
+        elif aid == 25:
+            rows.append(action(aid, unit, "failed", None, "Not sent: deadband below 3°F"))
+        elif aid == 30:
+            rows.append(action(aid, unit, "skipped", None))
+        else:
+            rows.append(action(aid, unit))
+    api, router = make_api({("GET", "/api/control/actions"): rows, ("GET", "/api/control/settings"): SETTINGS})
+    res = call(api, "list_actions", {"limit": 40})
+    assert not res.is_error
+    text = res.text
+    assert router.requests[0].url.params["limit"] == "40"
+    assert "the newest 40 (asked for up to 40)" in text
+    assert "main failed 2, verified 18; up skipped 1, verified 19." in text  # counts over ALL 40 rows
+    assert "Read-back failures 1; blocked by guardrails (not sent) 1; other failures 1; skipped 1." in text
+    lines = text.splitlines()
+    anomaly_ids = [line.split()[0] for line in lines if "reason " in line]
+    assert anomaly_ids[:3] == ["#30", "#25", "#3"]  # old anomalies (beyond row 20) are still listed
+    assert anomaly_ids[3:] == ["#40", "#39", "#38", "#37", "#36"]  # then the newest few
+    assert "READBACK FAILED" in text and "#20 " not in text
+    assert len(text) < 3000
+    # up to 500 rows may be summarized; more is refused before any request
+    api, router = make_api({("GET", "/api/control/actions"): rows, ("GET", "/api/control/settings"): SETTINGS})
+    assert not call(api, "list_actions", {"limit": 500}).is_error
+    api, router = make_api({})
+    assert call(api, "list_actions", {"limit": 501}).is_error and router.requests == []
+
+
+def test_sign_off_cannot_reject(make_api):
+    api, router = make_api({})
+    res = call(api, "sign_off_change", {"change_id": 7, "decision": "reject", "reason": "harms comfort"})
+    assert res.is_error and res.text.startswith("Invalid arguments for sign_off_change")
+    assert router.requests == []
+    assert input_schema("sign_off_change")["properties"]["decision"]["enum"] == ["approve", "hold"]
+    from climate_agent.runner import system_prompt_for
+
+    for kind in ("nightly", "weekly", "triggered", "chat"):
+        prompt = system_prompt_for(kind)
+        assert "You cannot reject" in prompt and "**Reject**" not in prompt
+        assert "approve, hold or reject" not in prompt and "held or rejected" not in prompt
 
 
 def test_room_without_sensor_stays_unknown(make_api):

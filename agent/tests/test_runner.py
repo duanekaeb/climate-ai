@@ -19,16 +19,20 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
+from climate_agent import runner as runner_mod
 from climate_agent.runner import (
     DISALLOWED_TOOLS,
+    SubscriptionGuardError,
     build_options,
     execute_run,
     run_one,
     system_prompt_for,
     user_prompt_for,
+    verify_options,
 )
 from climate_agent.toolkit import TOOLS, Toolkit
 from climate_agent.tools import create_house_server
+from conftest import change
 
 NOW = datetime(2026, 10, 4, 8, 30, tzinfo=timezone.utc)
 NIGHTLY = {"id": 42, "kind": "nightly", "prompt": "", "trigger": None}
@@ -44,24 +48,32 @@ def result_message(**overrides: Any) -> ResultMessage:
     return ResultMessage(**fields)
 
 
-def init(api_key_source: str = "none") -> SystemMessage:
-    return SystemMessage(subtype="init", data={"apiKeySource": api_key_source, "model": "claude-opus-5-5"})
+def init(api_key_source: str = "none", session_id: str | None = None) -> SystemMessage:
+    data: dict[str, Any] = {"apiKeySource": api_key_source, "model": "claude-opus-5-5"}
+    if session_id:
+        data["session_id"] = session_id
+    return SystemMessage(subtype="init", data=data)
 
 
 def assistant(text: str, model: str = "claude-opus-5-5", error: Any = None) -> AssistantMessage:
     return AssistantMessage(content=[TextBlock(text=text)], model=model, error=error)
 
 
-def usage_limit_error(text: str = "API Error: 429 usage limit reached") -> ResultError:
+def usage_limit_error(text: str = "API Error: 429 usage limit reached", session_id: str = "sess-9") -> ResultError:
     data = {"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
-            "terminal_reason": "api_error", "result": text, "session_id": "sess-9"}
+            "terminal_reason": "api_error", "result": text, "session_id": session_id}
     return ResultError("Claude Code returned an error result: " + text, data=data, exit_code=1)
 
 
-def rate_limit(kind: str, resets_at: datetime | None) -> RateLimitEvent:
+def auth_error() -> ResultError:
+    return ResultError("auth", data={"subtype": "success", "is_error": True, "api_error_status": 401,
+                                     "terminal_reason": "api_error", "result": "OAuth token has expired"}, exit_code=1)
+
+
+def rate_limit(kind: str, resets_at: datetime | None, session_id: str = "sess-9") -> RateLimitEvent:
     info = RateLimitInfo(status="rejected", rate_limit_type=kind,  # type: ignore[arg-type]
                          resets_at=int(resets_at.timestamp()) if resets_at else None)
-    return RateLimitEvent(rate_limit_info=info, uuid="u1", session_id="sess-9")
+    return RateLimitEvent(rate_limit_info=info, uuid="u1", session_id=session_id)
 
 
 class FakeQuery:
@@ -84,16 +96,22 @@ class FakeQuery:
         return gen()
 
 
-def execute(make_api, agent_config, fake: FakeQuery, run: dict[str, Any] = NIGHTLY):
-    api, _ = make_api({})
+def execute_full(make_api, agent_config, fake: FakeQuery, run: dict[str, Any] = NIGHTLY,
+                 routes: dict[tuple[str, str], Any] | None = None, resume_session_id: str | None = None):
+    api, router = make_api(routes or {})
 
     async def go():
         try:
-            return await execute_run(run, config=agent_config, api=api, query_fn=fake, now=lambda: NOW)
+            return await execute_run(run, config=agent_config, api=api, query_fn=fake, now=lambda: NOW,
+                                     resume_session_id=resume_session_id)
         finally:
             await api.aclose()
 
-    return asyncio.run(go())
+    return asyncio.run(go()), router
+
+
+def execute(*args: Any, **kwargs: Any):
+    return execute_full(*args, **kwargs)[0]
 
 
 # -- options ---------------------------------------------------------------------------
@@ -229,11 +247,131 @@ def test_other_result_error_fails(make_api, agent_config, subscription_env):
 
 
 def test_sign_in_failure_is_reported(make_api, agent_config, subscription_env):
-    err = ResultError("auth", data={"subtype": "success", "is_error": True, "api_error_status": 401,
-                                    "terminal_reason": "api_error", "result": "OAuth token has expired"}, exit_code=1)
-    out = execute(make_api, agent_config, FakeQuery([init(), assistant("x", error="authentication_failed"), err]))
-    assert out.status == "failed" and out.signed_in is False
-    assert "claude setup-token" in (out.error or "")
+    # A normal run that fails sign-in is deferred 30 minutes (not failed) and flips signed_in.
+    out = execute(make_api, agent_config, FakeQuery([init(), assistant("x", error="authentication_failed"), auth_error()]))
+    assert out.status == "deferred" and out.signed_in is False
+    assert out.not_before == NOW + timedelta(minutes=30)
+    assert out.finish_body()["not_before"] == "2026-10-04T09:00:00+00:00"
+    assert "claude setup-token" in (out.error or "") and "Deferred 30 min" in (out.error or "")
+    # The sign-in check itself just reports it.
+    out = execute(make_api, agent_config, FakeQuery([init(), auth_error()]), run={"id": None, "kind": "signin_check"})
+    assert out.status == "failed" and out.signed_in is False and out.not_before is None
+
+
+def test_bare_sdk_exception_fails_the_run_redacted(make_api, agent_config, subscription_env, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-1234567890-secret")
+    # The SDK raises bare Exception for an initialize timeout or an error control_response.
+    boom = Exception("Control request timeout: initialize (tok-1234567890-secret sk-ant-oat01-abcdefghijklmnop)")
+    out = execute(make_api, agent_config, FakeQuery([init(session_id="sess-boom"), boom]))
+    assert out.status == "failed" and out.signed_in is None
+    error = out.error or ""
+    assert "Exception" in error and "initialize" in error and "[redacted]" in error
+    assert "tok-1234567890-secret" not in error and "abcdefghijkl" not in error
+    assert out.session_id == "sess-boom" and out.model == "claude-opus-5-5"
+
+
+def test_prompts_are_delivered_verbatim(make_api, agent_config, subscription_env):
+    from dataclasses import replace
+
+    api, _ = make_api({})
+    opts = build_options("chat", agent_config, create_house_server(Toolkit(api)))
+    assert opts.verbatim_prompts is True  # no @path expansion of the owner's text or trigger JSON
+    assert build_options("signin_check", agent_config, None).verbatim_prompts is True
+    with pytest.raises(SubscriptionGuardError, match="verbatim"):
+        verify_options(replace(opts, verbatim_prompts=False))
+    fake = FakeQuery([init(), result_message()])
+    execute(make_api, agent_config, fake, run={"id": 8, "kind": "chat", "prompt": "What is in @/etc/passwd ?"})
+    prompt, sent = fake.calls[0]
+    assert sent.verbatim_prompts is True and "@/etc/passwd" in prompt
+    asyncio.run(api.aclose())
+
+
+# -- retries never repeat gated side effects ------------------------------------------
+
+RUN_CREATED = "2026-10-04T08:00:00Z"
+RUN = {**NIGHTLY, "created_at": RUN_CREATED}
+PRIOR_WORK_ROUTES: dict[tuple[str, str], Any] = {
+    ("GET", "/api/reports"): [
+        {"id": 56, "kind": "note", "title": "Another run's note", "agent_run_id": 41, "created_at": "2026-10-04T08:10:00Z"},
+        {"id": 55, "kind": "nightly", "title": "Nightly 10-03", "agent_run_id": 42, "created_at": "2026-10-04T08:20:00Z"},
+    ],
+    ("GET", "/api/changes"): [
+        {**change(11, "owner", {"linked_offset_f": 1.5}, status="backtest"), "proposed_by": "claude",
+         "created_at": "2026-10-04T08:21:00Z", "title": "Main 1.5F under"},
+        {**change(7, "owner", {"linked_offset_f": 1.0}, status="held"), "decided_by": "claude",
+         "decided_at": "2026-10-04T08:22:00Z"},
+        {**change(3, "owner", {"linked_offset_f": 2.0}), "proposed_by": "claude", "created_at": "2026-10-01T08:00:00Z"},
+    ],
+    ("GET", "/api/experiments"): [
+        {"id": 4, "name": "Offset switchback", "proposed_by": "claude", "created_at": "2026-10-04T08:23:00Z", "status": "proposed"},
+        {"id": 2, "name": "Owner idea", "proposed_by": "owner", "created_at": "2026-10-04T08:24:00Z", "status": "proposed"},
+    ],
+}
+
+
+def assert_prior_work_listed(prompt: str) -> None:
+    assert "Retry note" in prompt and "Do NOT publish, propose or sign off any of these again" in prompt
+    assert "published nightly report #55 'Nightly 10-03'" in prompt
+    assert "proposed change #11" in prompt and "signed off change #7" in prompt and "proposed experiment #4" in prompt
+    # another run's report, a proposal from before this run was queued, the owner's experiment: not listed
+    assert "#56" not in prompt and "change #3" not in prompt and "experiment #2" not in prompt
+
+
+def opus_limited_then_ok() -> FakeQuery:
+    return FakeQuery(
+        [init(session_id="sess-9"), rate_limit("seven_day_opus", NOW + timedelta(days=2)), usage_limit_error("Opus weekly limit reached")],
+        [init(), assistant("done", model="claude-sonnet-5-5"), result_message()],
+    )
+
+
+def test_fallback_retry_resumes_the_session_and_lists_prior_work(make_api, agent_config, subscription_env, monkeypatch):
+    monkeypatch.setattr(runner_mod, "session_exists", lambda session_id, cwd: session_id == "sess-9")
+    fake = opus_limited_then_ok()
+    out = execute(make_api, agent_config, fake, run=RUN, routes=PRIOR_WORK_ROUTES)
+    assert out.status == "completed" and len(fake.calls) == 2
+    (first_prompt, first), (retry_prompt, retry) = fake.calls
+    assert first.resume is None and "Retry note" not in first_prompt  # a fresh run is not a retry
+    assert retry.resume == "sess-9" and retry.model == "claude-sonnet-5-5"
+    assert "resumed" in retry_prompt and "Opus usage limit" in retry_prompt
+    assert "Nightly run #42" not in retry_prompt  # the original task is already in the resumed session
+    assert_prior_work_listed(retry_prompt)
+
+
+def test_fallback_retry_without_the_session_on_disk_reruns_with_the_note(make_api, agent_config, subscription_env):
+    fake = opus_limited_then_ok()
+    execute(make_api, agent_config, fake, run=RUN, routes=PRIOR_WORK_ROUTES)
+    retry_prompt, retry = fake.calls[1]
+    assert retry.resume is None and retry_prompt.startswith("Nightly run #42")
+    assert_prior_work_listed(retry_prompt)
+
+
+def test_reclaimed_deferred_run_resumes_and_gets_the_note(make_api, agent_config, subscription_env, monkeypatch):
+    deferred = {**RUN, "not_before": "2026-10-04T08:25:00Z", "terminal_reason": "api_error", "model": "claude-opus-5-5"}
+    # Session still on disk: resumed, with the note.
+    monkeypatch.setattr(runner_mod, "session_exists", lambda session_id, cwd: True)
+    fake = FakeQuery([init(), result_message()])
+    execute(make_api, agent_config, fake, run=deferred, routes=PRIOR_WORK_ROUTES, resume_session_id="sess-7")
+    prompt, opts = fake.calls[0]
+    assert opts.resume == "sess-7" and "resumed" in prompt
+    assert_prior_work_listed(prompt)
+    # Session unknown (the API's run carries no session id): a fresh run, still with the note.
+    monkeypatch.setattr(runner_mod, "session_exists", lambda session_id, cwd: False)
+    fake = FakeQuery([init(), result_message()])
+    execute(make_api, agent_config, fake, run=deferred, routes=PRIOR_WORK_ROUTES)
+    prompt, opts = fake.calls[0]
+    assert opts.resume is None and prompt.startswith("Nightly run #42")
+    assert_prior_work_listed(prompt)
+    # API down: the note says what could not be checked.
+    fake = FakeQuery([init(), result_message()])
+    execute(make_api, agent_config, fake, run=deferred)
+    assert "Could not check reports, changes, experiments" in fake.calls[0][0]
+
+
+def test_fresh_run_makes_no_prior_work_calls(make_api, agent_config, subscription_env):
+    fake = FakeQuery([init(), result_message()])
+    _, router = execute_full(make_api, agent_config, fake, run=RUN, routes=PRIOR_WORK_ROUTES)
+    assert router.requests == []
+    assert "Retry note" not in fake.calls[0][0] and fake.calls[0][1].resume is None
 
 
 def test_api_key_billing_aborts_the_run(make_api, agent_config, subscription_env):

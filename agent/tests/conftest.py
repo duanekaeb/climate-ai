@@ -157,3 +157,11 @@ def change(cid: int, needs: str, params: dict[str, Any], status: str = "awaiting
                   "shadow": {"days": 3, "comfort_regressions": 0}},
         "needs": needs,
     }
+
+
+@pytest.fixture(autouse=True)
+def no_sessions_on_disk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resume checks never read ~/.claude in tests: no session is on disk unless a test says so."""
+    from climate_agent import runner
+
+    monkeypatch.setattr(runner, "session_exists", lambda session_id, cwd: False)

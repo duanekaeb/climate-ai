@@ -7,7 +7,10 @@ writes reports. It is never in the control path and has no tool that writes to a
 It has no database credentials: it talks to the API with a bearer token (role `agent`).
 
 - `python -m climate_agent.scheduler`: the agent service. Checks sign-in once at start,
-  heartbeats every 60 s, claims a queued run every 20 s, runs it, reports the result.
+  heartbeats every 60 s, claims a queued run every 20 s, runs it, reports the result (every
+  claimed run is finished, even if running it crashes). While sign-in fails it claims nothing,
+  keeps heartbeating "not signed in" and re-checks at most every 30 minutes; a run that fails
+  sign-in is deferred 30 minutes, not failed.
 - `python -m climate_agent.mcp_server [--http HOST:PORT]`: the same tools for Claude Code or
   Claude Desktop (stdio by default; streamable HTTP at `/mcp` with a bearer token).
 
@@ -42,9 +45,20 @@ It has no database credentials: it talks to the API with a bearer token (role `a
 No built-in tools (`tools=[]`, and Bash/Read/Write/Edit/Glob/Grep/Agent/NotebookEdit/WebFetch/
 WebSearch disallowed), only `mcp__house__*` pre-approved, `permission_mode="dontAsk"`, no
 filesystem settings (`setting_sources=[]`), only our MCP server, an empty working directory,
-at most 30 turns. A run's digest is trusted only when `terminal_reason == "completed"`. A
-usage limit (429) defers the run until the limit resets; if only the Opus limit was hit, the
-run is retried once on the fallback model.
+at most 30 turns, and prompts delivered verbatim (`verbatim_prompts=True`: no `@path`
+expansion of the owner's chat text or a trigger's JSON). A run's digest is trusted only when
+`terminal_reason == "completed"`. A usage limit (429) defers the run until the limit resets;
+if only the Opus limit was hit, the run is retried once on the fallback model.
+
+A retry (that fallback retry, or a deferred or handed-back run claimed again) resumes the
+earlier Claude session when its id is known (the fallback retry, or a run this process
+deferred; the API's run record does not carry it) and its transcript is still on disk.
+Either way its prompt lists what the run already did (reports with its `agent_run_id`; changes, experiments and sign-offs Claude made
+since the run was queued), so it does not publish or propose them twice.
+
+Claude may approve or hold model-proposed changes inside its sign-off ranges; it cannot reject
+(the API refuses). Harm is recorded as a hold with the evidence in the reason; the owner
+decides rejections.
 
 ## Claude Code
 

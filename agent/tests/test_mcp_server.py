@@ -35,7 +35,10 @@ def test_registers_every_tool(make_api):
     assert by_name["sign_off_change"].annotations.read_only_hint is False
     props = by_name["sign_off_change"].input_schema["properties"]
     assert set(props) == {"change_id", "decision", "reason"}
-    assert props["decision"]["enum"] == ["approve", "hold", "reject"]
+    assert props["decision"]["enum"] == ["approve", "hold"]  # Claude may not reject (the API returns 403)
+    assert "cannot reject" in by_name["sign_off_change"].description
+    sdk = {t.name: t for t in build_tools(Toolkit(api))}
+    assert sdk["sign_off_change"].input_schema["properties"]["decision"]["enum"] == ["approve", "hold"]
     assert set(by_name["propose_experiment"].input_schema["required"]) == {"name", "hypothesis", "arms"}
 
 

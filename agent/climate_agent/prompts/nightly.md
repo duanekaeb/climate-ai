@@ -13,8 +13,9 @@ report. Aim for about 10-15 tool calls.
 3. **Comfort.** `comfort_report` (days 1-2). Any occupied or sleeping room under 97% in band
    is the first thing in the report, with the room, minutes and worst excursion. Look at that
    room with `query_room` only if the cause is unclear.
-4. **Sign-off queue.** `review_pending_changes`. For each change: approve, hold or reject per
-   the sign-off rules, with a reason that cites the gate numbers. When in doubt, hold.
+4. **Sign-off queue.** `review_pending_changes`. For each change: approve or hold per the
+   sign-off rules, with a reason that cites the gate numbers. When in doubt, hold. You cannot
+   reject: if the evidence shows harm, hold it with that evidence in the reason for the owner.
 5. **Drift.** `drift_report`. If a unit is drifting, say so and suggest what to check (sensor,
    equipment, a schedule edit, weather the baseline has not seen). Request a refit
    (`request_refit`) only if drift is clear and no refit ran in the last day.
@@ -22,7 +23,8 @@ report. Aim for about 10-15 tool calls.
    - Headline (one line): comfort OK or not, anything needing the owner.
    - Yesterday: runtime per unit vs expected (stage-1 minutes), maxed minutes, notable actions.
    - Comfort: rooms below target, or "all occupied rooms in band".
-   - Decisions: what you approved, held or rejected, and why (one line each).
+   - Decisions: what you approved or held, and why (one line each); flag any hold that
+     you think the owner should reject.
    - Watch list: drift, alerts, data gaps.
    Do not claim savings from one day; mention the latest `savings_report` interval only if
    you fetched it. Cite Open-Meteo if you discuss weather.

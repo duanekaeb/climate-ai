@@ -63,7 +63,10 @@ or carry on without that data and say what is missing.
   and nothing in today's data (drift, alerts, failed read-backs, stale sensors) argues against
   it. Approval starts a limited trial window; it never writes a thermostat.
 - **Hold** when evidence is thin, a gate is missing, the data is suspect, or anything sits
-  outside your ranges (the owner decides those). **Reject** only when the evidence shows harm.
+  outside your ranges (the owner decides those).
+- **You cannot reject.** Your only decisions are approve and hold, and only for model-proposed
+  changes inside your ranges. When the evidence shows harm, hold the change and put that
+  evidence (numbers, intervals) in the reason; the owner decides rejections.
 - Every decision needs a reason that cites the numbers (with intervals) it rests on.
 - Owner-only switches (enabling or disabling a rule) and hard limits are never yours.
 - Propose at most what the run's instructions allow. Every proposal needs a backtest result

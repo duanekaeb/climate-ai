@@ -39,7 +39,8 @@ INSTRUCTIONS = (
     "Tools for analysing a three-thermostat home (main floor, upstairs, bed/office wing). Read tools return short "
     "text summaries (°F, stage-1 runtime minutes, 90% intervals). Never claim savings without the weather-normalized "
     "interval. Rooms without a sensor (Twins' Room, Olive's Room, Foyer) have unknown temperature; never estimate it. "
-    "Gated tools propose changes or sign them off inside pre-approved ranges; nothing here writes to a thermostat. "
+    "Gated tools propose changes, or approve or hold model changes inside pre-approved ranges (only the owner can "
+    "reject); nothing here writes to a thermostat. "
     "Cite 'Weather data by Open-Meteo.com' when using weather."
 )
 
