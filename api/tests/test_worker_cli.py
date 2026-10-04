@@ -101,3 +101,17 @@ def test_backfill_queues_a_job_when_the_worker_owns_ecobee(db, capsys):
 def test_migrate_is_idempotent(db, capsys):
     assert cli.main(["migrate"]) == 0
     assert "up to date" in capsys.readouterr().out
+
+
+def test_doctor_notes_a_managed_token_in_the_env(db, capsys, monkeypatch):
+    from climate.config import get_settings
+
+    healthy(db)
+    monkeypatch.setattr(get_settings(), "agent_token", "cai_1_" + "x" * 43)
+    monkeypatch.setattr(get_settings(), "mcp_token", "a-legacy-shared-token")
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if "env tokens" in ln)
+    assert "CLIMATE_AGENT_TOKEN holds a managed API token (cai_)" in line and "revocable in the app" in line
+    assert "CLIMATE_MCP_TOKEN is a legacy shared token" in line
+    assert "x" * 43 not in out and "a-legacy-shared-token" not in out

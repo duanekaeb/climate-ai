@@ -8,7 +8,8 @@ bearer to ``climate.auth_service.resolve_bearer``, which recognises:
 - ``cai_<id hex>_<secret>``: an API token (role ``agent``, ``viewer`` or ``control``), checked
   live on every use (revoked, expired) and refused from public addresses when ``local_only``;
 - the legacy ``CLIMATE_AGENT_TOKEN`` / ``CLIMATE_MCP_TOKEN``: role ``agent``, constant-time
-  compared, private addresses only;
+  compared, private addresses only (a ``cai_`` value there is a managed token: checked live
+  like any other, so revoking it in the app stops it);
 - an access JWT: the owner, with the session row re-checked so sign-out and password changes
   take effect at once.
 
@@ -31,8 +32,9 @@ Dependency                Allowed                           Used for
 ========================  ================================  ==========================================
 
 ``ReaderDep`` / ``ControlDep`` / ``OwnerDep`` / ``WriterDep`` / ``AgentDep`` resolve to the
-caller's ``Role``; ``CallerDep`` / ``OwnerCallerDep`` / ``RecentAuthDep`` resolve to the full
-``Principal`` (session id, token id, label) for routes that need it. Auth failures are
+caller's ``Role``; ``CallerDep`` / ``ControlCallerDep`` (same roles as ``ControlDep``) /
+``OwnerCallerDep`` / ``RecentAuthDep`` resolve to the full ``Principal`` (session id, token
+id, label) for routes that need it. Auth failures are
 ``HTTPException(status, detail={"code", "message"})`` (``AuthErrorDetail``): 401
 NOT_AUTHENTICATED / TOKEN_EXPIRED / SESSION_REVOKED, 403 FORBIDDEN / REAUTHENTICATION_REQUIRED,
 503 AUTH_NOT_CONFIGURED.
@@ -58,6 +60,7 @@ __all__ = [
     "AgentDep",
     "AuthError",
     "CallerDep",
+    "ControlCallerDep",
     "ControlDep",
     "OwnerCallerDep",
     "OwnerDep",
@@ -102,12 +105,18 @@ _SETUP_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".local
 
 def setup_host_ok(conn: HTTPConnection) -> bool:
     """First-run setup only on a name that belongs to the home network: an IP address,
-    ``localhost``, a ``.local`` / ``.lan`` / ``.home`` / ``.home.arpa`` / ``.internal`` name,
-    the public URL's host, or a name in CLIMATE_SETUP_HOSTS. Closes DNS rebinding: a web page
-    on some other domain that rebinds to this server's LAN address would pass the private
-    address and same-origin checks, but not this one."""
-    raw = (conn.headers.get("x-forwarded-host") or conn.headers.get("host") or "").split(",")[0].strip().lower()
+    ``localhost``, a single-label name (``nas``, ``climate``), a ``.local`` / ``.lan`` /
+    ``.home`` / ``.home.arpa`` / ``.internal`` name, the public URL's host, or a name in
+    CLIMATE_SETUP_HOSTS. Closes DNS rebinding: a web page on some other domain that rebinds to
+    this server's LAN address would pass the private address and same-origin checks, but not
+    this one (and an attacker cannot register a single-label name).
+
+    Only the ``Host`` header is read: the browser sets it from the URL, while
+    ``X-Forwarded-Host`` is an ordinary header the rebinding page's own script could send.
+    Every shipped proxy passes ``Host $host`` through."""
+    raw = (conn.headers.get("host") or "").strip().lower()
     host = raw[1:].split("]")[0] if raw.startswith("[") else raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
+    host = host.rstrip(".")
     if not host:
         return False
     try:
@@ -119,7 +128,8 @@ def setup_host_ok(conn: HTTPConnection) -> bool:
     allowed = {h.strip().lower() for h in cfg.setup_hosts.split(",") if h.strip()}
     if cfg.public_url:
         allowed.add((urlsplit(cfg.public_url).hostname or "").lower())
-    return host == "localhost" or host.endswith(_SETUP_SUFFIXES) or host in allowed
+    single_label = "." not in host and ":" not in host
+    return host == "localhost" or single_label or host.endswith(_SETUP_SUFFIXES) or host in allowed
 
 
 def bearer_token(conn: HTTPConnection) -> str | None:
@@ -210,6 +220,12 @@ def require_agent(principal: Principal = Depends(current_caller)) -> Role:
     return cast(Role, _admit(principal, ("agent",), "Agent service only.").role)
 
 
+def control_caller(principal: Principal = Depends(current_caller)) -> Principal:
+    """Like ``require_control`` but the full ``Principal``, so a control token's holds, resumes,
+    presence and skips are recorded as that token's (name and id), not as the owner's."""
+    return _admit(principal, ("owner", "control"), "Needs the owner or a control token.")
+
+
 def owner_caller(principal: Principal = Depends(current_caller)) -> Principal:
     """The owner, with the session id and device name (for routes that act on the session)."""
     return _admit(principal, ("owner",), "Owner only.")
@@ -226,6 +242,7 @@ def recent_owner(principal: Principal = Depends(owner_caller)) -> Principal:
 CallerDep = Depends(current_caller)
 ReaderDep = Depends(require_reader)
 ControlDep = Depends(require_control)
+ControlCallerDep = Depends(control_caller)
 OwnerDep = Depends(require_owner)
 WriterDep = Depends(require_writer)
 AgentDep = Depends(require_agent)

@@ -5,12 +5,13 @@
 -- CLIMATE_TOKEN_PEPPER.
 
 -- One row per signed-in device. The refresh token "<id hex>.<secret>" lives in an HttpOnly
--- cookie scoped to /api/auth; it rotates on every refresh and a reused old one revokes the
--- whole family (token theft). Changing the password or "sign out everywhere" revokes all.
+-- cookie scoped to /api/auth; it rotates on every refresh and a reused old one (any retired
+-- token, not just the last) revokes the whole family (token theft). Changing the password or "sign out everywhere" revokes all.
 CREATE TABLE IF NOT EXISTS auth_sessions (
     id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     refresh_token_hash  TEXT NOT NULL,
-    previous_token_hash TEXT,                             -- the one before the last rotation (reuse detection)
+    previous_token_hash TEXT,                             -- the one before the last rotation (grace window)
+    retired_token_hashes TEXT[] NOT NULL DEFAULT '{}',    -- every retired one, newest last, capped at 100 (reuse detection)
     family_id           TEXT NOT NULL,
     rotation_counter    INT NOT NULL DEFAULT 0,
     rotated_at          TIMESTAMPTZ,                      -- last rotation (grace window for a lost response)

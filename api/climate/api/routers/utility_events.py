@@ -9,6 +9,10 @@ thermostat. A skip can be taken back until the worker starts sending it: once it
 ``opt_out_event`` row is 'sent' the opt-out may already have reached ecobee, so the undo
 answers 409.
 
+A control token's skip is recorded as that token's: ``skip_by`` stays 'owner' (the worker runs
+it like the owner's), ``skip_reason`` starts ``Control token "<name>":``, and the skip and its
+undo write ``utility.skip`` / ``utility.unskip`` audit rows.
+
 ``event_out`` and ``prep_labels`` are shared with the status route (the Live unit cards).
 """
 
@@ -20,14 +24,14 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi import status as http
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from climate import state
-from climate.api.auth import ControlDep, ReaderDep, Role
-from climate.api.routers.control import SessionDep, safe
+from climate.api.auth import ControlCallerDep, Principal, ReaderDep, Role
+from climate.api.routers.control import SessionDep, audit_token, by_caller, safe
 from climate.api.schemas import PlanRow, SkipEventBody, UtilityEventOut
 from climate.control import controller
 from climate.control.policy import HouseState, UnitStatus
@@ -61,6 +65,10 @@ _PREP = re.compile(
 # ---------------------------------------------------------------------------------------
 # shaping (shared with the status route)
 # ---------------------------------------------------------------------------------------
+
+
+def _who(principal: Principal) -> str:
+    return "owner" if principal.role == "owner" else f'control token "{principal.label}"'
 
 
 def skip_problem(row: UtilityEvent, now: datetime) -> str | None:
@@ -272,7 +280,8 @@ def _sending(session: Session, event_ids: Sequence[int], now: datetime) -> set[i
 
 @router.post("/utility-events/{event_id}/skip", response_model=UtilityEventOut)
 def skip_event(
-    event_id: int, body: SkipEventBody | None = None, _: Role = ControlDep, session: Session = SessionDep,
+    event_id: int, http_request: Request, body: SkipEventBody | None = None,
+    principal: Principal = ControlCallerDep, session: Session = SessionDep,
 ) -> UtilityEventOut:
     """Request an opt-out of this event: on every thermostat it reaches (``all_units``, the
     default; rows that can't be skipped are left as they are) or only this one. 409 when the
@@ -292,15 +301,18 @@ def skip_event(
     if problem is not None:
         raise HTTPException(http.HTTP_409_CONFLICT, problem)
     targets = [row] + ([r for r in _siblings(session, row) if skip_problem(r, now) is None] if body.all_units else [])
+    why = by_caller(principal, OWNER_SKIP_REASON, OWNER_SKIP_REASON)
     for r in targets:
         detail = r.detail if isinstance(r.detail, dict) else {}
         if detail.get("skip_attempts"):  # a new request gets the full number of attempts again
             r.detail = {**detail, "skip_attempts": 0}
-        r.skip, r.skip_by, r.skip_reason, r.skip_requested_at = "requested", "owner", OWNER_SKIP_REASON, now
+        r.skip, r.skip_by, r.skip_reason, r.skip_requested_at = "requested", "owner", why, now
     session.flush()
+    audit_token(session, principal, "utility.skip", http_request, target_type="utility_event", target_id=row.id,
+                payload={"event_key": row.event_key, "units": [r.unit_key for r in targets]})
     publish(session, "status")
     out = event_out(row, now)  # a requested skip ends any pre-cooling for it
-    log.info("owner requested a skip of utility event %s on %s", row.event_key,
+    log.info("%s requested a skip of utility event %s on %s", _who(principal), row.event_key,
              ", ".join(r.unit_key for r in targets))
     session.commit()
     return out
@@ -308,7 +320,8 @@ def skip_event(
 
 @router.post("/utility-events/{event_id}/unskip", response_model=UtilityEventOut)
 def unskip_event(
-    event_id: int, body: SkipEventBody | None = None, _: Role = ControlDep, session: Session = SessionDep,
+    event_id: int, http_request: Request, body: SkipEventBody | None = None,
+    principal: Principal = ControlCallerDep, session: Session = SessionDep,
 ) -> UtilityEventOut:
     """Take back a skip that has not been sent yet (still 'requested'): on every thermostat
     of this event (``all_units``, the default) or only this one. 409 when nothing is waiting
@@ -336,6 +349,8 @@ def unskip_event(
         if isinstance(r.detail, dict) and "skip_attempts" in r.detail:
             r.detail = {k: v for k, v in r.detail.items() if k != "skip_attempts"}
     session.flush()
+    audit_token(session, principal, "utility.unskip", http_request, target_type="utility_event", target_id=row.id,
+                payload={"event_key": row.event_key, "units": [r.unit_key for r in targets]})
     if not any(r.skip == "requested" for r in [row, *siblings]):
         utility.resolve_keys(session, [utility.alert_key(row.event_key, p) for p in WAITING_PHASES])
     publish(session, "status")
@@ -344,7 +359,7 @@ def unskip_event(
     ).scalars().all()
     preps = _prep_labels(session, announced, now)
     out = event_out(row, now, preps.get(row.id))
-    log.info("owner took back the skip of utility event %s on %s", row.event_key,
+    log.info("%s took back the skip of utility event %s on %s", _who(principal), row.event_key,
              ", ".join(r.unit_key for r in targets))
     session.commit()
     return out

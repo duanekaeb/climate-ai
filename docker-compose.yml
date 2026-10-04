@@ -249,6 +249,7 @@ services:
       TZ: ${TZ:-UTC}
       CLIMATE_API_URL: http://app:8000
       CLIMATE_MCP_TOKEN: ${CLIMATE_MCP_TOKEN:-}
+      CLIMATE_AGENT_TOKEN: ${CLIMATE_AGENT_TOKEN:-}
       CLIMATE_LOG_LEVEL: ${CLIMATE_LOG_LEVEL:-INFO}
     depends_on:
       app:

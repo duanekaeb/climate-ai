@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from datetime import timedelta
 
 import jwt
@@ -212,6 +213,48 @@ def test_a_wrong_refresh_secret_does_not_end_the_session(fresh_db):
     svc.refresh(issued.refresh_token, ip=HOME)
 
 
+def test_a_thief_who_rotates_twice_is_still_caught(fresh_db, monkeypatch):
+    """Every retired refresh token is remembered, not just the last: the owner's stolen token
+    shows up after the thief has rotated twice and still revokes the whole family."""
+    stolen = _setup()
+    second = svc.refresh(stolen.refresh_token, ip=INTERNET)  # the thief rotates...
+    third = svc.refresh(second.refresh_token, ip=INTERNET)  # ...and again, inside the grace window
+    row = _session(stolen.session_id)
+    assert row.retired_token_hashes == [hash_token(stolen.refresh_token), hash_token(second.refresh_token)]
+    _raises("SESSION_REVOKED", svc.refresh, stolen.refresh_token, ip=HOME)  # the owner's device comes back
+    row = _session(stolen.session_id)
+    assert row.revoked_at is not None and row.revoked_reason == "reuse_detected"
+    _raises("SESSION_REVOKED", svc.refresh, third.refresh_token, ip=INTERNET)  # the thief's copy dies
+    _raises("SESSION_REVOKED", svc.check_access_token, third.access_token)
+    reuse = _audit("auth.refresh_reuse")
+    assert len(reuse) == 1 and reuse[0].payload["reused"] == "older"
+
+
+def test_retired_refresh_hashes_are_capped(fresh_db, monkeypatch):
+    monkeypatch.setattr(svc, "_MAX_RETIRED", 3)
+    issued = _setup()
+    tokens = [issued.refresh_token]
+    for _ in range(5):
+        tokens.append(svc.refresh(tokens[-1], ip=HOME).refresh_token)
+    assert _session(issued.session_id).retired_token_hashes == [hash_token(t) for t in tokens[2:5]]
+
+
+def test_a_forged_refresh_token_learns_nothing_and_revokes_nothing(fresh_db):
+    """The secret is checked first: a forgery naming a signed-out session is NOT_AUTHENTICATED
+    (not SESSION_REVOKED), and one naming a live session after rotations never revokes it."""
+    issued = _setup()
+    sid_hex = issued.refresh_token.split(".", 1)[0]
+    forged = f"{sid_hex}." + "B" * 43
+    newer = svc.refresh(svc.refresh(issued.refresh_token, ip=HOME).refresh_token, ip=HOME)
+    _raises("NOT_AUTHENTICATED", svc.refresh, forged, ip=INTERNET)
+    assert _session(issued.session_id).revoked_at is None and not _audit("auth.refresh_reuse")
+    svc.logout(newer.refresh_token, ip=HOME)
+    _raises("NOT_AUTHENTICATED", svc.refresh, forged, ip=INTERNET)  # does not reveal the sign-out
+    _raises("SESSION_REVOKED", svc.refresh, newer.refresh_token, ip=HOME)  # the genuine one does
+    _raises("SESSION_REVOKED", svc.refresh, issued.refresh_token, ip=HOME)  # a retired genuine one too
+    assert not _audit("auth.refresh_reuse")  # nothing left to revoke, nothing re-audited
+
+
 def test_sliding_expiry(fresh_db, clock):
     issued = _setup()
     clock(days=29)
@@ -337,6 +380,68 @@ def test_public_failures_pause_internet_sign_in_but_home_always_works(fresh_db, 
     assert svc.login(PASSWORD, ip="198.51.100.9").access_token
 
 
+def test_parallel_public_guesses_cannot_overshoot_the_pause(fresh_db, env, monkeypatch):
+    """The public budget is reserved before a check runs: while the last allowed guess is being
+    checked, a parallel one (even the right password) is LOGIN_PAUSED instead of a 6th failure."""
+    env(public_login_max_failures="5", login_pause_minutes="15")
+    _setup()
+    for i in range(4):
+        _raises("INVALID_CREDENTIALS", svc.login, "guess", ip=f"203.0.113.{i + 1}")
+    entered, release = threading.Event(), threading.Event()
+    real_verify = svc.verify_password
+
+    def slow_verify(password, stored):
+        entered.set()
+        assert release.wait(10)
+        return real_verify(password, stored)
+
+    monkeypatch.setattr(svc, "verify_password", slow_verify)
+    outcome: list[str] = []
+
+    def last_guess() -> None:
+        try:
+            svc.login("guess", ip="203.0.113.99")
+        except AuthError as err:
+            outcome.append(err.code)
+
+    worker = threading.Thread(target=last_guess)
+    worker.start()
+    try:
+        assert entered.wait(10)
+        _raises("LOGIN_PAUSED", svc.login, "another guess", ip="198.51.100.20")
+        _raises("LOGIN_PAUSED", svc.login, PASSWORD, ip="198.51.100.21")
+    finally:
+        release.set()
+        worker.join(10)
+    monkeypatch.setattr(svc, "verify_password", real_verify)
+    assert outcome == ["INVALID_CREDENTIALS"]
+    assert len(_audit("auth.login_failed")) == 5 and len(_audit("auth.login_paused")) == 1
+    _raises("LOGIN_PAUSED", svc.login, PASSWORD, ip="198.51.100.22")  # now the durable pause
+    assert svc.login(PASSWORD, ip=HOME).access_token
+
+
+def test_a_public_check_rereads_the_pause_once_it_has_a_slot(fresh_db, env, monkeypatch):
+    """A check that queued for the Argon2 slot while the pause started is refused, not run."""
+    env(public_login_max_failures="5", login_pause_minutes="15")
+    _setup()
+    calls = iter([None, utcnow() + timedelta(minutes=10)])  # before the slot: open; after it: paused
+    monkeypatch.setattr(svc, "_paused_until", lambda s, now: next(calls))
+    _raises("LOGIN_PAUSED", svc.login, "guess", ip=INTERNET)
+    assert not _audit("auth.login_failed")
+
+
+def test_reauth_and_change_password_honour_the_internet_pause(fresh_db, env):
+    env(public_login_max_failures="5", login_pause_minutes="15")
+    issued = _setup()
+    me = svc.check_access_token(issued.access_token)
+    for i in range(5):
+        _raises("INVALID_CREDENTIALS", svc.login, "guess", ip=f"203.0.113.{i + 1}")
+    _raises("LOGIN_PAUSED", svc.reauth, me, PASSWORD, ip=INTERNET)
+    _raises("LOGIN_PAUSED", svc.change_password, me, PASSWORD, "a whole new password", ip=INTERNET)
+    assert len(_audit("auth.login_failed")) == 5  # refused before any check
+    assert svc.reauth(me, PASSWORD, ip=HOME).recently_authenticated  # at home it always works
+
+
 def test_scrypt_hash_is_upgraded_to_argon2id_on_sign_in(fresh_db):
     salt = os.urandom(16)
     digest = hashlib.scrypt(PASSWORD.encode(), salt=salt, n=2**14, r=8, p=1, maxmem=2**26, dklen=32)
@@ -429,6 +534,18 @@ def test_legacy_env_token_is_agent_and_home_only(fresh_db):
     _raises("FORBIDDEN", svc.resolve_bearer, AGENT_TOKEN, ip=INTERNET)
     _raises("NOT_AUTHENTICATED", svc.resolve_bearer, "", ip=HOME)
     _raises("NOT_AUTHENTICATED", svc.resolve_bearer, "not-a-token", ip=HOME)
+
+
+def test_a_cai_token_in_the_env_is_still_checked_live(fresh_db, env):
+    """A managed token pasted into .env as CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN is never a
+    legacy env token: revoking or expiring it in the app stops it."""
+    row, raw = svc.create_api_token(svc.SYSTEM, name="pasted into .env", role="agent")
+    env(agent_token=raw, mcp_token=raw)
+    who = svc.resolve_bearer(raw, ip=HOME)
+    assert (who.kind, who.token_id, who.role) == ("api_token", row.id, "agent")
+    assert svc.revoke_api_token(svc.SYSTEM, row.id)
+    _raises("NOT_AUTHENTICATED", svc.resolve_bearer, raw, ip=HOME)
+    _raises("NOT_AUTHENTICATED", svc.resolve_bearer, "cai_" + "0" * 20, ip=HOME)  # never a legacy match
 
 
 # ---------------------------------------------------------------------------------------

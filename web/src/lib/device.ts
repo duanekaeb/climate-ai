@@ -54,6 +54,14 @@ export function rememberDeviceName(name: string): void {
   }
 }
 
+/** Why first-run setup can be refused even at home, and the ways round it. The name in the
+ *  address bar matters, not only where the device is: setup accepts an IP address, localhost
+ *  or a .local name, and any other name only once it is listed in CLIMATE_SETUP_HOSTS. */
+export const SETUP_HOST_HINT =
+  'Open Climate AI by its IP address (for example http://192.168.1.20:8470), localhost or a .local name, ' +
+  'not by another name such as a Tailscale MagicDNS name; or add that name to CLIMATE_SETUP_HOSTS on the ' +
+  'server; or run "make password" on the server.'
+
 /** Plain-words text for an error from the sign-in, setup, password or re-auth calls. */
 export function authErrorText(e: unknown): string {
   if (e instanceof ApiError) {
@@ -63,7 +71,9 @@ export function authErrorText(e: unknown): string {
       case 'TOO_MANY_ATTEMPTS':
         return 'Too many attempts. Wait a few minutes, then try again.'
       case 'SETUP_NOT_ALLOWED':
-        return 'Setup only works from your home network. Open Climate AI on a device at home (or over Tailscale) to choose the password.'
+        // The server says why: the address is not a home one, or the name in the address bar
+        // (a Tailscale MagicDNS or LAN DNS name) is not one it accepts for setup. Show its words.
+        return e.message || SETUP_HOST_HINT
       case 'ALREADY_SET':
         return 'A password has already been set. Sign in instead.'
       case 'AUTH_NOT_CONFIGURED':

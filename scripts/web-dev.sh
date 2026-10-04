@@ -5,7 +5,7 @@
 #   make web-dev    # this alone, when the dev API is already up
 #
 # Vite proxies /api and the /api/ws websocket to the API that docker-compose.dev.yml publishes
-# on 127.0.0.1:${DEV_API_PORT:-8000} (web/vite.config.ts). Needs Node 22.12+ on this computer
+# on 127.0.0.1:${DEV_API_PORT:-8000} (CLIMATE_API_PROXY, read by web/vite.config.ts). Needs Node 22.12+ on this computer
 # (macOS: brew install node@22). Sign-in works over plain http because bootstrap set
 # CLIMATE_COOKIE_SECURE=false; the browser talks to one origin (localhost:5173), so the refresh
 # cookie and the same-origin checks behave exactly as in production.
@@ -26,9 +26,7 @@ fi
 
 port="$(env_get DEV_API_PORT)"
 port="${port:-8000}"
+# web/vite.config.ts reads CLIMATE_API_PROXY for its /api (and websocket) proxy target.
 export CLIMATE_API_PROXY="http://127.0.0.1:$port"
-if [ "$port" != "8000" ] && ! grep -q CLIMATE_API_PROXY vite.config.ts; then
-  warn "DEV_API_PORT=$port, but web/vite.config.ts proxies to 127.0.0.1:8000; edit its proxy target"
-fi
 step "Vite on http://localhost:5173 (API: $CLIMATE_API_PROXY). Ctrl-C stops it."
 exec npm run dev

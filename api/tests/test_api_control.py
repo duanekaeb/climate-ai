@@ -397,3 +397,87 @@ def test_decision_errors_map_to_http(agent, monkeypatch, fake_needs):
     assert r.status_code == 409
     assert agent.post("/api/changes/9999/decision", json={"decision": "hold", "reason": "nope"}).status_code == 404
     assert agent.post(f"/api/changes/{cid}/decision", json={"decision": "maybe", "reason": "x" * 5}).status_code == 422
+
+
+# --- what a token may read, and how its controls are recorded -----------------------------
+
+
+def _token_id(raw: str) -> int:
+    return int(raw.split("_")[1], 16)
+
+
+def test_settings_hide_the_house_location_and_schedule_from_tokens(owner, agent, viewer, control):
+    # The agent keeps the full view: it checks comfort against sleep windows and presence.
+    loc = {"lat": 41.88, "lon": -87.63, "tz": "America/Chicago", "zip": "60601", "label": "Home", "confirmed": True}
+    assert owner.put("/api/control/settings", json={"location": loc}).status_code == 200
+    assert owner.post("/api/control/presence", json={"phones_away": True}).status_code == 200
+    full = _settings(owner)
+    assert full["location"]["lat"] == 41.88 and full["occupancy"]["sleep_windows"]
+    assert full["occupancy"]["phones_away"] is True
+    assert agent.get("/api/control/settings").json() == owner.get("/api/control/settings").json()
+    for caller in (viewer, control):
+        body = _settings(caller)
+        assert body["location"] == {"lat": None, "lon": None, "tz": "America/Chicago", "zip": None, "label": None,
+                                    "confirmed": True}
+        occ = body["occupancy"]
+        assert occ["sleep_windows"] == {} and occ["phones_away"] is None and occ["phones_updated_at"] is None
+        assert occ["empty_after_min"] == full["occupancy"]["empty_after_min"]
+        assert body["control"] == full["control"]
+    r = control.post("/api/control/presence", json={"phones_away": False})  # a token's own answer too
+    assert r.status_code == 200 and r.json()["location"]["lat"] is None and r.json()["occupancy"]["sleep_windows"] == {}
+    assert r.json()["occupancy"]["phones_away"] is False  # only what it just wrote
+    assert _settings(owner)["occupancy"]["phones_away"] is False
+
+
+def test_control_token_actions_are_recorded_as_the_token(owner, control, control_token):
+    from climate import auth_service
+
+    tid = _token_id(control_token)
+    label = 'Control token "pytest control": '
+    hold = control.post("/api/control/hold", json={"unit_key": "main", "heat_f": 68, "cool_f": 76, "hours": 1})
+    assert hold.status_code == 200, hold.text
+    resume = control.post("/api/control/resume", json={"unit_key": "up"}).json()
+    auto = control.post("/api/control/automatic", json={"unit_key": "bed"}).json()
+    assert control.post("/api/control/presence", json={"phones_away": True}).status_code == 200
+    mine = owner.post("/api/control/hold", json={"unit_key": "up", "heat_f": 68, "cool_f": 76, "hours": 1}).json()
+    with session_scope() as s:
+        rows = {r.id: r for r in s.execute(select(ControlAction)).scalars()}
+    for out in (hold.json(), resume, auto):
+        row = rows[out["id"]]
+        assert row.actor == "owner" and row.status == "queued"  # the worker runs it like the owner's
+        assert row.request["by_token"] == {"id": tid, "name": "pytest control"}
+        assert row.reason.startswith(label) and row.request["reason"] == row.reason
+    assert rows[hold.json()["id"]].reason == label + "hold heat 68°F / cool 76°F for 1 h"
+    assert "by_token" not in rows[mine["id"]].request and rows[mine["id"]].reason.startswith("Owner hold:")
+    events = [e for e in auth_service.list_audit(limit=100) if e.event_type.startswith("control.")]
+    assert sorted(e.event_type for e in events) == ["control.automatic", "control.hold", "control.presence",
+                                                    "control.resume"]
+    assert all(e.actor_type == "api_token" and e.actor_id == tid and e.actor_label == "pytest control"
+               and e.ip == "127.0.0.1" for e in events)
+    assert {e.target_id for e in events if e.event_type != "control.presence"} == {
+        str(hold.json()["id"]), str(resume["id"]), str(auto["id"])}
+
+
+def test_control_token_skips_are_recorded_as_the_token(owner, control, control_token):
+    from climate import auth_service
+    from climate.store.orm import UtilityEvent
+
+    now = utcnow()
+    with session_scope() as s:
+        row = UtilityEvent(
+            unit_key="up", event_key="link:peak-1", event_type="demandResponse", name="Peak saver",
+            status="announced", start_at=now + timedelta(hours=3), end_at=now + timedelta(hours=6),
+            first_seen_at=now, last_seen_at=now, is_relative=True, cool_offset_f=2.0, is_optional=True, detail={},
+        )
+        s.add(row)
+        s.flush()
+        event_id = row.id
+    r = control.post(f"/api/utility-events/{event_id}/skip", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["skip_by"] == "owner"
+    assert r.json()["skip_reason"] == 'Control token "pytest control": Skipped from the app'
+    assert control.post(f"/api/utility-events/{event_id}/unskip", json={}).status_code == 200
+    assert owner.post(f"/api/utility-events/{event_id}/skip", json={}).json()["skip_reason"] == "Skipped from the app"
+    events = [e for e in auth_service.list_audit(limit=100) if e.event_type.startswith("utility.")]
+    assert sorted(e.event_type for e in events) == ["utility.skip", "utility.unskip"]  # the owner's is not audited
+    assert all(e.actor_id == _token_id(control_token) and e.target_id == str(event_id) for e in events)

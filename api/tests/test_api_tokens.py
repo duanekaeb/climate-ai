@@ -131,3 +131,17 @@ def test_audit_log_filters_and_limits(owner):
     assert [r["event_type"] for r in only] == ["auth.setup"]
     assert len(owner.get("/api/audit", params={"limit": 2}).json()) == 2
     assert owner.get("/api/audit", params={"limit": 0}).status_code == 422
+
+
+def test_a_revoked_cai_token_pasted_into_the_env_is_refused(owner, monkeypatch):
+    """A managed token set as CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN is checked live, not
+    matched as the legacy env token, so revoking it in the app stops it at once."""
+    made = create(owner, name="agent via .env", role="agent")
+    monkeypatch.setattr(get_settings(), "agent_token", made["token"])
+    monkeypatch.setattr(get_settings(), "mcp_token", made["token"])
+    with make_client(token=made["token"]) as agent:
+        me = agent.get("/api/auth/me").json()
+        assert me["role"] == "agent" and me["token_id"] == made["id"]
+        assert owner.delete(f"/api/tokens/{made['id']}").status_code == 204
+        r = agent.get("/api/status")
+        assert r.status_code == 401 and code(r) == "NOT_AUTHENTICATED"

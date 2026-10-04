@@ -377,6 +377,26 @@ def _sign_in_secrets_check() -> Check:
     return Check("sign-in secrets", "ok", "CLIMATE_JWT_SECRET and CLIMATE_TOKEN_PEPPER are set")
 
 
+def _env_tokens_check(cfg: Any) -> Check | None:
+    """CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN: say which kind each one holds (None when
+    neither is set). A ``cai_`` value is a managed API token: it is checked live like any other,
+    so revoking it (or letting it expire) in the app stops it, whatever .env still says."""
+    from climate.auth_service import API_TOKEN_PREFIX
+
+    notes = []
+    for name, value in (("CLIMATE_AGENT_TOKEN", cfg.agent_token), ("CLIMATE_MCP_TOKEN", cfg.mcp_token)):
+        value = (value or "").strip()
+        if not value:
+            continue
+        if value.startswith(API_TOKEN_PREFIX):
+            notes.append(f"{name} holds a managed API token (cai_): checked live, revocable in the app "
+                         "(Security, API tokens)")
+        else:
+            notes.append(f"{name} is a legacy shared token (role agent, home network only; not revocable in the "
+                         "app: prefer a cai_ API token)")
+    return Check("env tokens", "ok", "; ".join(notes)) if notes else None
+
+
 def _cookie_check(cfg: Any) -> Check:
     """The refresh cookie must be Secure whenever the app is reached over HTTPS."""
     if cfg.public_url.lower().startswith("https://") and not cfg.cookie_secure:
@@ -439,6 +459,9 @@ def doctor_checks(now: datetime | None = None) -> list[Check]:
     checks.append(key_check)
     checks.append(_sign_in_secrets_check())
     checks.append(_cookie_check(cfg))
+    env_tokens = _env_tokens_check(cfg)
+    if env_tokens is not None:
+        checks.append(env_tokens)
 
     from climate.store.db import session_scope
 

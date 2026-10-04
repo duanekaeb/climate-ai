@@ -3,7 +3,10 @@ import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// Dev: `npm run dev` proxies /api (and the /api/ws websocket) to the API on :8000.
+// Dev: `npm run dev` proxies /api (and the /api/ws websocket) to the API: CLIMATE_API_PROXY
+// (scripts/web-dev.sh sets it from DEV_API_PORT), else http://127.0.0.1:8000.
+const apiProxy = process.env.CLIMATE_API_PROXY ?? 'http://127.0.0.1:8000'
+
 export default defineConfig({
   plugins: [
     vue(),
@@ -30,7 +33,7 @@ export default defineConfig({
   ],
   server: {
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: false, ws: true },
+      '/api': { target: apiProxy, changeOrigin: false, ws: true },
     },
   },
   build: { outDir: 'dist', sourcemap: false, chunkSizeWarningLimit: 1500 },

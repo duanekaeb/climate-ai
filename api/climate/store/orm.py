@@ -21,7 +21,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, REAL, TIMESTAMP
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, REAL, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 TS = TIMESTAMP(timezone=True)
@@ -432,6 +432,8 @@ class AuthSession(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     refresh_token_hash: Mapped[str] = mapped_column(Text)
     previous_token_hash: Mapped[str | None] = mapped_column(Text)
+    # Every retired refresh token's hash, newest last, capped (auth_service._MAX_RETIRED).
+    retired_token_hashes: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
     family_id: Mapped[str] = mapped_column(Text)
     rotation_counter: Mapped[int] = mapped_column(Integer, default=0)
     rotated_at: Mapped[datetime | None] = mapped_column(TS)

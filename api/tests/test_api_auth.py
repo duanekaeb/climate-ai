@@ -410,3 +410,34 @@ def test_first_run_setup_refuses_a_rebinding_host_name(fresh_db):
             assert c.get("/api/auth/state", headers={"Host": host}).json()["setup_allowed"] is True, host
         assert c.post("/api/auth/setup", json={"password": OWNER_PASSWORD},
                       headers={"Host": "192.168.1.20:8470"}).status_code == 200
+
+
+def test_setup_host_reads_only_the_host_header_and_accepts_single_label_names(fresh_db):
+    """X-Forwarded-Host is a header the rebinding page's own script can set: only Host counts.
+    A single-label name (``nas``, ``climate``) is a home-network name nobody can register."""
+    with make_client() as c:
+        spoofed = {"Host": "evil.example.com", "X-Forwarded-Host": "localhost"}
+        r = c.post("/api/auth/setup", json={"password": OWNER_PASSWORD}, headers=spoofed)
+        assert r.status_code == 403 and code(r) == "SETUP_NOT_ALLOWED"
+        assert c.get("/api/auth/state", headers=spoofed).json()["setup_allowed"] is False
+        for host in ("nas:8470", "climate", "nas."):
+            assert c.get("/api/auth/state", headers={"Host": host}).json()["setup_allowed"] is True, host
+        assert c.post("/api/auth/setup", json={"password": OWNER_PASSWORD},
+                      headers={"Host": "nas:8470"}).status_code == 200
+
+
+def test_reauth_from_the_internet_honours_the_pause(fresh_db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "public_login_max_failures", 5)
+    with make_client() as home:
+        sign_in(home)
+    with make_client(addr=PUBLIC_ADDR) as abroad:
+        sign_in(abroad, device_name="laptop abroad")
+        with make_client(addr=("198.51.100.30", 50000)) as attacker:
+            for _ in range(5):
+                assert code(attacker.post("/api/auth/login", json={"password": "guess guess"})) == "INVALID_CREDENTIALS"
+        r = abroad.post("/api/auth/reauth", json={"password": OWNER_PASSWORD})
+        assert r.status_code == 429 and code(r) == "LOGIN_PAUSED"
+        r = abroad.post("/api/auth/change-password",
+                        json={"current_password": OWNER_PASSWORD, "new_password": NEW_PASSWORD})
+        assert r.status_code == 429 and code(r) == "LOGIN_PAUSED"
+        assert abroad.get("/api/status").status_code == 200  # still signed in

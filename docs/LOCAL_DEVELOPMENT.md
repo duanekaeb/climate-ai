@@ -47,7 +47,10 @@ at any time (also after `git pull`); it never replaces a value you set:
 Open the address (normally <http://localhost:8470>). **The first screen asks you to choose the
 owner password** (at least 10 characters; a passphrase from your password manager is ideal).
 Choosing it works only from this computer, your home network and Tailscale; a request that
-arrives from the internet is refused. There is one login and no user accounts: every phone,
+arrives from the internet is refused. The name in the address bar matters too: open the app by
+its IP address, `localhost` or a `.local` name. Over Tailscale, use the IP address (or add the
+MagicDNS name to `CLIMATE_SETUP_HOSTS` in `.env`); the same goes for a LAN DNS name. `make
+password` on the server always works. There is one login and no user accounts: every phone,
 tablet and laptop signs in with the same owner password and shows up as its own signed-in
 device under **More > Security**.
 
@@ -74,6 +77,11 @@ Options (`scripts/bootstrap.sh --help`, or `make bootstrap ARGS="..."`):
 | `make password` | set the owner password from this computer (break-glass: signs every device out) |
 | `make token NAME=dashboard ROLE=viewer` | an API token for a service (`agent`, `viewer` or `control`; `DAYS=90` to expire, `REMOTE=1` to also accept it from the internet); shown once |
 | `make tokens` | list API tokens (never the secrets) |
+
+The agent and MCP containers sign in with `CLIMATE_AGENT_TOKEN` / `CLIMATE_MCP_TOKEN` from `.env`.
+To manage them like any other token, create an `agent`-role `cai_...` token in the app (More >
+Security > API tokens, or `make token NAME=agent ROLE=agent`), put it in `.env` as
+`CLIMATE_AGENT_TOKEN` and run `make up`: it stays listed and revocable in the app.
 | `make shell`, `make psql` | a shell in the app container, psql on the database |
 | `make reset` | **deletes all data** (history, settings, the owner password, the ecobee sign-in, HomeKit pairings) and starts fresh with the same `.env` |
 | `make update` | `git pull --ff-only`, then bootstrap |
@@ -207,7 +215,8 @@ the LAN's multicast (bootstrap warns). With a firewall: `sudo ufw allow 5353/udp
 | `there is no .env, but the database volume ... exists` | The data was created with another `.env`. Put that one back (its `POSTGRES_PASSWORD` and `CLIMATE_SECRET_KEY` match the data), or delete the old data with the two commands the message prints. |
 | `port is already allocated` | bootstrap moves busy ports; if you started by hand, change `APP_PORT` / `DB_PORT` in `.env`. |
 | Sign-in does not stick, or loops back to the sign-in screen | Plain http with `CLIMATE_COOKIE_SECURE=true` (Safari drops Secure cookies even on localhost; every browser does on a LAN address). Set it to `false` and `make up`, or use HTTPS. |
-| "Choose the password from your home network" on the first screen | The request looked like it came from the internet. Behind a reverse proxy, the proxy must send `X-Forwarded-For` and `FORWARDED_ALLOW_IPS` must include it ([DEPLOY.md](DEPLOY.md)); or set the password with `make password`. |
+| "Choose the password from your home network" on the first screen | The request looked like it came from the internet. Behind a reverse proxy, the proxy must send `X-Forwarded-For` and `FORWARDED_ALLOW_IPS` must be the proxy network's subnet ([DEPLOY.md](DEPLOY.md)); or set the password with `make password`. |
+| "Open the app by its address on your home network" when choosing the password | You opened it by a name setup does not accept (a Tailscale MagicDNS name, a LAN DNS name). Use the IP address, `localhost` or a `.local` name, add the name to `CLIMATE_SETUP_HOSTS` in `.env` and `docker compose up -d`, or run `make password`. |
 | "Sign-in is not configured" (503) | `CLIMATE_JWT_SECRET` / `CLIMATE_TOKEN_PEPPER` missing or shorter than 32 characters: `make bootstrap`, then `make up`. |
 | Forgot the owner password | `make password` on the machine itself (signs every device out). |
 | After updating, every device asks to sign in again | Expected once after the switch to bearer tokens: the old session cookie no longer exists. |

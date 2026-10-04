@@ -23,7 +23,11 @@ Patterns follow GrowWise AI's auth (`growwise-ai/apps/api/app/core/security.py`,
 - First run (`POST /auth/setup`): atomic "no password yet" claim (the existing
   `claim_first_password` pattern); **only from a private address** (LAN, Docker, Tailscale:
   10/8, 172.16/12, 192.168/16, 127/8, 100.64/10, ::1, fc00::/7, fe80::/10, after trusted proxy
-  headers) unless `allow_remote_setup`. Public visitors get 403 `SETUP_NOT_ALLOWED`.
+  headers) unless `allow_remote_setup`, **and** only when the `Host` header (never
+  X-Forwarded-Host) is an IP literal, `localhost`, a single-label name, a `.local`/`.lan`/
+  `.home`/`.home.arpa`/`.internal`/`.localdomain` name, the public URL's host or a name in
+  `CLIMATE_SETUP_HOSTS` (DNS-rebinding guard). Public visitors get 403 `SETUP_NOT_ALLOWED`;
+  the web shows the server's message and how to fix it (IP address, or add the name).
 - Change password: needs the current one; revokes every other signed-in device and writes an
   audit row. Break-glass: `python -m climate.cli set-password` (revokes all sessions).
 
@@ -35,7 +39,9 @@ Patterns follow GrowWise AI's auth (`growwise-ai/apps/api/app/core/security.py`,
   (revoked/expired → 401 `SESSION_REVOKED`), so sign-out and password changes take effect at once.
 - **Refresh token:** `"<session id hex>.<secret>"` in cookie `climate_refresh`: HttpOnly,
   `Path=/api/auth`, `SameSite=Lax`, `Secure=CLIMATE_COOKIE_SECURE`. Rotates on every refresh;
-  presenting the previous secret again revokes the session family (`reuse_detected`, audit).
+  every retired secret is kept (hashed, last 100); presenting one again revokes the session
+  family (`auth.refresh_reuse`), except the immediate previous one within a 60 s grace (two
+  tabs racing). A token matching no hash is `NOT_AUTHENTICATED` and revokes nothing.
   Sliding `refresh_ttl_days` (30), hard cap `session_max_days` (90) from sign-in.
 - **API tokens:** `"cai_<id hex>_<secret>"` (`secret = token_urlsafe(32)`), stored as
   HMAC-SHA256(`CLIMATE_TOKEN_PEPPER`), hint = last 4 chars, **shown once**. Roles:
@@ -43,7 +49,12 @@ Patterns follow GrowWise AI's auth (`growwise-ai/apps/api/app/core/security.py`,
   `viewer` (read only), `control` (read + everyday controls: holds, resume, back to automatic,
   presence, skip utility events). Never the owner's full rights (no settings, mode, setup,
   tokens, hand-back). `local_only` (default true) refuses the token from public addresses.
-  Live checks on every use (revoked, expired). `last_used_at` / `last_used_ip` written at most
+  Live checks on every use (revoked, expired). A `cai_` token placed in `.env` is always
+  checked live (never treated as a legacy env token), so revoking it in the app works.
+  Viewer and control tokens read settings without the house's coordinates, sleep windows or
+  phones; the owner and the agent see them in full. A control token's holds, resumes,
+  presence and utility skips are recorded as that token (`request.by_token`, reason prefix)
+  and audited (`control.*`, `utility.skip`, `utility.unskip`). `last_used_at` / `last_used_ip` written at most
   once a minute. Creating a token needs the password re-entered within `reauth_window_minutes`.
 - **Legacy env tokens:** `CLIMATE_AGENT_TOKEN` / `CLIMATE_MCP_TOKEN` keep working as role
   `agent`, constant-time compared, private addresses only. The agent container uses whichever
@@ -61,6 +72,8 @@ Patterns follow GrowWise AI's auth (`growwise-ai/apps/api/app/core/security.py`,
   pauses for `login_pause_minutes` (429 `LOGIN_PAUSED`, audit + warn alert). Sign-in from home
   or Tailscale always works and already signed-in devices are unaffected, so nobody can lock
   the owner out. The gateway adds its own per-IP rate limit in front.
+- The internet pause also covers `/auth/reauth` and `/auth/change-password`, and the budget is
+  reserved before each hash check so parallel guesses cannot overshoot it.
 - The old global 30-attempt cap goes (it let anyone lock the owner out).
 
 ## Who may call what

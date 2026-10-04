@@ -52,9 +52,10 @@ Sign-in and devices (owner)
 - ``revoke_session(principal, session_id: int, *, ip=None) -> bool``
 
 Bearer checks (the resolver calls these on every request)
-- ``resolve_bearer(token: str, *, ip: str | None) -> Principal``: a ``cai_`` API token, a legacy
-  env token (CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN, role agent, private addresses only) or an
-  access JWT (re-checks the session row).
+- ``resolve_bearer(token: str, *, ip: str | None) -> Principal``: a ``cai_`` API token (checked
+  live even when it is also the value of an env token), a legacy env token
+  (CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN holding a non-``cai_`` value, role agent, private
+  addresses only) or an access JWT (re-checks the session row).
 - ``check_access_token(token: str, *, ip: str | None = None) -> Principal``
 - ``check_api_token(token: str, *, ip: str | None) -> Principal``
 - ``principal_is_live(principal: Principal) -> bool`` (session / token still valid)
@@ -181,6 +182,20 @@ _monotonic = time.monotonic
 
 _lock = threading.Lock()
 _attempts: dict[str, deque[float]] = {}
+_MAX_RETIRED = 100  # retired refresh-token hashes kept per session (reuse detection)
+
+
+class _PublicBudget:
+    """Password checks from public addresses, under ``_lock``: recent failures (monotonic
+    stamps within ``public_login_window_minutes``) and checks in flight. A check reserves a
+    place before it runs, so parallel guesses cannot overshoot ``public_login_max_failures``."""
+
+    def __init__(self) -> None:
+        self.failures: deque[float] = deque(maxlen=1000)
+        self.inflight = 0
+
+
+_public = _PublicBudget()
 _checks = threading.BoundedSemaphore(_MAX_CONCURRENT_CHECKS)
 _tickets: dict[str, tuple[float, Principal]] = {}
 
@@ -386,15 +401,84 @@ def _forgive(ip: str | None, stamp: float) -> None:
             q.remove(stamp)
 
 
-def _check_password(password: str) -> bool:
-    """One Argon2 verification (a dummy one when no password is set), at most two at once.
-    Raises 429 TOO_MANY_ATTEMPTS when checks are queued for more than 10 s (a flood)."""
+def _paused_error(until: datetime | None) -> AuthError:
+    """429 LOGIN_PAUSED: until the durable pause ends, or (None) a moment while the last
+    guesses the budget allows are being checked."""
+    if until is None:
+        return AuthError(429, "LOGIN_PAUSED", "Sign-in from the internet is paused after too many wrong passwords; "
+                                              "try again in a few minutes. At home or over Tailscale it still works.")
+    minutes = max(1, int((until - utcnow()).total_seconds() // 60) + 1)
+    return AuthError(429, "LOGIN_PAUSED", f"Sign-in from the internet is paused for about {minutes} min after "
+                                         "too many wrong passwords. At home or over Tailscale it still works.")
+
+
+def _raise_if_paused() -> None:
+    """429 LOGIN_PAUSED while the durable pause (the ``auth.login_paused`` audit row) runs."""
     with session_scope() as s:
-        stored = _stored_hash(s)
+        until = _paused_until(s, utcnow())
+    if until is not None:
+        raise _paused_error(until)
+
+
+def _public_failure_count(s: Session, now: datetime) -> int:
+    """Failed password checks from public addresses in the window (the durable count)."""
+    return s.execute(
+        select(func.count()).select_from(AuditEvent).where(
+            AuditEvent.event_type == "auth.login_failed",
+            AuditEvent.payload["public"].astext == "true",
+            AuditEvent.ts > now - timedelta(minutes=get_settings().public_login_window_minutes),
+        )
+    ).scalar_one()
+
+
+def _reserve_public(recorded: int) -> None:
+    """Reserve a place in the public sign-in budget BEFORE the check runs (under the lock).
+
+    ``recorded`` is the durable failure count (other processes, before a restart); the larger
+    of it and this process's own recent failures counts. While checks are in flight, a new one
+    is admitted only if failures + in-flight stay below the limit, so the last guess before
+    the pause can never be joined by a parallel one; with nothing in flight one check runs
+    (after a pause ends, one more failure starts the next pause at once)."""
+    cfg = get_settings()
+    with _lock:
+        now = _monotonic()
+        cutoff = now - cfg.public_login_window_minutes * 60
+        q = _public.failures
+        while q and q[0] <= cutoff:
+            q.popleft()
+        failures = max(len(q), recorded)
+        if _public.inflight and failures + _public.inflight >= cfg.public_login_max_failures:
+            raise _paused_error(None)
+        _public.inflight += 1
+
+
+def _release_public(failed: bool) -> None:
+    """Give the reservation back; a failure moves into the recent failures in the same step."""
+    with _lock:
+        _public.inflight = max(0, _public.inflight - 1)
+        if failed:
+            _public.failures.append(_monotonic())
+
+
+def _check_password(password: str, *, ip: str | None = None, public: bool = False, reason: str | None = None,
+                    actor: Principal | None = None) -> bool:
+    """One Argon2 verification (a dummy one when no password is set), at most two at once.
+    Raises 429 TOO_MANY_ATTEMPTS when checks are queued for more than 10 s (a flood).
+
+    A public check re-reads the pause once it holds a slot (a pause may have started while it
+    queued). With ``reason``, a wrong password is recorded (and the pause written, when it is
+    due) BEFORE the slot is released, so the next queued check sees it."""
     if not _checks.acquire(timeout=_CHECK_QUEUE_S):
         raise AuthError(429, "TOO_MANY_ATTEMPTS", "The server is busy checking passwords; try again shortly.")
     try:
-        return verify_password(password, stored)
+        if public:
+            _raise_if_paused()
+        with session_scope() as s:
+            stored = _stored_hash(s)
+        ok = verify_password(password, stored)
+        if not ok and reason is not None:
+            _record_failure(ip, public, reason, actor)
+        return ok
     finally:
         _checks.release()
 
@@ -421,13 +505,7 @@ def _record_failure(ip: str | None, public: bool, reason: str, actor: Principal 
         if not public:
             return
         s.flush()
-        failures = s.execute(
-            select(func.count()).select_from(AuditEvent).where(
-                AuditEvent.event_type == "auth.login_failed",
-                AuditEvent.payload["public"].astext == "true",
-                AuditEvent.ts > now - timedelta(minutes=cfg.public_login_window_minutes),
-            )
-        ).scalar_one()
+        failures = _public_failure_count(s, now)
         if failures < cfg.public_login_max_failures or _paused_until(s, now) is not None:
             return
         audit(s, SYSTEM, "auth.login_paused", payload={
@@ -445,19 +523,42 @@ def _record_failure(ip: str | None, public: bool, reason: str, actor: Principal 
 
 
 def _guarded_check(password: str, ip: str | None, reason: str, actor: Principal | None = None) -> bool:
-    """Per-IP reservation, then the Argon2 check; failures are audited and counted."""
+    """Every password check (sign-in, reauth, change-password) goes through here: from a
+    public address the internet pause applies (429 LOGIN_PAUSED) and the check reserves a
+    place in the public budget; then the per-address reservation and the Argon2 check.
+    Failures are audited and counted."""
     public = not is_private_address(ip)
+    recorded = 0
+    if public:
+        now = utcnow()
+        with session_scope() as s:
+            until = _paused_until(s, now)
+            recorded = 0 if until is not None else _public_failure_count(s, now)
+        if until is not None:
+            raise _paused_error(until)
     stamp = _reserve_attempt(ip)
     try:
-        ok = _check_password(password)
+        ok = _budgeted_check(password, ip, public, reason, actor, recorded)
     except AuthError:
         _forgive(ip, stamp)
         raise
     if ok:
         _forgive(ip, stamp)
-        return True
-    _record_failure(ip, public, reason, actor)
-    return False
+    return ok
+
+
+def _budgeted_check(password: str, ip: str | None, public: bool, reason: str, actor: Principal | None,
+                    recorded: int) -> bool:
+    if not public:
+        return _check_password(password, ip=ip, reason=reason, actor=actor)
+    _reserve_public(recorded)
+    failed = False
+    try:
+        ok = _check_password(password, ip=ip, public=True, reason=reason, actor=actor)
+        failed = not ok
+        return ok
+    finally:
+        _release_public(failed)
 
 
 def _maybe_rehash(password: str) -> None:
@@ -516,7 +617,8 @@ def _new_session(s: Session, now: datetime, *, ip: str | None, user_agent: str, 
     cfg = get_settings()
     absolute = now + timedelta(days=cfg.session_max_days)
     row = AuthSession(
-        refresh_token_hash=f"pending:{new_secret()}", previous_token_hash=None, family_id=uuid.uuid4().hex,
+        refresh_token_hash=f"pending:{new_secret()}", previous_token_hash=None, retired_token_hashes=[],
+        family_id=uuid.uuid4().hex,
         rotation_counter=0, device_name=_device_name(device_name, user_agent), user_agent=_clean(user_agent, _MAX_UA),
         ip=ip, created_at=now, last_seen_at=now, expires_at=min(now + timedelta(days=cfg.refresh_ttl_days), absolute),
         absolute_expires_at=absolute, reauthenticated_at=now,
@@ -575,14 +677,6 @@ def login(password: str, *, ip: str | None, user_agent: str = "", device_name: s
     429 LOGIN_PAUSED (internet sign-in paused; home / Tailscale always works), 409
     PASSWORD_NOT_SET (first run not done), 503 AUTH_NOT_CONFIGURED."""
     require_configured()
-    public = not is_private_address(ip)
-    if public:
-        with session_scope() as s:
-            until = _paused_until(s, utcnow())
-        if until is not None:
-            minutes = max(1, int((until - utcnow()).total_seconds() // 60) + 1)
-            raise AuthError(429, "LOGIN_PAUSED", f"Sign-in from the internet is paused for about {minutes} min after "
-                                                 "too many wrong passwords. At home or over Tailscale it still works.")
     if not password_set():
         _check_password(password)  # the same Argon2 cost as a real check (dummy hash)
         raise AuthError(409, "PASSWORD_NOT_SET", "No password is set yet; choose one first.")
@@ -603,16 +697,27 @@ def _parse_refresh(token: str | None) -> int | None:
     return int(match.group(1), 16) if match else None
 
 
+def _matches_any(digest: str, hashes: list[str] | None) -> bool:
+    """Constant-time membership: every stored hash is compared (no early exit)."""
+    return any([constant_time_equals(digest, h) for h in hashes or []])  # noqa: C419 (no short-circuit on purpose)
+
+
 def refresh(refresh_token: str | None, *, ip: str | None, user_agent: str = "") -> Issued:
     """Rotate the refresh token and mint a new access token.
+
+    The secret is checked BEFORE anything about the session is revealed: a token that matches
+    none of the session's current, previous or retired hashes (a forgery, or a guessed id) is
+    401 NOT_AUTHENTICATED and changes nothing; only a genuine one learns SESSION_REVOKED.
 
     The presented token must be the session's current one. Presenting the PREVIOUS one within
     ``REFRESH_GRACE`` of the last rotation is a lost response (a reload mid-refresh, a dropped
     reply on a phone) or two tabs racing: it rotates again instead of signing the device out,
     and the holder of the newer token is caught by the rule below if it was a thief. Presenting
-    the previous one later (it was stolen and used, or replayed) revokes the session family and
-    raises 401 SESSION_REVOKED (audited as ``auth.refresh_reuse``). Sliding expiry: each refresh
-    extends the session by ``refresh_ttl_days``, never past ``session_max_days`` from sign-in."""
+    any other retired one (the previous one after the grace, or an older one: a thief who
+    rotated more than once) revokes the session family and raises 401 SESSION_REVOKED (audited
+    as ``auth.refresh_reuse``). Every retired hash is kept (the last ``_MAX_RETIRED``). Sliding
+    expiry: each refresh extends the session by ``refresh_ttl_days``, never past
+    ``session_max_days`` from sign-in."""
     require_configured()
     sid = _parse_refresh(refresh_token)
     if sid is None or refresh_token is None:
@@ -625,17 +730,21 @@ def refresh(refresh_token: str | None, *, ip: str | None, user_agent: str = "") 
         row = s.get(AuthSession, sid, with_for_update=True)
         if row is None:
             raise AuthError(401, "NOT_AUTHENTICATED", "Sign in required.")
+        current = constant_time_equals(digest, row.refresh_token_hash)
+        previous = row.previous_token_hash is not None and constant_time_equals(digest, row.previous_token_hash)
+        retired = _matches_any(digest, row.retired_token_hashes)
+        if not (current or previous or retired):
+            raise AuthError(401, "NOT_AUTHENTICATED", "Sign in required.")
         if row.revoked_at is not None:
             raise AuthError(401, "SESSION_REVOKED", "This device was signed out; sign in again.")
-        current = constant_time_equals(digest, row.refresh_token_hash)
         grace = (
-            not current and row.previous_token_hash is not None and row.rotated_at is not None
-            and now - row.rotated_at <= REFRESH_GRACE and constant_time_equals(digest, row.previous_token_hash)
+            not current and previous and row.rotated_at is not None and now - row.rotated_at <= REFRESH_GRACE
         )
         if current or grace:
             if not _is_open(row, now):
                 raise AuthError(401, "SESSION_REVOKED", "This sign-in has expired; sign in again.")
             raw = f"{row.id:x}.{new_secret()}"
+            row.retired_token_hashes = [*(row.retired_token_hashes or []), row.refresh_token_hash][-_MAX_RETIRED:]
             row.previous_token_hash = row.refresh_token_hash
             row.refresh_token_hash = hash_token(raw)
             row.rotation_counter += 1
@@ -646,11 +755,11 @@ def refresh(refresh_token: str | None, *, ip: str | None, user_agent: str = "") 
             if user_agent:
                 row.user_agent = _clean(user_agent, _MAX_UA)
             return _issued(row, raw, now)
-        if row.previous_token_hash and constant_time_equals(digest, row.previous_token_hash):
-            revoked = _revoke_sessions(s, now, "reuse_detected", family=row.family_id)
-            audit(s, None, "auth.refresh_reuse", target_type="session", target_id=row.id,
-                  payload={"family_revoked": revoked, "rotation_counter": row.rotation_counter}, ip=ip)
-            reused = True
+        revoked = _revoke_sessions(s, now, "reuse_detected", family=row.family_id)
+        audit(s, None, "auth.refresh_reuse", target_type="session", target_id=row.id,
+              payload={"family_revoked": revoked, "rotation_counter": row.rotation_counter,
+                       "reused": "previous" if previous else "older"}, ip=ip)
+        reused = True
     if reused:
         log.warning("Refresh token reuse on session %s; the session was revoked", sid)
         raise AuthError(401, "SESSION_REVOKED", "This sign-in was used from somewhere else and has been ended; "
@@ -696,7 +805,8 @@ def _require_owner_session(principal: Principal) -> None:
 
 def reauth(principal: Principal, password: str, *, ip: str | None) -> Principal:
     """Re-enter the password on this device; stamps it for ``reauth_window_minutes``.
-    A wrong password is 403 INVALID_CREDENTIALS (the device stays signed in)."""
+    A wrong password is 403 INVALID_CREDENTIALS (the device stays signed in); from a public
+    address while internet sign-in is paused, 429 LOGIN_PAUSED (like every password check)."""
     _require_owner_session(principal)
     if not _guarded_check(password, ip, "reauth", principal):
         raise AuthError(403, "INVALID_CREDENTIALS", "Wrong password.")
@@ -714,7 +824,8 @@ def reauth(principal: Principal, password: str, *, ip: str | None) -> Principal:
 
 def change_password(principal: Principal, current_password: str, new_password: str, *, ip: str | None) -> None:
     """Change the owner password (the current one is required). Every OTHER signed-in device
-    is signed out; this one stays and counts as recently authenticated. API tokens stay."""
+    is signed out; this one stays and counts as recently authenticated. API tokens stay.
+    From a public address while internet sign-in is paused: 429 LOGIN_PAUSED."""
     _require_owner_session(principal)
     _check_new_password(new_password)
     if not _guarded_check(current_password, ip, "change_password", principal):
@@ -817,10 +928,17 @@ def check_api_token(token: str, *, ip: str | None) -> Principal:
 
 
 def _legacy_env_principal(token: str, ip: str | None) -> Principal | None:
-    """CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN: role agent, constant-time, private only."""
+    """CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN: role agent, constant-time, private only.
+
+    A ``cai_`` value is never a legacy token, whether presented or configured: a managed API
+    token pasted into .env must still be checked live (``check_api_token``), so revoking or
+    expiring it in the app takes effect."""
+    if token.startswith(API_TOKEN_PREFIX):
+        return None
     cfg = get_settings()
     for label, configured in (("CLIMATE_AGENT_TOKEN", cfg.agent_token), ("CLIMATE_MCP_TOKEN", cfg.mcp_token)):
-        if configured and constant_time_equals(token, configured):
+        configured = (configured or "").strip()
+        if configured and not configured.startswith(API_TOKEN_PREFIX) and constant_time_equals(token, configured):
             if not is_private_address(ip):
                 raise AuthError(403, "FORBIDDEN", "This token only works from the home network.")
             return Principal(role="agent", kind="env_token", label=label)
@@ -828,8 +946,9 @@ def _legacy_env_principal(token: str, ip: str | None) -> Principal | None:
 
 
 def resolve_bearer(token: str, *, ip: str | None) -> Principal:
-    """Who an ``Authorization: Bearer`` value belongs to: a legacy env token, a ``cai_`` API
-    token or an owner access token. Raises AuthError otherwise."""
+    """Who an ``Authorization: Bearer`` value belongs to: a ``cai_`` API token (always checked
+    live, even when the same value sits in CLIMATE_AGENT_TOKEN / CLIMATE_MCP_TOKEN), a legacy
+    env token or an owner access token. Raises AuthError otherwise."""
     token = (token or "").strip()
     if not token:
         raise AuthError(401, "NOT_AUTHENTICATED", "Sign in required.")
@@ -951,7 +1070,10 @@ def redeem_ws_ticket(ticket: str) -> Principal | None:
 
 
 def reset_memory_state() -> None:
-    """Tests: forget the per-address limiter and every WebSocket ticket."""
+    """Tests: forget the per-address limiter, the public sign-in budget and every WebSocket
+    ticket."""
     with _lock:
         _attempts.clear()
         _tickets.clear()
+        _public.failures.clear()
+        _public.inflight = 0

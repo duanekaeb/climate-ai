@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // The owner sign-in: one password for the house, no user accounts. On a fresh install (no
-// password yet) the same screen chooses it, which only works from the home network (or
-// Tailscale) unless the server allows otherwise. Each sign-in is a "device" with a name,
+// password yet) the same screen chooses it, which only works from the home network, opened by
+// a home name (IP address, localhost, .local or CLIMATE_SETUP_HOSTS), unless the server allows
+// otherwise. Each sign-in is a "device" with a name,
 // prefilled from the platform, that Security -> Signed-in devices shows and can sign out.
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/client'
-import { PASSWORD_MIN_LENGTH, authErrorText, deviceName, rememberDeviceName } from '@/lib/device'
+import { PASSWORD_MIN_LENGTH, SETUP_HOST_HINT, authErrorText, deviceName, rememberDeviceName } from '@/lib/device'
 import { useAuth } from '@/stores/auth'
 import { useStatus } from '@/stores/status'
 
@@ -119,7 +120,12 @@ onMounted(async () => {
         <p class="text-sm">
           <span class="font-medium">Setup only works from your home network.</span>
           No password has been chosen for this house yet, and for safety the first one can only
-          be set from a device at home (or over Tailscale).
+          be set from a device at home or on your Tailscale network.
+        </p>
+        <p v-if="error" id="login-error" role="alert" aria-live="assertive"
+           class="rounded-xl border border-bad/40 bg-bad/10 p-2.5 text-sm text-bad">{{ error }}</p>
+        <p class="text-sm text-muted">
+          The name in the address bar matters too. {{ SETUP_HOST_HINT }}
         </p>
         <button type="button" class="btn w-full" :disabled="checking" @click="retry">
           {{ checking ? 'Checking…' : 'Check again' }}
