@@ -16,15 +16,14 @@ The interactive version of this document, including a working mockup of the app,
 
 | Unit | Thermostat | Remote sensors | Notes |
 |---|---|---|---|
-| **Main floor** | ecobee in the Hallway (model to confirm) | School Room, Living Room, Kitchen | Its heat rises into the upstairs through the floor and the open stairwell |
-| **Upstairs** | ecobee Smart Thermostat Essential in the Toy Room (`attisRetail`, no built-in occupancy sensor) | Girls' Room (Toy Room too? confirm) | Under the roof. Loaded by the sun and by heat from the main floor |
-| **Bed / Office** | ecobee in the Bedroom (model to confirm) | Office | Opposite side of the house. No link to the upstairs; a weak link to the main floor at most |
+| **Main floor** | ecobee in the Hallway (temperature, humidity, occupancy) | School Room, Living Room, Kitchen | Its heat rises into the upstairs through the floor and the open stairwell |
+| **Upstairs** | ecobee Smart Thermostat Essential in the Toy Room (`attisRetail`; temperature, humidity) | Toy Room, Girls' Room | Under the roof. Loaded by the sun and by heat from the main floor |
+| **Bed / Office** | ecobee in the Bedroom (temperature, humidity, occupancy) | Office | Opposite side of the house. No link to the upstairs; a weak link to the main floor at most |
 
-There are eight temperature points: three thermostats and five SmartSensors. Every SmartSensor
-reports temperature and occupancy, and they are the app's main occupancy source. The Essential
-thermostat has no occupancy sensor of its own, so if the Toy Room is read from the thermostat rather
-than a SmartSensor, that one room has no occupancy signal. The Hallway and Bedroom thermostats have one unless they are
-ecobee3 lite models. Humidity comes from the thermostats only.
+There are nine temperature points: three thermostats and six SmartSensors. Every room reports
+occupancy: the Hallway and Bedroom thermostats sense it themselves, and each SmartSensor reports it.
+The Essential has no occupancy sensor, but the Toy Room's SmartSensor covers that room. No extra
+hardware is needed for occupancy. Humidity comes from the thermostats only.
 
 **Observed problem.** When the main floor is empty, ecobee Smart Away lets it float warm (about
 80°F). If someone is upstairs holding 77°F, heat from the warmer main floor rises. That extra load is
@@ -74,7 +73,7 @@ Occupied rooms come first. An occupied room's comfort is never traded for runtim
 
 **Why ecobee's flag isn't enough.** The API reports occupancy as "motion in the past 30 minutes",
 updated about every 3 minutes in the cloud. PIR motion sensors miss people sitting still or
-sleeping. The Toy Room has occupancy only if a SmartSensor is in it (the Essential has none built in).
+sleeping. Every room has a signal; the Toy Room's comes from its SmartSensor.
 
 **Signals the app uses.**
 - Live motion from each SmartSensor over local HomeKit (pushed in seconds), plus polled "seconds
@@ -327,13 +326,13 @@ becomes a hard requirement, use a listed thermostat with a local API (Venstar Co
 T6 Pro Z-Wave).
 
 **Hardware to add (read-only), in priority order:**
-1. A SmartSensor in the Toy Room, only if none of the five is there already.
-2. Stairwell top/bottom temperature sensors.
-3. Per-unit power monitoring (Emporia Vue 3 or Shelly EM Gen3).
-4. Optional mmWave for a room where people sit still and get marked empty.
-5. Bedroom/Office door contacts.
-6. A wired attic probe.
-7. A 24V call monitor with supply/return probes.
+None of this is needed for occupancy.
+1. Stairwell top/bottom temperature sensors.
+2. Per-unit power monitoring (Emporia Vue 3 or Shelly EM Gen3).
+3. Optional mmWave for a room where people sit still and get marked empty.
+4. Bedroom/Office door contacts.
+5. A wired attic probe.
+6. A 24V call monitor with supply/return probes.
 
 **Adapter rules.**
 - Read back every write; the library swallows HTTP errors.
@@ -393,7 +392,7 @@ Phase 4.
 
 | Phase | When | Deliverable | Done when |
 |---|---|---|---|
-| 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, confirm which rooms the five SmartSensors are in, order stairwell sensors | all 8 points stream live; tests answered |
+| 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, confirm all six SmartSensors appear on both links, order stairwell sensors | all 9 points stream live; tests answered |
 | 1 | weeks 1–2 | backfill, Live/Rooms/Runtime screens, daily digest | runtime per unit matches ecobee within 1% |
 | 2 | weeks 2–4 | baselines, attribution, history study, occupancy v1 (3 states) | baselines pass checks; a week of room states spot-checked |
 | 3 | weeks 3–5 | Claude analyst on your subscription (read-only tools + sign-off of model changes), weekly report, MCP server | the weekly report says something new |
