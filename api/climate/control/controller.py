@@ -391,7 +391,7 @@ def _log_manual_change(s: Session, state: HouseState, unit: UnitStatus, now: dat
     row = _insert(
         s, state, unit.unit_key, mode="act" if mode == "act" else "suggest", channel="none", action="set_hold",
         status="skipped", rule="hold_off",
-        reason=f"Someone changed the {unit.name} thermostat by hand ({what}); the controller backs off until {until}.",
+        reason=f"Someone changed the {unit.name.lower()} thermostat by hand ({what}); the controller backs off until {until}.",
         before=_before(unit), request=hold_signature(hold), now=now,
     )
     return row.id
