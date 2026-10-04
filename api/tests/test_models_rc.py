@@ -402,3 +402,35 @@ def test_simulate_rule_of_thumb(db, monkeypatch):
     assert out.model == "rule_of_thumb" and set(out.units) == {"main", "up", "bed"}
     assert out.total_runtime_min > 0 and "setpoints" in out.note
     assert {p.temp_f for p in out.units["up"]} <= {74.0, 77.0, 82.0}
+
+
+def test_models_use_each_units_stage1_heating_metric(db):
+    """Heating duty in the RC series and the simulator's recent-mode guess follow
+    analytics.daily.heat_metrics (comp_heat1 for a heat pump, aux_heat1 for a furnace), never
+    greatest(comp_heat1, aux_heat1), which counted a heat pump's backup strips as its runtime."""
+    from sqlalchemy import text
+
+    db.execute(text("UPDATE units SET equipment = '{\"heating\": \"heat_pump\"}' WHERE key = 'main'"))
+    db.execute(text("UPDATE units SET equipment = '{\"heating\": \"furnace\"}' WHERE key = 'up'"))
+    end = datetime(2026, 1, 20, 6, 0, tzinfo=UTC)
+    start = end - timedelta(hours=6)
+    rows = []
+    t = start
+    while t < end:
+        for unit, cool, heat1, aux1 in (("main", 0, 60, 240), ("up", 0, 0, 150), ("bed", 120, 30, 210)):
+            rows.append({"ts": t, "unit_key": unit, "comp_cool1": cool, "comp_heat1": heat1, "aux_heat1": aux1,
+                         "fan": 300, "hvac_mode": "heat", "zone_temp_f": 68.0, "outdoor_temp_f": 20.0,
+                         "source": "test"})
+        t += timedelta(minutes=5)
+    _insert(db, Runtime5m, rows)
+
+    s = rc.load_series(db, start, end, TZ)
+    heat = {u: float(np.nanmean(s.on_heat[:, rc.ZIDX[u]])) for u in rc.ZONES}
+    assert heat["main"] == pytest.approx(60 / 300)  # heat pump: compressor, not the strips
+    assert heat["up"] == pytest.approx(150 / 300)  # furnace: aux IS the heat
+    assert heat["bed"] == pytest.approx(30 / 300)  # unknown, reports compressor heat -> heat pump
+
+    # Recent runtime: cooling 120 s/slot (bed) vs heating 60 + 150 + 30 = 240 by the metric
+    # (greatest() said 240 + 150 + 210 = 600). Make cooling win only under the right metric.
+    db.execute(text("UPDATE runtime_5m SET comp_cool1 = 250 WHERE unit_key = 'bed'"))
+    assert bt._choose_mode(db, s, end.date(), recorded=False, now=end) == "cool"

@@ -471,3 +471,139 @@ def test_power_monotonic_and_honest(db, monkeypatch):
     assert analysis.power(db, 10.0, power_=0.9).days_per_arm > out[10.0].days_per_arm
     with pytest.raises(ValueError):
         analysis.power(db, 0.0)
+
+
+# ---------------------------------------------------------------------------------------
+# frozen checkpoint verdicts
+# ---------------------------------------------------------------------------------------
+
+
+def test_checkpoint_verdict_waits_for_late_data_then_never_changes(db, no_baselines):
+    """A checkpoint is judged once, after its last day has left the 3-day refill window, and
+    the stored verdict is what analyze reports from then on, even if the days change later."""
+    today = local_date(utcnow(), TZ)
+    exp = _insert_experiment(db, today - timedelta(days=11), 28)  # checkpoint 1's last day = today - 3
+    _fill(db, exp, -3000.0, 300.0)
+    assert analysis.freeze_checkpoints(db, utcnow()) == 0  # today - 3 is still refilled tonight
+    a = analysis.analyze(db, exp)
+    assert a.decision == "continue" and a.checkpoint_reached == 1
+    assert f"nightly run on {(today + timedelta(days=1)).isoformat()}" in a.note
+    assert "not a decision" in a.note
+    assert (exp.result or {}).get("checkpoints") is None
+
+    tomorrow = utcnow() + timedelta(days=1)
+    assert analysis.freeze_checkpoints(db, tomorrow) == 1
+    db.refresh(exp)
+    v = exp.result["checkpoints"]["1"]
+    assert v["decision"] == "stop_win" and v["ci_high_pct"] < 0
+    assert {"effect_pct", "ci_low_pct", "ci_high_pct", "decision", "at"} <= set(v)
+    assert exp.result["log"][-1] == {"at": v["at"], "event": "checkpoint", "checkpoint": 1, "decision": "stop_win"}
+
+    # Late data that would flip the verdict does not reopen it.
+    for r in db.scalars(select(ExperimentDay).where(ExperimentDay.experiment_id == exp.id)):
+        r.residual_s = 3000.0 if r.arm == "trt" else 0.0
+    db.flush()
+    again = analysis.analyze(db, exp)
+    assert again.decision == "stop_win"
+    assert (again.effect_pct, again.ci_low_pct, again.ci_high_pct) == (v["effect_pct"], v["ci_low_pct"], v["ci_high_pct"])
+    assert analysis.freeze_checkpoints(db, tomorrow) == 0
+
+
+def test_frozen_interim_verdict_is_shown_between_checkpoints(db, no_baselines):
+    today = local_date(utcnow(), TZ)
+    exp = _insert_experiment(db, today - timedelta(days=14), 28)  # checkpoint 1 frozen, 2 (day 19) ahead
+    _fill(db, exp, +100.0, 1500.0, seed=4)  # nothing to see
+    analysis.freeze_checkpoints(db, utcnow())
+    db.refresh(exp)
+    assert exp.result["checkpoints"]["1"]["decision"] == "continue"
+    a = analysis.analyze(db, exp)
+    assert a.decision == "continue" and a.checkpoint_reached == 1
+    assert "Checkpoint 1 did not clear its bar" in a.note and "next checkpoint on day 19" in a.note
+    assert "Informational only, not a decision" in a.note
+    assert a.days_observed == 14  # the informational interval uses every usable day so far
+
+
+def test_stopped_experiment_never_freezes_a_checkpoint_it_did_not_reach(db, no_baselines):
+    today = local_date(utcnow(), TZ)
+    exp = _insert_experiment(db, today - timedelta(days=20), 28, statuses="stopped")
+    exp.end_date = today - timedelta(days=15)  # stopped after 6 days, before checkpoint 1 (day 9)
+    db.execute(ExperimentDay.__table__.delete().where(ExperimentDay.experiment_id == exp.id,
+                                                      ExperimentDay.day > exp.end_date))
+    db.flush()
+    _fill(db, exp, -3000.0, 300.0)
+    assert analysis.freeze_checkpoints(db, utcnow()) == 0
+    a = analysis.analyze(db, exp)
+    assert a.decision == "inconclusive" and "no pre-planned verdict" in a.note
+
+
+# ---------------------------------------------------------------------------------------
+# power vs the real decision rule
+# ---------------------------------------------------------------------------------------
+
+
+def _mc_win_rate(days_per_arm_: int, effect: float, cv: float, rho: float, block: int, sims: int,
+                 rng: np.random.Generator, alpha: float = 0.10, looks: int = 3) -> float:
+    """Share of simulated switchbacks the real decision rule calls a win: AR(1) daily residuals
+    (lag-1 rho, sd cv x expected), balanced randomized blocks, three OBF checkpoints, Welch
+    interval at each checkpoint's z_crit widened by the analysis' block design effect, win when
+    the interval is entirely below 0. Vectorized over runs; cross-checked against _welch."""
+    n_days = 2 * days_per_arm_
+    cps = switchback.plan_checkpoints(n_days, looks, alpha)
+    deff = analysis._block_design_effect(rho, block)
+    e = rng.standard_normal((sims, n_days))
+    x = np.empty_like(e)
+    x[:, 0] = e[:, 0]
+    for t in range(1, n_days):
+        x[:, t] = rho * x[:, t - 1] + np.sqrt(1 - rho * rho) * e[:, t]
+    n_blocks = -(-n_days // block)
+    flip = rng.integers(0, 2, (sims, -(-n_blocks // 2)))
+    blocks = np.stack([flip, 1 - flip], axis=2).reshape(sims, -1)[:, :n_blocks]
+    trt = np.repeat(blocks, block, axis=1)[:, :n_days].astype(bool)
+    expected = 20000.0
+    res = cv * expected * x - np.where(trt, effect * expected, 0.0)
+    win = np.zeros(sims, dtype=bool)
+    for c in cps:
+        r, b = res[:, : c.day], trt[:, : c.day]
+        nb = b.sum(axis=1)
+        na = c.day - nb
+        mb = np.where(b, r, 0.0).sum(axis=1) / nb
+        ma = np.where(~b, r, 0.0).sum(axis=1) / na
+        vb = np.where(b, (r - mb[:, None]) ** 2, 0.0).sum(axis=1) / (nb - 1)
+        va = np.where(~b, (r - ma[:, None]) ** 2, 0.0).sum(axis=1) / (na - 1)
+        se2 = va / na + vb / nb
+        df = se2**2 / ((va / na) ** 2 / (na - 1) + (vb / nb) ** 2 / (nb - 1))
+        t_crit = stats.t.isf(stats.norm.sf(c.z_crit), df)
+        hi = (mb - ma) + t_crit * np.sqrt(se2 * deff)
+        for k in range(3):  # the vectorized rule IS analysis._welch
+            lk = analysis._welch(list(r[k][~b[k]]), list(r[k][b[k]]), [expected] * c.day, c.z_crit, deff)
+            assert lk.hi_pct == pytest.approx(hi[k] / expected * 100.0, rel=1e-9, abs=1e-9)
+        win |= hi < 0
+    return float(win.mean())
+
+
+def test_power_matches_a_monte_carlo_of_the_decision_rule(db, monkeypatch):
+    """power() for a 10% cut at CV 0.21, lag-1 0.29, 2-day blocks vs the days per arm at which
+    the real three-look decision rule wins 80% of the time (it used to inflate by
+    (1+rho)/(1-rho), a different correction from the one the analysis applies: ~47% too many)."""
+    fits = {(u, "cool"): SimpleNamespace(cvrmse=0.21, resid_std_s=4200.0, resid_lag1=0.29) for u in ("main", "up", "bed")}
+    monkeypatch.setattr("climate.analytics.baseline.active_fits", lambda s: fits)
+    out = analysis.power(db, 10.0, alpha=0.10, power_=0.8, block_days=2)
+    assert out.resid_cv == pytest.approx(0.21) and "2-day blocks" in out.note
+
+    rng = np.random.default_rng(20261004)
+    grid = [50, 60, 70, 80, 90]
+    rates = [_mc_win_rate(n, 0.10, 0.21, 0.29, 2, 4000, rng) for n in grid]
+    assert all(a < b for a, b in itertools.pairwise(rates)) and rates[0] < 0.8 < rates[-1]
+    mc_days = float(np.interp(0.8, rates, grid))
+    assert out.days_per_arm == pytest.approx(mc_days, rel=0.15), (out.days_per_arm, mc_days, rates)
+    # Longer blocks keep more correlated days together, so the same effect needs more days.
+    assert analysis.power(db, 10.0, block_days=4).days_per_arm > out.days_per_arm > analysis.power(db, 10.0, block_days=1).days_per_arm
+    with pytest.raises(ValueError):
+        analysis.power(db, 10.0, block_days=0)
+
+
+def test_power_route_takes_block_days(owner):
+    r = owner.get("/api/experiments/power", params={"effect_pct": 10, "block_days": 3})
+    assert r.status_code == 200, r.text
+    assert owner.get("/api/experiments/power", params={"block_days": 0}).status_code == 422
+    assert owner.get("/api/experiments/power", params={"block_days": 8}).status_code == 422

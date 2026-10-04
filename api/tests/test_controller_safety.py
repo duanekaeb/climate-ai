@@ -17,7 +17,15 @@ from climate.sources.base import HoldInfo, UnitSnapshot, WriteResult
 from climate.state import MANUAL_KIND, RESUME_KIND, load_house_state
 from climate.store.app_settings import SourceSettings, put_setting
 from climate.store.orm import ControlAction, LiveUnit
-from tests.test_controller_tick import NOW, TZ, FakeSource, actions, put_snapshot, refresh_sensors, setup_house
+from tests.test_controller_tick import (
+    NOW,
+    TZ,
+    FakeSource,
+    actions,
+    put_snapshot,
+    refresh_sensors,
+    setup_house,
+)
 
 
 class SetsSource(FakeSource):

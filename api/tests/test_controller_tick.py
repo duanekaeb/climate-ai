@@ -39,9 +39,9 @@ class FakeSource:
     async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
         self.resumes.append(unit_key)
         self.forced.append(force)
-        if self.refuse_resume and not force:
-            return WriteResult(ok=False, channel=self.kind, request={"unit_key": unit_key, "refused": True},
-                               error="the running hold was not written by the controller; not resuming")
+        if self.refuse_resume and not force:  # what the ecobee adapter returns for a hold it did not write
+            return WriteResult(ok=False, channel=self.kind, request={"unit_key": unit_key, "force": force},
+                               error="the running hold was not set by the controller; not cancelled")
         return WriteResult(ok=True, channel=self.kind, readback={"hold": None})
 
     async def poll_revisions(self) -> dict[str, str]:

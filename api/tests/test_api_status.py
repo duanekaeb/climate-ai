@@ -246,3 +246,29 @@ def test_status_needs_no_writes(owner, broken_services):
     owner.get("/api/status")
     with session_scope() as s:
         assert s.execute(select(RoomStateRow)).first() is None
+
+
+def test_runtime_daily_expectation_covers_the_same_slots(owner, monkeypatch):
+    """A >= 90% day's minutes cover only its slots with data: the expectation must cover the
+    same slots (full-day expected x coverage), and today never gets one while in progress."""
+    d = date(2026, 7, 1)
+    today = local_date(utcnow(), "America/Chicago")
+
+    def fake_rows(session, start, end, tz, unit_keys=None):
+        return [
+            daily.DayRow(day=d, unit_key="up", cool_s=3375, heat_s=0, aux_s=0, fan_s=3375, slots=270, mode="cool",
+                         outdoor_mean_f=81.0, outdoor_max_f=92.0, hourly_outdoor_f=[81.0] * 24),  # 270/288 slots
+            daily.DayRow(day=today, unit_key="up", cool_s=3600, heat_s=0, aux_s=0, fan_s=3600, slots=288,
+                         mode="cool", outdoor_mean_f=81.0, outdoor_max_f=92.0, hourly_outdoor_f=[81.0] * 24),
+        ]
+
+    fit = baseline.BaselineFit(unit_key="up", mode="cool", balance_point_f=65, intercept_s=0, slope_s_per_dd=200,
+                               n_days=60, r2=0.9, cvrmse=0.1, nmbe=0.0, resid_std_s=300, resid_lag1=0.2,
+                               train_start=d, train_end=d)
+    monkeypatch.setattr(daily, "daily_rows", fake_rows)
+    monkeypatch.setattr(baseline, "active_fits", lambda session: {("up", "cool"): fit})
+    monkeypatch.setattr(baseline, "expected_seconds", lambda f, row: 3600.0)  # full day
+    rows = {x["date"]: x for x in owner.get("/api/runtime/daily", params={"days": 7}).json()}
+    past = rows[d.isoformat()]
+    assert past["cool_min"] == 56.2 and past["expected_min"] == 56.2  # 3600 s x 270/288, not 60.0
+    assert rows[today.isoformat()]["expected_min"] is None
