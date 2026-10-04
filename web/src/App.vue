@@ -3,8 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { routes } from '@/router'
 import { useAuth } from '@/stores/auth'
-import { stopLiveUpdates, useStatus } from '@/stores/status'
+import { useStatus } from '@/stores/status'
 import Icon from '@/components/Icon.vue'
+import ReauthDialog from '@/components/ReauthDialog.vue'
 import { theme, toggleTheme } from '@/lib/theme'
 
 const route = useRoute()
@@ -22,7 +23,7 @@ const themeLabel = computed(() => (theme.dark ? 'Switch to light mode' : 'Switch
 // and inside the app (a 401 sends you to /login while auth still reads "signed in", so the
 // route matters too: coming back from the sign-in page restarts it).
 watch(
-  () => !!auth.state?.authenticated && !route.meta.public,
+  () => auth.signedIn && !route.meta.public,
   (live) => {
     if (live) status.start()
   },
@@ -35,8 +36,9 @@ async function signOut() {
   signingOut.value = true
   try {
     await auth.logout()
-    stopLiveUpdates()
     await router.push('/login')
+  } catch (e) {
+    window.alert(`Could not sign out: ${e instanceof Error ? e.message : String(e)}`)
   } finally {
     signingOut.value = false
   }
@@ -44,6 +46,7 @@ async function signOut() {
 </script>
 
 <template>
+  <ReauthDialog />
   <div v-if="!showShell" class="min-h-dvh"><RouterView /></div>
   <div v-else class="flex min-h-dvh">
     <!-- sidebar (tablet / desktop) -->

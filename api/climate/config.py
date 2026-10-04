@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     # private address (LAN, Docker, Tailscale) unless this is true, so nobody on the internet
     # can claim the house before the owner does.
     allow_remote_setup: bool = False
+    # Extra host names (comma-separated) on which first-run setup is accepted, besides IP
+    # addresses, localhost, .local/.lan/.home/.home.arpa/.internal names and the public URL's host.
+    setup_hosts: str = ""
 
     log_level: str = "INFO"
     version: str = "0.1.0"

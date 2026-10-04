@@ -39,6 +39,7 @@ from climate.config import get_settings
 
 router = APIRouter(tags=["auth"])
 _UA_MAX = 400
+LEGACY_COOKIE = "climate_session"  # the pre-token sign-in cookie; no longer read, expired on sight
 
 
 def _user_agent(request: Request) -> str:
@@ -74,6 +75,13 @@ def set_refresh_cookie(response: Response, issued: auth_service.Issued) -> None:
         samesite="lax",
         secure=get_settings().cookie_secure,
     )
+
+
+def forget_legacy_cookie(request: Request, response: Response) -> None:
+    """Expire the old ``climate_session`` cookie (Path=/) a browser may still hold from before
+    the upgrade. It grants nothing any more; this only tidies the browser's jar."""
+    if LEGACY_COOKIE in request.cookies:
+        response.delete_cookie(LEGACY_COOKIE, path="/", httponly=True, samesite="lax", secure=get_settings().cookie_secure)
 
 
 def clear_refresh_cookie(response: Response) -> None:
@@ -122,7 +130,8 @@ def auth_state(request: Request) -> AuthState:
         authenticated=principal is not None,
         role=principal.role if principal is not None else None,
         password_set=auth_service.password_set(),
-        setup_allowed=auth_service.setup_allowed(auth.client_ip(request)),
+        setup_allowed=auth_service.setup_allowed(auth.client_ip(request))
+        and (get_settings().allow_remote_setup or auth.setup_host_ok(request)),
     )
 
 
@@ -130,11 +139,18 @@ def auth_state(request: Request) -> AuthState:
 def setup(body: SetupBody, request: Request, response: Response) -> AccessTokenOut:
     """First run only: choose the owner password and sign this device in. Accepted only from
     a private address (home network, Docker, Tailscale) unless ``allow_remote_setup``: 403
-    SETUP_NOT_ALLOWED, 409 ALREADY_SET, 422 WEAK_PASSWORD."""
+    SETUP_NOT_ALLOWED, 409 ALREADY_SET, 422 WEAK_PASSWORD. The request must also name a home
+    network host (``auth.setup_host_ok``: IP address, localhost, .local and similar, the public
+    URL's host or CLIMATE_SETUP_HOSTS), which closes DNS rebinding before a password exists."""
+    if not auth_service.password_set() and not get_settings().allow_remote_setup and not auth.setup_host_ok(request):
+        raise AuthError(403, "SETUP_NOT_ALLOWED",
+                        "Open the app by its address on your home network (for example http://192.168.1.20:8470 "
+                        "or http://localhost:8470) to choose the password, or add this name to CLIMATE_SETUP_HOSTS.")
     issued = auth_service.setup(
         body.password, ip=auth.client_ip(request), user_agent=_user_agent(request), device_name=body.device_name
     )
     set_refresh_cookie(response, issued)
+    forget_legacy_cookie(request, response)
     return _token_out(issued)
 
 
@@ -146,6 +162,7 @@ def login(body: LoginBody, request: Request, response: Response) -> AccessTokenO
         body.password, ip=auth.client_ip(request), user_agent=_user_agent(request), device_name=body.device_name
     )
     set_refresh_cookie(response, issued)
+    forget_legacy_cookie(request, response)
     return _token_out(issued)
 
 
@@ -159,8 +176,11 @@ def refresh(request: Request, response: Response):
             request.cookies.get(auth_service.REFRESH_COOKIE), ip=auth.client_ip(request), user_agent=_user_agent(request)
         )
     except AuthError as err:
-        return _error_response(err, clear_cookie=err.status == http.HTTP_401_UNAUTHORIZED)
+        resp = _error_response(err, clear_cookie=err.status == http.HTTP_401_UNAUTHORIZED)
+        forget_legacy_cookie(request, resp)
+        return resp
     set_refresh_cookie(response, issued)
+    forget_legacy_cookie(request, response)
     return _token_out(issued)
 
 
@@ -177,6 +197,7 @@ def logout(request: Request) -> Response:
     )
     resp = Response(status_code=http.HTTP_204_NO_CONTENT)
     clear_refresh_cookie(resp)
+    forget_legacy_cookie(request, resp)
     return resp
 
 

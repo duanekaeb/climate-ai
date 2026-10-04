@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from climate import events
-from climate.api.auth import OwnerDep, ReaderDep, Role, WriterDep
+from climate.api.auth import ControlDep, OwnerDep, ReaderDep, Role, WriterDep
 from climate.api.schemas import (
     ChangeOut,
     ControlActionOut,
@@ -402,7 +402,7 @@ def _live_settings(session: Session, unit_key: str) -> dict:
 
 
 @router.post("/control/hold", response_model=ControlActionOut)
-def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+def manual_hold(body: ManualHoldBody, _: Role = ControlDep, session: Session = SessionDep) -> ControlActionOut:
     """Queue the owner's hold: exactly what was typed, checked here against the hard envelope
     only (min/max heat and cool, the deadband or the thermostat's own heatCoolMinDelta when
     larger, the 0.5°F grid). No step limit, humidity guard, rate limit or back-off applies to
@@ -436,7 +436,7 @@ def _hours(h: float) -> str:
 
 
 @router.post("/control/resume", response_model=ControlActionOut)
-def resume(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+def resume(body: UnitBody, _: Role = ControlDep, session: Session = SessionDep) -> ControlActionOut:
     """The owner's "Resume schedule": cancel the running plain hold, whoever set it, and let
     the ecobee schedule run; the controller waits ``resume_backoff_hours`` after the resume is
     verified."""
@@ -451,7 +451,7 @@ def resume(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) ->
 
 
 @router.post("/control/automatic", response_model=ControlActionOut)
-def automatic(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+def automatic(body: UnitBody, _: Role = ControlDep, session: Session = SessionDep) -> ControlActionOut:
     """The owner's "Back to automatic": cancel the running plain hold, whoever set it, and let
     the controller steer again at once (it also ends a resume back-off). With no hold running
     it is a verified no-op that still ends the back-off. It does not delay the controller's
@@ -463,7 +463,7 @@ def automatic(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep)
 
 
 @router.post("/control/presence", response_model=SettingsOut)
-def presence(body: PresenceBody, _: Role = OwnerDep, session: Session = SessionDep) -> SettingsOut:
+def presence(body: PresenceBody, _: Role = ControlDep, session: Session = SessionDep) -> SettingsOut:
     occ = get_setting(session, "occupancy", OccupancySettings)
     occ.phones_away = body.phones_away
     occ.phones_updated_at = utcnow()

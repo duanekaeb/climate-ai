@@ -15,6 +15,11 @@
 - A run deferred by this process is resumed from its Claude session when claimed again.
 - SIGTERM/SIGINT: stop claiming; a run in flight is cancelled and handed back as deferred so
   the next start picks it up.
+- API token: any token the API accepts with the agent role works (a ``cai_...`` agent token
+  made in the app, or the legacy ``CLIMATE_AGENT_TOKEN``); nothing here looks at its format.
+  At start it asks the API who it is (``GET /auth/me``). A refused token (401, or a 403 from
+  the auth layer) is logged as an error that says how to fix it, when it first appears and
+  then at most every 30 minutes, not on every 20-second retry.
 """
 
 from __future__ import annotations
@@ -31,7 +36,7 @@ import claude_agent_sdk
 from claude_agent_sdk import query
 
 from climate_agent import __version__
-from climate_agent.api import ApiClient, ApiError
+from climate_agent.api import RESTART_HELP, TOKEN_HELP, ApiClient, ApiError
 from climate_agent.config import AgentConfig, ConfigError, StartupRefused, check_startup, idle_reason
 from climate_agent.runner import QueryFn, RunOutcome, execute_run, redact
 
@@ -41,6 +46,7 @@ FINISH_ATTEMPTS = 4
 STOP_FINISH_TIMEOUT_S = 8.0
 SIGNIN_RECHECK = timedelta(minutes=30)
 MAX_REMEMBERED_SESSIONS = 50
+AUTH_RELOG = timedelta(minutes=30)
 
 
 def cli_version() -> str | None:
@@ -60,6 +66,62 @@ async def _wait(stop: asyncio.Event, seconds: float) -> None:
         await asyncio.wait_for(stop.wait(), timeout=seconds)
     except TimeoutError:
         pass
+
+
+class ApiFailureLog:
+    """Logs failed API calls. A refused token is an ERROR with the fix spelled out (see
+    ``ApiError.auth_hint``), logged when it first appears or changes and then at most every
+    AUTH_RELOG, because the loops retry every 20-60 s; anything else stays a warning."""
+
+    def __init__(self, now: Callable[[], datetime] = _utcnow):
+        self.now = now
+        self.problem: str | None = None
+        self._logged_at: datetime | None = None
+
+    def failed(self, what: str, exc: ApiError) -> None:
+        hint = exc.auth_hint
+        if hint is None:
+            log.warning("%s failed: %s", what, exc)
+            return
+        now = self.now()
+        if hint != self.problem or self._logged_at is None or now - self._logged_at >= AUTH_RELOG:
+            log.error("%s refused: %s. %s", what, exc, hint)
+            self._logged_at = now
+        self.problem = hint
+
+    def ok(self) -> None:
+        """A call went through: the token works again, so a new refusal is logged at once."""
+        self.problem = None
+        self._logged_at = None
+
+
+async def check_api_access(api: ApiClient) -> bool | None:
+    """Ask the API who this token is (``GET /auth/me``) once at start and log the answer.
+
+    True: accepted with the agent role. False: refused, or a token with another role (a viewer
+    or control token cannot claim runs); logged as an error with the fix. None: unknown (the
+    API is not reachable yet, or predates ``/auth/me``); the loops report problems as they go."""
+    try:
+        me = await api.get("/auth/me")
+    except ApiError as exc:
+        if exc.auth_hint:
+            log.error("the API refused the agent's token: %s. %s", exc, exc.auth_hint)
+            return False
+        if exc.status_code is None:
+            log.warning("could not check the API token yet: %s", exc)
+        return None
+    role = me.get("role") if isinstance(me, dict) else None
+    if role is None:
+        return None
+    if role != "agent":
+        log.error(
+            "the token in %s has the %s role; the agent needs a token with the agent role. %s, %s.",
+            api.token_name, role, TOKEN_HELP, RESTART_HELP,
+        )
+        return False
+    name = me.get("token_name")
+    log.info("API token accepted (agent role%s)", f", app token {name!r}" if name else "")
+    return True
 
 
 class Scheduler:
@@ -82,6 +144,7 @@ class Scheduler:
         # run id -> Claude session id of runs this process deferred, to resume on reclaim.
         self._run_sessions: dict[int, str] = {}
         self.last_error: str | None = None
+        self.api_log = ApiFailureLog(now)
         self._stop = asyncio.Event()
         self._warned_on: date | None = None
 
@@ -159,8 +222,9 @@ class Scheduler:
         try:
             await self.api.post("/agent/heartbeat", self.heartbeat_body())
         except ApiError as exc:
-            log.warning("heartbeat failed: %s", exc)
+            self.api_log.failed("heartbeat", exc)
             return False
+        self.api_log.ok()
         return True
 
     async def heartbeat_loop(self) -> None:
@@ -178,7 +242,8 @@ class Scheduler:
                 return True
             except ApiError as exc:
                 if exc.is_client_error or attempt == FINISH_ATTEMPTS:
-                    log.error("could not report run %s as %s: %s", run_id, body.get("status"), exc)
+                    hint = f" {exc.auth_hint}" if exc.auth_hint else ""
+                    log.error("could not report run %s as %s: %s.%s", run_id, body.get("status"), exc, hint)
                     return False
                 log.warning("finish for run %s failed (%s); retrying in %.0f s", run_id, exc, delay)
                 await asyncio.sleep(delay)
@@ -190,8 +255,9 @@ class Scheduler:
         try:
             run = await self.api.post("/agent/claim")
         except ApiError as exc:
-            log.warning("claim failed: %s", exc)
+            self.api_log.failed("claim", exc)
             return False
+        self.api_log.ok()
         if not run:
             return False
         run_id = int(run["id"])
@@ -282,6 +348,7 @@ class Scheduler:
 
 async def _amain(config: AgentConfig) -> bool:
     api = ApiClient(config.api_url, config.agent_token, timeout_s=config.api_timeout_s)
+    await check_api_access(api)
     scheduler = Scheduler(config, api)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -298,7 +365,11 @@ async def _aidle(config: AgentConfig, reason: str) -> bool:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
-    api = ApiClient(config.api_url, config.agent_token, timeout_s=config.api_timeout_s) if config.agent_token else None
+    try:
+        api: ApiClient | None = ApiClient(config.api_url, config.agent_token, timeout_s=config.api_timeout_s)
+    except ValueError:  # no token, or one that cannot be sent (idle_reason says which)
+        api = None
+    api_log = ApiFailureLog()
     try:
         while not stop.is_set():
             if api is not None:
@@ -311,8 +382,9 @@ async def _aidle(config: AgentConfig, reason: str) -> bool:
                 }
                 try:
                     await api.post("/agent/heartbeat", body)
+                    api_log.ok()
                 except ApiError as exc:
-                    log.warning("heartbeat failed: %s", exc)
+                    api_log.failed("heartbeat", exc)
             await _wait(stop, config.heartbeat_s)
     finally:
         if api is not None:

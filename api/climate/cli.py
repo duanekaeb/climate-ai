@@ -1,7 +1,13 @@
 """Admin CLI: ``python -m climate.cli <command>``.
 
-Commands: migrate | seed | backfill --days N | gen-key | set-password | doctor | sim-event
+Commands: migrate | seed | backfill --days N | gen-key | set-password | create-token |
+list-tokens | revoke-token | sign-out-everywhere | doctor | sim-event
 (doctor checks DB, secrets key, source sign-in, HomeKit heartbeat, agent heartbeat).
+
+The auth commands (set-password, create-token, list-tokens, revoke-token, sign-out-everywhere)
+call the same ``climate.auth_service`` functions as the API, with audit actor 'system'
+(docs/specs/users-and-tokens.md). ``create-token`` prints the token once; nothing else ever
+prints a secret.
 
 ``backfill`` runs in this process with the configured source, except when the source is
 ecobee and the worker is running: only the worker may refresh ecobee tokens, so the request
@@ -61,28 +67,116 @@ def cmd_seed(_: argparse.Namespace) -> int:
 
 
 def cmd_gen_key(_: argparse.Namespace) -> int:
+    """New secrets for .env: the Fernet key, the access-token signing secret and the token
+    pepper (docs/specs/users-and-tokens.md)."""
     from cryptography.fernet import Fernet
 
     _print(f"CLIMATE_SECRET_KEY={Fernet.generate_key().decode()}")
-    _print(f"CLIMATE_SESSION_SECRET={pysecrets.token_urlsafe(48)}")
+    _print(f"CLIMATE_JWT_SECRET={pysecrets.token_urlsafe(48)}")
+    _print(f"CLIMATE_TOKEN_PEPPER={pysecrets.token_urlsafe(48)}")
     return 0
 
 
+# ---------------------------------------------------------------------------------------
+# the owner password, signed-in devices and API tokens (climate.auth_service; actor 'system')
+# ---------------------------------------------------------------------------------------
+
+
+def _err(msg: str) -> None:
+    sys.stderr.write(msg + "\n")
+
+
 def cmd_set_password(args: argparse.Namespace, prompt: Callable[[str], str] = getpass.getpass) -> int:
-    from climate.api.auth import set_owner_password
+    """Break-glass: set the owner password and sign out every device. ``--password-stdin``
+    reads one line from standard input (for scripts); otherwise it asks twice."""
+    from climate.auth_service import AuthError, set_owner_password
     from climate.config import get_settings
 
-    first = prompt("New owner password: ")
-    if len(first) < 8 or len(first) > 200:
-        _print("The password must be 8 to 200 characters.")
+    if getattr(args, "password_stdin", False):
+        first = sys.stdin.readline().rstrip("\r\n")
+    else:
+        first = prompt("New owner password: ")
+        if prompt("Repeat it: ") != first:
+            _err("The passwords do not match; nothing changed.")
+            return 1
+    try:
+        revoked = set_owner_password(first)
+    except AuthError as exc:
+        _err(f"{exc.message} Nothing changed.")
         return 1
-    if prompt("Repeat it: ") != first:
-        _print("The passwords do not match; nothing changed.")
-        return 1
-    set_owner_password(first)
-    _print("Owner password saved.")
+    _print(f"Owner password saved (Argon2id hash). Signed out {revoked} device(s); sign in again with the new one.")
     if get_settings().owner_password:
-        _print("Note: CLIMATE_OWNER_PASSWORD is set and takes priority over the saved password.")
+        _print("Note: CLIMATE_OWNER_PASSWORD is only read on the very first start; remove it from .env.")
+    return 0
+
+
+def _when(value: datetime | None) -> str:
+    return value.strftime("%Y-%m-%d %H:%M UTC") if value else "-"
+
+
+def cmd_create_token(args: argparse.Namespace) -> int:
+    """Create an API token and print it exactly once (only its HMAC is stored)."""
+    from climate.auth_service import SYSTEM, AuthError, create_api_token
+
+    try:
+        row, raw = create_api_token(SYSTEM, name=args.name, role=args.role, expires_in_days=args.expires_days,
+                                    local_only=not args.allow_remote)
+    except AuthError as exc:
+        _err(exc.message)
+        return 1
+    if args.print_only_token:
+        _print(raw)
+        return 0
+    scope = "home network only" if row.local_only else "works from anywhere"
+    expiry = f"expires {_when(row.expires_at)}" if row.expires_at else "no expiry"
+    _print(f"Created API token {row.id} '{row.name}': role {row.role}, {scope}, {expiry}.")
+    _print("")
+    _print(f"  {raw}")
+    _print("")
+    _print("Copy it now. It is shown only this once and cannot be recovered; revoke it with "
+           f"`python -m climate.cli revoke-token --id {row.id}` if it leaks.")
+    return 0
+
+
+def cmd_list_tokens(_: argparse.Namespace) -> int:
+    """Every API token (no secrets: the hint is the last 4 characters)."""
+    from climate.auth_service import list_api_tokens
+    from climate.timeutil import utcnow
+
+    rows = list_api_tokens()
+    if not rows:
+        _print("No API tokens. Create one with: python -m climate.cli create-token --name NAME")
+        return 0
+    now = utcnow()
+    _print(f"{'ID':>4}  {'NAME':24}  {'ROLE':7}  {'SCOPE':8}  {'HINT':8}  {'LAST USED':20}  {'EXPIRES':20}  STATUS")
+    for t in rows:
+        if t.revoked_at is not None:
+            state = "revoked"
+        elif t.expires_at is not None and t.expires_at <= now:
+            state = "expired"
+        else:
+            state = "active"
+        _print(f"{t.id:>4}  {t.name[:24]:24}  {t.role:7}  {'home' if t.local_only else 'anywhere':8}  "
+               f"{'...' + t.token_hint:8}  {_when(t.last_used_at):20}  {_when(t.expires_at):20}  {state}")
+    return 0
+
+
+def cmd_revoke_token(args: argparse.Namespace) -> int:
+    from climate.auth_service import SYSTEM, revoke_api_token
+
+    if revoke_api_token(SYSTEM, int(args.id)):
+        _print(f"Revoked API token {args.id}; it stops working at once.")
+        return 0
+    _err(f"No active API token with id {args.id}.")
+    return 1
+
+
+def cmd_sign_out_everywhere(_: argparse.Namespace) -> int:
+    """End every signed-in device (API tokens keep working; revoke those separately)."""
+    from climate.auth_service import SYSTEM, logout_all
+
+    n = logout_all(SYSTEM)
+    _print(f"Signed out {n} device(s). API tokens are unaffected (list-tokens / revoke-token).")
     return 0
 
 
@@ -272,7 +366,52 @@ def _source_check(session: Any, kind: str, now: datetime) -> Check:
     return Check("source", "ok" if health.ok else "fail", f"{kind}: {health.detail or ('healthy' if health.ok else 'unhealthy')}")
 
 
+def _sign_in_secrets_check() -> Check:
+    """CLIMATE_JWT_SECRET and CLIMATE_TOKEN_PEPPER: without them sign-in and every token check
+    answer 503 AUTH_NOT_CONFIGURED (the same rule the API applies)."""
+    from climate.api.security import config_problem
+
+    problem = config_problem()
+    if problem:
+        return Check("sign-in secrets", "fail", f"{problem}; sign-in is off until then (scripts/bootstrap.sh fills them in)")
+    return Check("sign-in secrets", "ok", "CLIMATE_JWT_SECRET and CLIMATE_TOKEN_PEPPER are set")
+
+
+def _cookie_check(cfg: Any) -> Check:
+    """The refresh cookie must be Secure whenever the app is reached over HTTPS."""
+    if cfg.public_url.lower().startswith("https://") and not cfg.cookie_secure:
+        return Check("cookies", "fail", "CLIMATE_PUBLIC_URL is https but CLIMATE_COOKIE_SECURE=false; set it to true so the "
+                                        "sign-in cookie never travels over plain http")
+    if cfg.cookie_secure:
+        return Check("cookies", "ok", "Secure (sign-in needs HTTPS)")
+    return Check("cookies", "ok", "not Secure: fine for plain http at home; set CLIMATE_COOKIE_SECURE=true behind HTTPS")
+
+
+def _owner_password_check(session: Any, cfg: Any) -> Check:
+    """Read-only: is the owner password stored? (Never imports CLIMATE_OWNER_PASSWORD here; the
+    app does that when it starts.) Until it is chosen, whoever reaches the first-run screen first
+    can choose it, so a missing password is a problem."""
+    from climate.store.app_settings import OwnerSettings, get_setting
+
+    encoded = get_setting(session, "owner", OwnerSettings).password_hash
+    if encoded:
+        if encoded.startswith("scrypt$"):
+            return Check("owner password", "ok", "set (older scrypt hash; upgraded to Argon2id at the next sign-in)")
+        return Check("owner password", "ok", "set (Argon2id hash)" if encoded.startswith("$argon2id$") else "set")
+    if cfg.owner_password:
+        detail = "not stored yet; CLIMATE_OWNER_PASSWORD is imported when the app starts (restart the app)"
+    else:
+        detail = ("not chosen yet: open the app from your home network and choose it, or run "
+                  "python -m climate.cli set-password")
+    if cfg.allow_remote_setup:
+        detail += "; CLIMATE_ALLOW_REMOTE_SETUP is on, so anyone who reaches the app can choose it first"
+    return Check("owner password", "fail", detail)
+
+
 def doctor_checks(now: datetime | None = None) -> list[Check]:
+    """Every installation check, in order: no ANTHROPIC_API_KEY, the Fernet key, the sign-in
+    secrets, cookie security, the database, migrations, stored secrets decrypt, the owner
+    password, the worker / HomeKit / agent heartbeats and the data source."""
     from climate.timeutil import utcnow
 
     now = now or utcnow()
@@ -298,10 +437,8 @@ def doctor_checks(now: datetime | None = None) -> list[Check]:
         except (ValueError, TypeError):
             key_check = Check("secret key", "fail", "CLIMATE_SECRET_KEY is not a valid Fernet key")
     checks.append(key_check)
-    if not cfg.session_secret:
-        checks.append(Check("session secret", "fail", "CLIMATE_SESSION_SECRET is not set; sign-ins reset on restart"))
-    else:
-        checks.append(Check("session secret", "ok", "set"))
+    checks.append(_sign_in_secrets_check())
+    checks.append(_cookie_check(cfg))
 
     from climate.store.db import session_scope
 
@@ -341,6 +478,7 @@ def doctor_checks(now: datetime | None = None) -> list[Check]:
                     checks.append(Check("stored secrets", "fail", "cannot be decrypted with CLIMATE_SECRET_KEY "
                                                                   "(the key changed?)"))
 
+        checks.append(_owner_password_check(s, cfg))
         source = get_setting(s, "source", SourceSettings)
         agent = get_setting(s, "agent", AgentSettings)
         checks.append(_check_heartbeat(s, "worker", WORKER_FRESH, now))
@@ -381,8 +519,26 @@ def build_parser() -> argparse.ArgumentParser:
     b = sub.add_parser("backfill", help="load history from the configured source (ecobee: runtimeReport)")
     b.add_argument("--days", type=int, default=90, help="days of history to load (default 90)")
     b.set_defaults(func=cmd_backfill)
-    sub.add_parser("gen-key", help="print a new CLIMATE_SECRET_KEY and CLIMATE_SESSION_SECRET").set_defaults(func=cmd_gen_key)
-    sub.add_parser("set-password", help="set the owner's web password").set_defaults(func=cmd_set_password)
+    sub.add_parser("gen-key", help="print a new CLIMATE_SECRET_KEY, CLIMATE_JWT_SECRET and CLIMATE_TOKEN_PEPPER").set_defaults(
+        func=cmd_gen_key)
+    sp = sub.add_parser("set-password", help="set the owner password (break-glass; signs out every device)")
+    sp.add_argument("--password-stdin", action="store_true", help="read the new password from standard input (one line)")
+    sp.set_defaults(func=cmd_set_password)
+    ct = sub.add_parser("create-token", help="create an API token for a service (printed once)")
+    ct.add_argument("--name", required=True, help="what uses it, e.g. 'Claude agent'")
+    ct.add_argument("--role", choices=("agent", "viewer", "control"), default="agent",
+                    help="agent: read + gated agent tools; viewer: read only; control: read + everyday controls")
+    ct.add_argument("--expires-days", type=int, help="days until it stops working (default: no expiry)")
+    ct.add_argument("--allow-remote", action="store_true", help="also accept it from internet addresses "
+                                                                "(default: home network / Tailscale only)")
+    ct.add_argument("--print-only-token", action="store_true", help="print only the token (for scripts)")
+    ct.set_defaults(func=cmd_create_token)
+    sub.add_parser("list-tokens", help="list API tokens (no secrets)").set_defaults(func=cmd_list_tokens)
+    rt = sub.add_parser("revoke-token", help="revoke an API token at once")
+    rt.add_argument("--id", type=int, required=True, help="the token id (list-tokens)")
+    rt.set_defaults(func=cmd_revoke_token)
+    sub.add_parser("sign-out-everywhere", help="sign out every device (API tokens keep working)").set_defaults(
+        func=cmd_sign_out_everywhere)
     sub.add_parser("doctor", help="check the installation; exit 1 on any problem").set_defaults(func=cmd_doctor)
     e = sub.add_parser("sim-event", help="put a utility (demand-response) event on the simulated house")
     e.add_argument("--unit", help="main, up, bed, a comma-separated list, or all (the same event on each)")

@@ -30,15 +30,18 @@ them there: Climate AI becomes the thermostat's HomeKit controller, and Apple Ho
 way to share it back. Agree on this first.
 
 **Network (verified).**
-- The HomeKit service runs with `network_mode: host`, so the **server must run Linux**.
-  Docker Desktop on macOS or Windows cannot do multicast DNS from a container.
+- The HomeKit service must see your LAN's multicast. On Linux the `homekit` container runs with
+  `network_mode: host`. Docker Desktop on macOS or Windows runs containers inside a VM, so its
+  "host" network is not your LAN and mDNS never arrives: on a Mac run the service natively
+  (`make homekit-native`, see [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md)).
 - The server must see the thermostats' mDNS announcements (UDP 5353): same LAN/VLAN, or an
-  mDNS reflector between VLANs. Discovery and pairing depend on it. If the host runs a
-  firewall, allow UDP 5353 in (e.g. `sudo ufw allow 5353/udp`). Running avahi on the host is
-  fine; both can listen.
-- Give each thermostat a **DHCP reservation**. After pairing the service connects to the saved
-  address and only follows an address change through mDNS while it is running; the saved
-  address is never rewritten.
+  mDNS reflector between VLANs. Discovery, pairing and following address changes depend on it.
+  If the host runs a firewall, allow UDP 5353 in (e.g. `sudo ufw allow 5353/udp`). Running avahi
+  on the host is fine; both can listen.
+- **Fixed IP addresses are not needed.** Each thermostat is identified by its HomeKit device id
+  and found over mDNS wherever DHCP puts it; see
+  [section 7, DHCP / changing IP addresses](#7-dhcp--changing-ip-addresses). A DHCP reservation
+  is optional belt and braces.
 
 **Keys (by design of this app).** Pairing creates a long-term Ed25519 key pair; the
 controller's private key (`iOSDeviceLTSK`) is what lets the server talk to the thermostat. Climate
@@ -170,18 +173,108 @@ Behaviour you may notice (verified in the library):
 - After a thermostat restarts, its accessory list can carry stale values (e.g. 100 °C). The
   service always polls fresh values before trusting anything.
 - While a thermostat is unreachable, each poll fails within about 10 s; the library reconnects
-  by itself (waits of 0.75 s × 1.5, capped at 60 s; an mDNS sighting cuts the wait short). A
-  thermostat is marked unavailable after **3 failed polls in a row**, or at once if it vanished
-  from the network.
-- If one disconnect hits while subscribing, push stays off for that pairing until the service
-  restarts (`docker compose restart homekit`). Polling still covers it.
+  by itself (waits of 0.75 s × 1.5, capped at 60 s; an mDNS sighting cuts the wait short), and
+  the service asks the network where the thermostat is now (section 7). A thermostat is marked
+  unavailable after **3 failed polls in a row**, or at once if it vanished from the network.
+- While a thermostat cannot be reached, aiohomekit logs `Unexpected error whilst trying to
+  connect to accessory. Will retry.` with a traceback on each reconnect attempt (4.0.1 counts a
+  refused or timed-out connection as unexpected). It is noise, not a crash.
+- If one disconnect hits while subscribing, the library turns push off for that connection; the
+  service replaces the connection at its next poll to get push back. Polling covers the gap.
 - **`AuthenticationError` means the thermostat no longer knows this pairing** (someone reset
   HomeKit on it). It repeats on every call; the app raises an alert. Re-pair (steps 3-4).
 - Occupancy from HomeKit is evidence, not truth: unknown, stale or uncertain counts as occupied.
 - Push events have **not** been observed from a real ecobee yet (the test server cannot send
   them). If they never arrive, the 60-second polls still drive everything.
 
-## 7. Writes (controller only, from Phase 4)
+## 7. DHCP / changing IP addresses
+
+**Short version: you do not need fixed addresses.** Each thermostat is known by its HomeKit
+device id (`aa:bb:cc:dd:ee:ff`), never by its IP address. When DHCP gives it a new address the
+service follows it on its own, normally within a few seconds and without a restart, and
+**Setup → HomeKit** shows the address it announced last. The log says so too:
+`homekit 'hallway': aa:bb:cc:dd:ee:ff is now at 192.168.1.77:51826 (was 192.168.1.50:51826)`.
+
+> **Verified** against aiohomekit 4.0.1's IP transport (where a pairing connects, before and
+> after mDNS reports its device id) and with real mDNS on Linux (a HomeKit-style service that
+> moved with and without announcing it, then said goodbye:
+> `CLIMATE_TEST_REAL_MDNS=1 pytest tests/test_homekit_dhcp.py`). **Not yet seen on a real
+> ecobee**: that it re-announces after an address change is what mDNS requires of it (RFC 6762),
+> and the service does not depend on it.
+
+### How discovery works
+
+- Every HomeKit accessory announces itself on the LAN over **multicast DNS** (mDNS, Apple's
+  Bonjour; UDP 5353): a `_hap._tcp` service whose TXT record carries its **device id** (`id`),
+  configuration number (`c#`) and status flags (`sf`), plus the IP address(es) and port it has
+  right now. It announces again whenever it joins the network or its address changes, and
+  answers anyone who asks (that is the mDNS rule; not yet observed on an ecobee).
+- The service keeps one mDNS browser for `_hap._tcp` and `_hap._udp` running for its whole
+  life. **The device id is the identity**: the pairing keys, the unit's link
+  (`units.homekit_device_id`) and every connection go by it.
+- **What is stored about addresses** (checked against aiohomekit 4.0.1):
+  - The saved pairing (encrypted, with the keys) includes the address the thermostat had when
+    it was paired, because aiohomekit's pairing format requires one. It is only a starting
+    point: it is never rewritten and never trusted over mDNS.
+  - `homekit_devices.address` / `port` (what Setup shows) are for display. The service updates
+    them from mDNS every minute and within a few seconds of any announcement, and uses them
+    only as a hint when loading a pairing before mDNS has answered.
+- **Connecting**: before loading a pairing the service waits up to 5 s for the browser to
+  report that device id and connects there; if mDNS has not answered yet it starts at the last
+  address mDNS reported (Setup's), and only then at the pairing-time address. From the first
+  mDNS sighting on, the library connects only to the addresses mDNS reports for that device id,
+  and every new announcement redirects it at once.
+
+### When an address changes
+
+| What happened | What the service does | Readings back |
+|---|---|---|
+| The thermostat got a new lease and announced it (the usual case: it rejoined Wi-Fi after a reboot, a power cut or a router restart) | The announcement updates that device id's record; the connection is retried at the new address straight away and the thermostat is polled | within a few seconds |
+| ...and the old connection still looked open | Notices it is still talking to the old address and replaces the connection, instead of waiting for a request to time out (30 s) | within a few seconds |
+| The announcement was lost (multicast dropped somewhere) | The next poll fails (polls run every 60 s; a connection attempt gives up after 10 s). The service then asks the network where that device id is (an mDNS query, at once, again after 5, 15, 30, 60 and 120 s, then every 5 minutes while it keeps failing); the thermostat answers with its new address | about 1 to 2 minutes |
+| The address changed while the service was stopped | At start the browser asks for every HomeKit device; the pairing is loaded at the address the thermostat answers with | a few seconds after start |
+| The thermostat is off or gone | Polls fail and it shows offline after 3 in a row; the queries continue every 5 minutes; it comes back on its own when it reappears, wherever that is | when it is back |
+
+### What can break it
+
+mDNS is **link-local multicast**. Anything that stops multicast between the server and the
+thermostats stops discovery, pairing and following address changes:
+
+- **Different VLANs or subnets.** mDNS does not cross a router. Thermostats on an IoT VLAN or a
+  separate SSID on its own subnet are invisible to a server on the main LAN.
+- **Wi-Fi client isolation** ("AP isolation", "client isolation", most **guest networks**):
+  blocks traffic between wireless clients, multicast included. Turn it off for the
+  thermostats' network.
+- **Multicast filtering**: an "mDNS"/"Bonjour"/"multicast enhancement" option switched off on a
+  mesh system or access point, IGMP snooping without a querier, or a host firewall dropping UDP
+  5353.
+- **Docker without host networking.** A container on a bridge network never sees the LAN's
+  multicast. The compose `homekit` service uses `network_mode: host` for this (Linux).
+- **Docker Desktop on macOS (or Windows).** Containers run in a VM, so even host networking is
+  the VM's network. Run the HomeKit service natively on the Mac (`make homekit-native`) and allow
+  it to find devices on the local network when macOS asks.
+
+### Recommendations
+
+- **Nothing to configure** when the server and the thermostats share one LAN/VLAN.
+- **Optional: DHCP reservations** (by MAC address, in your router) as belt and braces. They make
+  addresses predictable in router pages and logs and remove the 1-to-2-minute gap if an
+  announcement is ever lost. They change nothing about how the service finds the thermostats.
+- **Thermostats on another VLAN:** run an **mDNS reflector** between the two networks (Avahi
+  with `enable-reflector=yes`, limited to those interfaces; UniFi's "Multicast DNS" setting; the
+  Avahi package on pfSense/OPNsense) and let the firewall pass TCP from the server to the
+  thermostats (HAP uses an accessory-chosen port).
+- To see what the thermostats announce, on Linux: `avahi-browse -rt _hap._tcp` (address, port
+  and the `id=` in the TXT record); on a Mac: `dns-sd -B _hap._tcp`, then
+  `dns-sd -L "<name>" _hap._tcp`.
+
+### The ecobee cloud link is not affected
+
+The cloud connection never uses LAN addresses: it talks to `api.ecobee.com` and addresses each
+thermostat by its ecobee identifier (its serial number). DHCP changes, VLANs and mDNS do not
+matter to it. Only the local HomeKit link depends on mDNS.
+
+## 8. Writes (controller only, from Phase 4)
 
 Claude never writes to a thermostat; only the controller process does, after the guardrails.
 Over HomeKit the controller writes only a **timed hold** of one comfort setting (and, to resume
@@ -215,7 +308,7 @@ minutes and a request stuck "sent" (service restarted mid-write) is failed after
 cloud is down the service also writes a HomeKit-based snapshot of each unit, so the Live page
 and the controller keep current temperatures.
 
-## 8. While the ecobee cloud is down: what HomeKit can and can't see
+## 9. While the ecobee cloud is down: what HomeKit can and can't see
 
 HomeKit is a narrower window onto the thermostat than the ecobee cloud.
 
@@ -300,7 +393,7 @@ What it cannot catch, or may get wrong:
   the cloud is back. That is the safe direction, at the cost of less automation during an
   outage.
 
-## 9. Unpair or reset
+## 10. Unpair or reset
 
 **Normal way:** Setup → HomeKit → **Unpair**. The thermostat must be reachable: the service
 removes the pairing on the thermostat itself, then deletes the stored keys. If the thermostat
@@ -316,14 +409,14 @@ forgets the pairing here; choose Disconnect from HomeKit on the thermostat befor
 
 To pair it again later, the thermostat must show ready to pair (step 2).
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---|---|
-| Setup shows no devices | Not Linux / not host networking; firewall blocking UDP 5353; server on another VLAN without an mDNS reflector; HomeKit not enabled in Setup. Try the `discover` command in step 2. |
+| Setup shows no devices | Not host networking (Docker Desktop on a Mac: run `make homekit-native`); firewall blocking UDP 5353; server on another VLAN without an mDNS reflector; Wi-Fi client isolation; HomeKit not enabled in Setup. Try the `discover` command in step 2. |
 | Device listed but never "ready to pair" | Still paired elsewhere: step 3. |
 | Pairing fails with "already paired" | Same as above (`UnavailableError`). |
-| Readings stopped after a router change | The thermostat got a new address while the service was down; set DHCP reservations and `docker compose restart homekit`. |
+| Readings stopped after a router change, Setup shows an old address | The service follows new addresses over mDNS (section 7), so this means mDNS stopped reaching it: the thermostats moved to another VLAN or SSID, client isolation or multicast filtering was turned on, or the new router has a firewall dropping UDP 5353. Fix that (or add an mDNS reflector); nothing needs re-pairing. |
 | Alert "re-pair needed" (`AuthenticationError`) | The pairing was removed on the thermostat: steps 3-4. |
 | Values update only once a minute | Normal for vendor fields; for temperatures it means push is off (see step 6): `docker compose restart homekit`. |
 | HomeKit service offline in Setup | `docker compose --profile homekit ps`, `docker compose logs homekit`, and `docker compose exec app python -m climate.cli doctor`. |

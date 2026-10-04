@@ -22,9 +22,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from psycopg import sql
 from pydantic import ValidationError
 from sqlalchemy.engine import make_url
+from starlette.concurrency import run_in_threadpool
 
+from climate import auth_service
 from climate.api import auth
+from climate.api.auth import Principal
 from climate.api.schemas import WsEvent
+from climate.api.security import AuthError
 from climate.config import get_settings
 from climate.events import CHANNEL
 
@@ -165,7 +169,8 @@ hub = Hub()
 
 
 def _origin_ok(websocket: WebSocket) -> bool:
-    """Cookie-authenticated sockets must come from our own origin (cross-site hijacking guard)."""
+    """Ticket sockets come from the browser, so they must come from our own origin
+    (cross-site WebSocket hijacking guard). No Origin header (native clients) passes."""
     origin = websocket.headers.get("origin")
     if not origin:
         return True
@@ -173,17 +178,38 @@ def _origin_ok(websocket: WebSocket) -> bool:
     return origin.split("://", 1)[-1] == host
 
 
+async def _authenticate(websocket: WebSocket) -> tuple[Principal | None, int, str]:
+    """Who is connecting: ``?ticket=`` (browsers; single use, same origin only) or an
+    ``Authorization: Bearer`` header (API tokens, the agent). Returns (principal, close code,
+    reason); the principal is None when the socket must be closed with that code."""
+    ticket = websocket.query_params.get("ticket")
+    if ticket:
+        if not _origin_ok(websocket):
+            return None, CLOSE_FORBIDDEN, "Cross-origin websocket refused."
+        principal = await run_in_threadpool(auth_service.redeem_ws_ticket, ticket)
+        if principal is None:
+            return None, CLOSE_UNAUTHORIZED, "Ticket unknown, used or expired."
+        return principal, 0, ""
+    try:
+        principal = await run_in_threadpool(auth.resolve_caller, websocket)
+    except AuthError as err:  # 403: a token refused here (home network only); else not signed in
+        return None, CLOSE_FORBIDDEN if err.status == 403 else CLOSE_UNAUTHORIZED, err.message[:120]
+    if principal is None:
+        return None, CLOSE_UNAUTHORIZED, "Sign in required."
+    return principal, 0, ""
+
+
 @router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket) -> None:
-    # A WebSocket carries the same headers and cookies as a Request: same role logic as HTTP.
-    role = auth.role_from_request(websocket)  # type: ignore[arg-type]
+    """Any signed-in caller (owner or any API token role) may listen; events carry only a
+    type and an id, and clients refetch through the role-checked REST routes. Liveness is
+    re-checked on every keep-alive ping, so a revoked device or token is dropped within
+    ``PING_S``."""
+    principal, code, reason = await _authenticate(websocket)
     # Accept first so the browser sees the close code (a refused handshake is just 1006).
     await websocket.accept()
-    if role is None:
-        await websocket.close(code=CLOSE_UNAUTHORIZED, reason="Sign in required.")
-        return
-    if role == "owner" and not _origin_ok(websocket):
-        await websocket.close(code=CLOSE_FORBIDDEN, reason="Cross-origin websocket refused.")
+    if principal is None:
+        await websocket.close(code=code, reason=reason)
         return
     client = hub.register(websocket)
     try:
@@ -193,6 +219,10 @@ async def ws_endpoint(websocket: WebSocket) -> None:
             try:
                 message = await asyncio.wait_for(websocket.receive(), timeout=PING_S)
             except TimeoutError:
+                if not await run_in_threadpool(auth_service.principal_is_live, principal):
+                    with contextlib.suppress(Exception):
+                        await websocket.close(code=CLOSE_UNAUTHORIZED, reason="Signed out.")
+                    return
                 if not await client.send_text(PING_MESSAGE):
                     return
                 continue

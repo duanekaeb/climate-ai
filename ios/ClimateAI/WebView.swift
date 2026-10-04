@@ -69,9 +69,11 @@ struct OfflineView: View {
     }
 }
 
-/// WKWebView with a persistent cookie store (the owner session survives app restarts),
+/// WKWebView with a persistent website data store (the owner's sign-in survives app restarts),
 /// swipe back/forward, pull to refresh, JavaScript dialogs, and links to other sites opened
-/// in Safari. Injects no scripts or styles.
+/// in Safari. Injects no scripts or styles, and stores no credentials natively: the web app
+/// keeps its short-lived bearer token in memory and gets a fresh one on launch from the
+/// HttpOnly refresh cookie (Path=/api/auth), which WebKit keeps in that store.
 struct WebView: UIViewRepresentable {
     let url: URL
     @Binding var loadError: String?
@@ -83,7 +85,7 @@ struct WebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        // The default (persistent) store keeps the HttpOnly session cookie between launches.
+        // The default (persistent) store keeps the HttpOnly refresh cookie between launches.
         configuration.websiteDataStore = WKWebsiteDataStore.default()
         configuration.applicationNameForUserAgent = "ClimateAI-iOS"
         configuration.allowsInlineMediaPlayback = true

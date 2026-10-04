@@ -9,7 +9,8 @@
 # Claude runs on the owner's subscription via CLAUDE_CODE_OAUTH_TOKEN (set at runtime by
 # docker-compose.yml). ANTHROPIC_API_KEY must never be set; the agent refuses to start if it is.
 
-ARG PYTHON_IMAGE=python:3.12-slim
+# Pinned to the Debian release (trixie) like docker/app.Dockerfile; multi-arch (amd64, arm64).
+ARG PYTHON_IMAGE=python:3.12-slim-trixie
 
 # --------------------------------------------------------------------------------------
 # 1. Build the agent package and its pinned SDK into /opt/venv
@@ -20,7 +21,7 @@ RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 RUN pip install --upgrade pip setuptools wheel
 COPY agent/ /src/agent/
-RUN pip install /src/agent
+RUN pip install --prefer-binary /src/agent
 # Fail the build loudly if the packaging is incomplete: the bundled CLI must be present and
 # the prompts must have been installed as package data (not left behind in the source tree).
 RUN python - <<'PY'
@@ -59,10 +60,6 @@ ENV PYTHONUNBUFFERED=1 \
     CLIMATE_AGENT_CWD=/srv/climate/agent-empty \
     DISABLE_AUTOUPDATER=1
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends tzdata \
- && rm -rf /var/lib/apt/lists/*
-
 # HOME (/home/agent) holds the CLI's ~/.claude and ~/.claude.json. docker-compose.yml mounts
 # a tmpfs over it (the root filesystem is read-only), so the uid/gid here must match the
 # tmpfs options there (10002). /srv/climate/agent-empty is Claude's working directory and
@@ -75,6 +72,9 @@ RUN groupadd --system --gid 10002 agent \
  && chmod 700 /srv/climate/agent-empty /home/agent
 
 COPY --from=build /opt/venv /opt/venv
+# Log timestamps in TZ: the Debian base ships /usr/share/zoneinfo (no apt-get needed); should a
+# different PYTHON_IMAGE lack it, point the C library at the tzdata Python package.
+RUN [ -d /usr/share/zoneinfo ] || ln -s "$(python -c 'import os, tzdata; print(os.path.join(os.path.dirname(tzdata.__file__), "zoneinfo"))')" /usr/share/zoneinfo
 
 WORKDIR /srv/climate/agent-empty
 USER agent

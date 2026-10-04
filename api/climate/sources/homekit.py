@@ -16,6 +16,19 @@ that hold would hold). ``snapshot_from_values`` turns a poll into a UnitSnapshot
 ecobee cloud is down; ``detect_hand_change`` spots a change someone made at the thermostat
 that HomeKit can see (a comfort setting picked by hand, a temperature set by hand).
 
+Addresses (DHCP): a thermostat's identity is its HAP device id, never an IP. aiohomekit's
+pairing data carries the address the thermostat had when it was paired (``AccessoryIP`` /
+``AccessoryIPs`` / ``AccessoryPort``, required by its pairing format); a loaded pairing connects
+there only until the IP transport holds an mDNS description for its device id, and from then on
+every connection attempt goes to the addresses mDNS last reported (an update also cuts the
+reconnect wait short). So the bridge: waits briefly for the live mDNS record before loading a
+pairing and hands aiohomekit that address (else the last address mDNS reported, the caller's
+hint; the pairing-time address only as a last resort), never rewriting the saved keys; notes
+every mDNS change so the service re-reads discovery at once; replaces a pairing object still
+connected to an address the thermostat has left; and while a pairing keeps failing, asks the
+network (mDNS) where its device id is now, with backoff, because aiohomekit itself only learns a
+new address from an announcement it happens to hear.
+
 This module is a pure adapter: no database access. aiohomekit is imported lazily so the rest
 of the stack (which does not install the ``homekit`` extra) can import these helpers.
 Tests inject a fake controller through ``HomekitBridge(controller_factory=...)``.
@@ -26,11 +39,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import itertools
 import logging
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -57,6 +71,20 @@ FAILS_UNTIL_UNAVAILABLE = 3
 FIND_TIMEOUT_S = 30.0
 THERMOSTAT_AID = 1
 STATUS_UNPAIRED = 0x01
+
+# --- addresses follow mDNS (DHCP) ---
+# aiohomekit resolves a changed service 0.5 s after the browser reports it: discovery is re-read
+# once mDNS has been quiet this long (or at the latest MDNS_MAX_WAIT_S after the first change).
+MDNS_SETTLE_S = 1.0
+MDNS_MAX_WAIT_S = 5.0
+# How long load() waits for the live mDNS record of a device id before falling back to the
+# last address mDNS reported. The browser queries at start; thermostats answer within a second.
+LOAD_FIND_TIMEOUT_S = 5.0
+# While a pairing keeps failing: ask the network where its device id is now, at once, then
+# after each of these waits (the last one repeats) until a request succeeds again.
+RESOLVE_BACKOFF_S: tuple[float, ...] = (5.0, 15.0, 30.0, 60.0, 120.0, 300.0)
+# DNS record types / class used in those queries (RFC 1035, RFC 2782, RFC 3596).
+_DNS_CLASS_IN, _DNS_A, _DNS_PTR, _DNS_TXT, _DNS_AAAA, _DNS_SRV = 1, 1, 12, 16, 28, 33
 
 ClimateName = Literal["home", "sleep", "away"]
 CLIMATE_CODES: dict[str, int] = {"home": 0, "sleep": 1, "away": 2}  # SET_HOLD_SCHEDULE values
@@ -858,6 +886,10 @@ SaveFn = Callable[[dict[str, Any]], "Awaitable[None] | None"]
 
 @dataclass(frozen=True)
 class DiscoveredDevice:
+    """What mDNS last reported for one HAP device id. ``address`` is the most recently
+    announced usable address (IPv4 first), ``addresses`` all of them; they say where the device
+    is now and are never its identity (``id`` is)."""
+
     id: str  # lower-case 'aa:bb:cc:dd:ee:ff'
     name: str
     model: str | None
@@ -866,6 +898,8 @@ class DiscoveredDevice:
     port: int | None
     status_flags: int
     config_num: int | None
+    addresses: tuple[str, ...] = ()
+    service: str | None = None  # full mDNS instance name, e.g. 'Hallway._hap._tcp.local.'
 
     @property
     def unpaired(self) -> bool:
@@ -908,22 +942,51 @@ class _Paired:
     needs_repair: bool = False
     config_changed: bool = False
     unsubs: list[Callable[[], None]] = field(default_factory=list)
+    # where mDNS last placed the device (or the address it was loaded with until then)
+    address: str | None = None
+    port: int | None = None
+    moved: bool = False  # still connected to an address the device has left: replace the object
+    resolve_task: asyncio.Task[None] | None = None
 
 
 def _discovered(d: Any) -> DiscoveredDevice:
     desc = d.description
     cat = getattr(desc, "category", None)
     port = getattr(desc, "port", None)
+    address = _clean_str(getattr(desc, "address", None))
+    addresses = tuple(str(a) for a in (getattr(desc, "addresses", None) or ()) if a)
+    if not addresses and address:
+        addresses = (address,)
+    raw_name, stype = _clean_str(getattr(desc, "name", None)), _clean_str(getattr(desc, "type", None))
     return DiscoveredDevice(
         id=str(desc.id).lower(),
-        name=str(getattr(desc, "name", "") or desc.id),
+        name=str(raw_name or desc.id),
         model=_clean_str(getattr(desc, "model", None)),
         category=None if cat is None else int(cat),
-        address=_clean_str(getattr(desc, "address", None)),
+        address=address,
         port=None if port is None else int(port),
         status_flags=int(getattr(desc, "status_flags", 0) or 0),
         config_num=None if getattr(desc, "config_num", None) is None else int(desc.config_num),
+        addresses=addresses,
+        service=f"{raw_name}.{stype}" if raw_name and stype else None,
     )
+
+
+def endpoint_data(
+    pairing_data: Mapping[str, Any], address: str | None, port: int | None, addresses: Sequence[str] = ()
+) -> dict[str, Any]:
+    """A copy of ``pairing_data`` whose connection target is ``address``:``port`` (all of
+    ``addresses`` when given). aiohomekit's IP pairing starts at ``AccessoryIP(s)`` /
+    ``AccessoryPort`` and only moves on once mDNS describes the device, so this hands it the
+    freshest address known. The keys are untouched; without an address the copy keeps the
+    pairing-time one."""
+    data = dict(pairing_data)
+    if address and port:
+        hosts = [str(a) for a in addresses if a] or [address]
+        if address not in hosts:
+            hosts.insert(0, address)
+        data["AccessoryIP"], data["AccessoryIPs"], data["AccessoryPort"] = address, hosts, int(port)
+    return data
 
 
 def _status(entry: Any) -> int:
@@ -936,15 +999,24 @@ def _status(entry: Any) -> int:
 
 
 class HomekitBridge:
-    """One HomeKit controller for the process. Not thread-safe; use from one event loop."""
+    """One HomeKit controller for the process. Not thread-safe; use from one event loop.
+
+    ``controller_factory`` (tests) replaces aiohomekit's Controller; ``zeroconf_factory``
+    (tests, only with a controller factory) returns ``(async_zeroconf, browser)`` stand-ins:
+    ``async_zeroconf.zeroconf`` must offer ``async_send(out)`` and ``cache.get_by_details``,
+    ``browser.service_state_changed`` must offer ``register_handler`` / ``unregister_handler``."""
 
     def __init__(
         self,
         state_dir: Path | str | None = None,
         *,
         controller_factory: ControllerFactory | None = None,
+        zeroconf_factory: Callable[[], tuple[Any, Any]] | None = None,
         on_event: EventHook | None = None,
         find_timeout: float = FIND_TIMEOUT_S,
+        load_find_timeout: float = LOAD_FIND_TIMEOUT_S,
+        mdns_settle: float = MDNS_SETTLE_S,
+        resolve_backoff: Sequence[float] = RESOLVE_BACKOFF_S,
     ) -> None:
         if state_dir is None:
             from climate.config import get_settings
@@ -952,13 +1024,23 @@ class HomekitBridge:
             state_dir = get_settings().homekit_state_dir
         self.state_dir = Path(state_dir)
         self._factory = controller_factory
+        self._zeroconf_factory = zeroconf_factory
         self.on_event = on_event
         self._find_timeout = find_timeout
+        self._load_find_timeout = load_find_timeout
+        self._mdns_settle = mdns_settle
+        self._resolve_backoff = tuple(resolve_backoff) or RESOLVE_BACKOFF_S
         self._controller: Any = None
         self._azc: Any = None
         self._browser: Any = None
+        self._watched: Any = None  # the browser signal our mDNS hook is registered on
         self._pending: dict[str, _Pending] = {}
         self._paired: dict[str, _Paired] = {}
+        self._gone: set[str] = set()  # lower-case mDNS instance names the browser saw go away
+        self._services: dict[str, str] = {}  # device id -> its mDNS instance name, as last seen
+        self._mdns_first: float | None = None  # first / latest mDNS change not yet re-read
+        self._mdns_last: float = 0.0
+        self._sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep  # tests record the backoff
 
     # --- lifecycle --------------------------------------------------------------------
 
@@ -973,6 +1055,9 @@ class HomekitBridge:
         if self._factory is not None:
             controller = self._factory(self.state_dir)
             await controller.async_start()
+            if self._zeroconf_factory is not None:
+                self._azc, self._browser = self._zeroconf_factory()
+                self._watch_browser()
             self._controller = controller
             return
         from aiohomekit import Controller
@@ -993,13 +1078,26 @@ class HomekitBridge:
             await azc.async_close()
             raise
         self._azc, self._browser, self._controller = azc, browser, controller
+        self._watch_browser()
         log.info("homekit controller started (state dir %s)", self.state_dir)
+
+    def _watch_browser(self) -> None:
+        """Hook the HAP browser so every mDNS change (a device appearing, announcing a new
+        address / port / config number, or saying goodbye) is noticed at once."""
+        sig = getattr(self._browser, "service_state_changed", None)
+        if sig is not None:
+            sig.register_handler(self._on_mdns)
+            self._watched = sig
 
     async def stop(self) -> None:
         for device_id in list(self._pending):
             await self.cancel_pairing(device_id)
         for alias in list(self._paired):
             await self.unload(alias)
+        if self._watched is not None:
+            with contextlib.suppress(Exception):
+                self._watched.unregister_handler(self._on_mdns)
+            self._watched = None
         controller, self._controller = self._controller, None
         if controller is not None:
             with contextlib.suppress(Exception):
@@ -1012,6 +1110,9 @@ class HomekitBridge:
             with contextlib.suppress(Exception):
                 await self._azc.async_close()
             self._azc = None
+        self._gone.clear()
+        self._services.clear()
+        self._mdns_first = None
 
     def _ctl(self) -> Any:
         if self._controller is None:
@@ -1021,14 +1122,26 @@ class HomekitBridge:
     # --- discovery --------------------------------------------------------------------
 
     async def discover(self) -> list[DiscoveredDevice]:
-        """Everything mDNS has shown so far (IP and CoAP), one entry per device id."""
+        """Every device mDNS currently shows (IP and CoAP), one entry per device id, at the
+        address it last announced. aiohomekit never forgets a discovery, so a service the
+        browser saw leave (goodbye, or its records expired) is left out until it is back.
+        Also follows each loaded pairing's device to its current address (``_note_endpoint``)."""
         seen: dict[str, DiscoveredDevice] = {}
         async for d in self._ctl().async_discover():
             try:
                 dev = _discovered(d)
             except (AttributeError, TypeError, ValueError):
                 continue
+            if dev.service is not None and dev.service.lower() in self._gone:
+                continue
             seen.setdefault(dev.id, dev)
+        for dev in seen.values():
+            if dev.service is not None:
+                self._services[dev.id] = dev.service
+        for ent in self._paired.values():
+            dev = seen.get(ent.device_id)
+            if dev is not None:
+                self._note_endpoint(ent, dev)
         return sorted(seen.values(), key=lambda x: x.id)
 
     async def find(self, device_id: str) -> DiscoveredDevice:
@@ -1037,6 +1150,153 @@ class HomekitBridge:
         except Exception as exc:
             raise HomekitPairingError(pairing_error_message(exc)) from exc
         return _discovered(d)
+
+    async def _find_live(self, device_id: str) -> DiscoveredDevice | None:
+        """The live mDNS record of ``device_id`` (waiting up to ``load_find_timeout`` for the
+        browser to report it), or None: not seen, or seen leaving."""
+        if not device_id:
+            return None
+        try:
+            dev = _discovered(await self._ctl().async_find(device_id, timeout=self._load_find_timeout))
+        except Exception:  # noqa: BLE001 - not found (yet); the caller falls back to a hint
+            return None
+        if dev.service is not None:
+            if dev.service.lower() in self._gone:
+                return None
+            self._services[dev.id] = dev.service
+        return dev if dev.address and dev.port else None
+
+    # --- mDNS: changes, endpoints, re-resolution ----------------------------------------
+
+    def _on_mdns(self, zeroconf: Any = None, service_type: str = "", name: str = "",
+                 state_change: Any = None, **_: Any) -> None:
+        """Browser hook (sync, on the event loop, for every HAP service that appears, changes
+        or goes away): only notes it. The homekit service re-reads discovery once mDNS has
+        settled (``discovery_due``); aiohomekit itself updates its description of the device
+        and redirects that device's pairing to the new address."""
+        try:
+            if service_type not in HAP_TYPES:
+                return
+            key = str(name).lower()
+            if getattr(state_change, "name", str(state_change)) == "Removed":
+                self._gone.add(key)
+            else:
+                self._gone.discard(key)
+            now = time.monotonic()
+            self._mdns_last = now
+            if self._mdns_first is None:
+                self._mdns_first = now
+        except Exception:  # never raise into zeroconf
+            log.exception("homekit: mDNS change handling failed")
+
+    def discovery_due(self) -> bool:
+        """True once after mDNS reported a change and then stayed quiet for ``mdns_settle``
+        seconds (at the latest ``MDNS_MAX_WAIT_S`` after the first change): time to re-read
+        discovery so the stored address / port / config number follow the announcement."""
+        if self._mdns_first is None:
+            return False
+        now = time.monotonic()
+        if now - self._mdns_last < self._mdns_settle and now - self._mdns_first < MDNS_MAX_WAIT_S:
+            return False
+        self._mdns_first = None
+        return True
+
+    def _note_endpoint(self, ent: _Paired, dev: DiscoveredDevice) -> None:
+        """Follow ``ent``'s device to where mDNS now shows it. aiohomekit redirects a pairing
+        that is not connected by itself; one still connected to the old address (the thermostat
+        moved without closing the connection) would only notice when a request times out, so
+        it is marked ``moved`` and the service replaces the object (``recreate``)."""
+        if not dev.address or not dev.port or (ent.address, ent.port) == (dev.address, dev.port):
+            return
+        was = f"{ent.address}:{ent.port}" if ent.address else "unknown"
+        ent.address, ent.port = dev.address, dev.port
+        host = self._connected_host(ent)
+        if host is not None and host != dev.address:
+            ent.moved = True
+        log.info("homekit %r: %s is now at %s:%s (was %s)%s", ent.alias, ent.device_id, dev.address, dev.port, was,
+                 "; reconnecting there" if ent.moved else "")
+
+    @staticmethod
+    def _connected_host(ent: _Paired) -> str | None:
+        """The address the pairing's live connection talks to (None when not connected)."""
+        pairing = ent.pairing
+        if not getattr(pairing, "is_connected", False):
+            return None
+        host = getattr(getattr(pairing, "connection", None), "connected_host", None)
+        return str(host) if host else None
+
+    def endpoint(self, alias: str) -> tuple[str | None, int | None]:
+        """(address, port) the pairing's device was last seen at (or loaded with)."""
+        ent = self._entry(alias)
+        return ent.address, ent.port
+
+    def is_moved(self, alias: str) -> bool:
+        ent = self._paired.get(alias)
+        return ent is not None and ent.moved
+
+    def take_moved(self, alias: str) -> bool:
+        """True once when the pairing must be replaced to follow its device (see ``moved``)."""
+        ent = self._paired.get(alias)
+        if ent is None or not ent.moved:
+            return False
+        ent.moved = False
+        return True
+
+    def query_device(self, device_id: str) -> bool:
+        """Ask the network (one mDNS query) where ``device_id`` is now: its instance's SRV and
+        TXT records and its host's A / AAAA records when the instance is known, else every
+        HAP service (PTR). No known answers are sent, so the device answers even when the
+        cache still holds its old address; the answer reaches aiohomekit through the browser
+        like any announcement. Returns False when there is no zeroconf to send with."""
+        zc = getattr(self._azc, "zeroconf", None)
+        if zc is None:
+            return False
+        try:
+            from zeroconf import DNSOutgoing, DNSQuestion
+
+            out = DNSOutgoing(0)  # flags 0: a standard query
+            service = self._services.get(device_id.lower())
+            if service is None:
+                for hap_type in HAP_TYPES:
+                    out.add_question(DNSQuestion(hap_type, _DNS_PTR, _DNS_CLASS_IN))
+            else:
+                out.add_question(DNSQuestion(service, _DNS_SRV, _DNS_CLASS_IN))
+                out.add_question(DNSQuestion(service, _DNS_TXT, _DNS_CLASS_IN))
+                srv = zc.cache.get_by_details(service, _DNS_SRV, _DNS_CLASS_IN)
+                server = getattr(srv, "server", None)
+                if server:
+                    out.add_question(DNSQuestion(server, _DNS_A, _DNS_CLASS_IN))
+                    out.add_question(DNSQuestion(server, _DNS_AAAA, _DNS_CLASS_IN))
+            zc.async_send(out)
+        except Exception as exc:  # noqa: BLE001 - best effort; the library keeps retrying
+            log.debug("homekit: mDNS query for %s failed: %s", device_id, _short(exc))
+            return False
+        return True
+
+    def _start_resolving(self, ent: _Paired) -> None:
+        if ent.resolve_task is not None and not ent.resolve_task.done():
+            return
+        with contextlib.suppress(RuntimeError):  # no running loop: nothing to schedule on
+            ent.resolve_task = asyncio.get_running_loop().create_task(self._resolve_loop(ent))
+
+    @staticmethod
+    def _stop_resolving(ent: _Paired) -> None:
+        task, ent.resolve_task = ent.resolve_task, None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _resolve_loop(self, ent: _Paired) -> None:
+        """While ``ent`` keeps failing: query mDNS for its device id at once, then after each
+        ``resolve_backoff`` wait (the last repeats). Ended by the next successful request, an
+        unload, or a pairing the device no longer accepts (re-resolving cannot fix that)."""
+        waits = itertools.chain(self._resolve_backoff, itertools.repeat(self._resolve_backoff[-1]))
+        for n, wait in enumerate(waits):
+            if self._paired.get(ent.alias) is not ent or ent.needs_repair or self._controller is None:
+                return
+            if self.query_device(ent.device_id) and n == 0:
+                log.info("homekit %r: %s did not answer; asking the network (mDNS) where it is now",
+                         ent.alias, ent.device_id)
+            await self._sleep(wait)
 
     # --- pairing ----------------------------------------------------------------------
 
@@ -1168,18 +1428,32 @@ class HomekitBridge:
             raise HomekitError(f"no HomeKit pairing loaded for {alias!r}")
         return ent
 
-    async def load(self, alias: str, pairing_data: Mapping[str, Any]) -> None:
-        """Register a saved pairing with the running controller (keyed by device id so mDNS
-        address updates reach it)."""
+    async def load(
+        self, alias: str, pairing_data: Mapping[str, Any], *, address: str | None = None, port: int | None = None
+    ) -> None:
+        """Register a saved pairing with the running controller, keyed by its device id so
+        every mDNS update for that id redirects it. The device is first looked up by id in the
+        live mDNS browser (up to ``load_find_timeout``); aiohomekit is handed that address, else
+        ``address``:``port`` (the caller's last mDNS sighting), else the pairing-time address
+        saved with the keys. The saved data itself is never changed."""
         data = dict(pairing_data)
+        device_id = str(data.get("AccessoryPairingID", "")).lower()
         if alias in self._paired:
             await self.unload(alias)
-        pairing = self._ctl().load_pairing(alias, dict(data))
-        ent = _Paired(alias=alias, device_id=str(data.get("AccessoryPairingID", "")).lower(), pairing=pairing,
-                      pairing_data=data)
+        live = await self._find_live(device_id)
+        addresses: tuple[str, ...] = ()
+        if live is not None:
+            address, port, addresses = live.address, live.port, live.addresses
+        elif not (address and port):
+            address, port = _clean_str(data.get("AccessoryIP")), _int(data.get("AccessoryPort"))
+        if alias in self._paired:  # loaded by someone else while we waited
+            await self.unload(alias)
+        pairing = self._ctl().load_pairing(alias, endpoint_data(data, address, port, addresses))
+        ent = _Paired(alias=alias, device_id=device_id, pairing=pairing, pairing_data=data, address=address, port=port)
         self._paired[alias] = ent
         self._attach(ent)
-        log.info("homekit pairing %r loaded (%s)", alias, ent.device_id)
+        log.info("homekit pairing %r loaded (%s, %s at %s:%s)", alias, ent.device_id,
+                 "seen on mDNS" if live is not None else "not seen on mDNS yet", address, port)
 
     def _attach(self, ent: _Paired) -> None:
         pairing = ent.pairing
@@ -1195,8 +1469,10 @@ class HomekitBridge:
                 unsub()
         ent.unsubs = []
 
-    async def _shutdown_object(self, ent: _Paired) -> None:
+    async def _shutdown_object(self, ent: _Paired, *, keep_resolving: bool = False) -> None:
         self._detach(ent)
+        if not keep_resolving:
+            self._stop_resolving(ent)
         pairing = ent.pairing
         stop = getattr(pairing, "shutdown", None) or getattr(pairing, "close", None)
         if stop is not None:
@@ -1223,15 +1499,18 @@ class HomekitBridge:
         ent = self._paired.get(alias)
         return ent is not None and getattr(ent.pairing, "supports_subscribe", True) is False
 
-    async def recreate(self, alias: str) -> None:
-        """Replace the pairing object (push stays off forever on the old one); keep state."""
+    async def recreate(self, alias: str, reason: str = "to restore push events") -> None:
+        """Replace the pairing object (push stays off forever on an object that lost a
+        subscribe; an object still connected to an address its device has left only notices on
+        a request timeout); keep state. The new object starts at the device's current address."""
         ent = self._entry(alias)
         async with ent.lock:
-            await self._shutdown_object(ent)
-            ent.pairing = self._ctl().load_pairing(alias, dict(ent.pairing_data))
+            await self._shutdown_object(ent, keep_resolving=True)
+            ent.pairing = self._ctl().load_pairing(alias, endpoint_data(ent.pairing_data, ent.address, ent.port))
             ent.subscribed = set()
+            ent.moved = False
             self._attach(ent)
-        log.info("homekit pairing %r recreated to restore push events", alias)
+        log.info("homekit pairing %r recreated %s", alias, reason)
 
     async def remove(self, alias: str) -> Literal["removed", "already_removed"]:
         """Unpair: remove our pairing ON THE DEVICE (it must be reachable) and forget it.
@@ -1261,14 +1540,17 @@ class HomekitBridge:
     # --- events -----------------------------------------------------------------------
 
     def _on_dispatch(self, alias: str, pairing: Any, event: Mapping[tuple[int, int], Any]) -> None:
-        """aiohomekit listener (sync, on the event loop). Receives {} on every (re)connect and
+        """aiohomekit listener (sync, on the event loop). Receives {} on every (re)connect (also
+        before the first inventory: a pairing that could not connect yet is retried at once) and
         optimistic echoes of our own writes; only subscribed read characteristics count."""
         try:
             ent = self._paired.get(alias)
-            if ent is None or ent.pairing is not pairing or ent.parsed is None:
+            if ent is None or ent.pairing is not pairing:
                 return
             if not event:
                 self._emit(alias, set())
+                return
+            if ent.parsed is None:
                 return
             changed: set[int] = set()
             for key, payload in event.items():
@@ -1304,7 +1586,9 @@ class HomekitBridge:
 
     def _failure(self, ent: _Paired, exc: BaseException) -> HomekitError:
         """Count a failed request. Unavailable after 3 in a row, or at once on
-        AccessoryNotFoundError; AuthenticationError means the pairing is gone on the device."""
+        AccessoryNotFoundError; AuthenticationError means the pairing is gone on the device.
+        Any other failure may mean the thermostat moved to a new address without us hearing
+        its announcement: start asking mDNS where it is (``_resolve_loop``)."""
         ent.failures += 1
         if _is(exc, "AuthenticationError"):
             ent.needs_repair = True
@@ -1312,12 +1596,14 @@ class HomekitBridge:
             return HomekitAuthError(REPAIR_MSG)
         if _is(exc, "AccessoryNotFoundError") or ent.failures >= FAILS_UNTIL_UNAVAILABLE:
             ent.available = False
+        self._start_resolving(ent)
         return HomekitUnavailable(f"HomeKit request failed ({_short(exc)})")
 
     def _success(self, ent: _Paired) -> None:
         ent.failures = 0
         ent.available = True
         ent.needs_repair = False
+        self._stop_resolving(ent)
 
     # --- inventory / subscribe / read -------------------------------------------------
 

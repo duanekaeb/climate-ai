@@ -26,7 +26,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from climate import state
-from climate.api.auth import OwnerDep, ReaderDep, Role
+from climate.api.auth import ControlDep, ReaderDep, Role
 from climate.api.routers.control import SessionDep, safe
 from climate.api.schemas import PlanRow, SkipEventBody, UtilityEventOut
 from climate.control import controller
@@ -272,7 +272,7 @@ def _sending(session: Session, event_ids: Sequence[int], now: datetime) -> set[i
 
 @router.post("/utility-events/{event_id}/skip", response_model=UtilityEventOut)
 def skip_event(
-    event_id: int, body: SkipEventBody | None = None, _: Role = OwnerDep, session: Session = SessionDep,
+    event_id: int, body: SkipEventBody | None = None, _: Role = ControlDep, session: Session = SessionDep,
 ) -> UtilityEventOut:
     """Request an opt-out of this event: on every thermostat it reaches (``all_units``, the
     default; rows that can't be skipped are left as they are) or only this one. 409 when the
@@ -308,7 +308,7 @@ def skip_event(
 
 @router.post("/utility-events/{event_id}/unskip", response_model=UtilityEventOut)
 def unskip_event(
-    event_id: int, body: SkipEventBody | None = None, _: Role = OwnerDep, session: Session = SessionDep,
+    event_id: int, body: SkipEventBody | None = None, _: Role = ControlDep, session: Session = SessionDep,
 ) -> UtilityEventOut:
     """Take back a skip that has not been sent yet (still 'requested'): on every thermostat
     of this event (``all_units``, the default) or only this one. 409 when nothing is waiting

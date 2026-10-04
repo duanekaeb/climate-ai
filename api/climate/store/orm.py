@@ -434,6 +434,7 @@ class AuthSession(Base):
     previous_token_hash: Mapped[str | None] = mapped_column(Text)
     family_id: Mapped[str] = mapped_column(Text)
     rotation_counter: Mapped[int] = mapped_column(Integer, default=0)
+    rotated_at: Mapped[datetime | None] = mapped_column(TS)
     device_name: Mapped[str] = mapped_column(Text, default="")
     user_agent: Mapped[str] = mapped_column(Text, default="")
     ip: Mapped[str | None] = mapped_column(Text)

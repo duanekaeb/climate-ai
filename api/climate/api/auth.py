@@ -40,17 +40,19 @@ NOT_AUTHENTICATED / TOKEN_EXPIRED / SESSION_REVOKED, 403 FORBIDDEN / REAUTHENTIC
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Iterable
+from typing import cast
+from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request, status
 from starlette.requests import HTTPConnection
 
 from climate import auth_service
 from climate.api.schemas import Role
-from climate.api.security import AuthError, verify_password
-
-# Kept importable from here for older callers (climate.cli, tests/test_worker_cli.py).
-from climate.auth_service import Principal, set_owner_password
+from climate.api.security import AuthError, is_private_address, verify_password  # verify_password: re-exported for older callers
+from climate.auth_service import Principal
+from climate.config import get_settings
 
 __all__ = [
     "AgentDep",
@@ -69,7 +71,6 @@ __all__ = [
     "client_ip",
     "optional_caller",
     "resolve_caller",
-    "set_owner_password",
     "verify_password",
 ]
 
@@ -83,8 +84,42 @@ def auth_error(status_code: int, code: str, message: str) -> HTTPException:
 
 
 def client_ip(conn: HTTPConnection) -> str | None:
-    """The caller's address as uvicorn resolved it from trusted proxy headers (None if unknown)."""
+    """The caller's address as uvicorn resolved it from trusted proxy headers (None if unknown).
+
+    Fail closed for the internet: every request that came through Cloudflare carries
+    ``CF-Connecting-IP``, so such a request is never treated as coming from home, even if
+    FORWARDED_ALLOW_IPS is wrong and uvicorn reports the gateway's private address. Its real
+    public address is used; a private-looking value (a spoof, or a test on the LAN) becomes an
+    unparsable marker, which every home/private check treats as public."""
+    cf = conn.headers.get("cf-connecting-ip", "").strip()
+    if cf:
+        return cf if not is_private_address(cf) else f"cf:{cf}"
     return conn.client.host if conn.client else None
+
+
+_SETUP_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain")
+
+
+def setup_host_ok(conn: HTTPConnection) -> bool:
+    """First-run setup only on a name that belongs to the home network: an IP address,
+    ``localhost``, a ``.local`` / ``.lan`` / ``.home`` / ``.home.arpa`` / ``.internal`` name,
+    the public URL's host, or a name in CLIMATE_SETUP_HOSTS. Closes DNS rebinding: a web page
+    on some other domain that rebinds to this server's LAN address would pass the private
+    address and same-origin checks, but not this one."""
+    raw = (conn.headers.get("x-forwarded-host") or conn.headers.get("host") or "").split(",")[0].strip().lower()
+    host = raw[1:].split("]")[0] if raw.startswith("[") else raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    cfg = get_settings()
+    allowed = {h.strip().lower() for h in cfg.setup_hosts.split(",") if h.strip()}
+    if cfg.public_url:
+        allowed.add((urlsplit(cfg.public_url).hostname or "").lower())
+    return host == "localhost" or host.endswith(_SETUP_SUFFIXES) or host in allowed
 
 
 def bearer_token(conn: HTTPConnection) -> str | None:
@@ -152,27 +187,27 @@ def _admit(principal: Principal, roles: Iterable[str], message: str) -> Principa
 
 def require_reader(principal: Principal = Depends(current_caller)) -> Role:
     """Reads: the owner and every API token role."""
-    return _admit(principal, ALL_ROLES, "Not allowed.").role  # type: ignore[return-value]
+    return cast(Role, _admit(principal, ALL_ROLES, "Not allowed.").role)
 
 
 def require_control(principal: Principal = Depends(current_caller)) -> Role:
     """Everyday controls: the owner or a ``control`` token (never the agent or a viewer)."""
-    return _admit(principal, ("owner", "control"), "Needs the owner or a control token.").role  # type: ignore[return-value]
+    return cast(Role, _admit(principal, ("owner", "control"), "Needs the owner or a control token.").role)
 
 
 def require_owner(principal: Principal = Depends(current_caller)) -> Role:
     """Settings, mode, setup, hand-back, decisions, tokens, sessions, audit: the owner only."""
-    return _admit(principal, ("owner",), "Owner only.").role  # type: ignore[return-value]
+    return cast(Role, _admit(principal, ("owner",), "Owner only.").role)
 
 
 def require_writer(principal: Principal = Depends(current_caller)) -> Role:
     """The gated writes both the owner and the agent may make (propose, sign off, reports)."""
-    return _admit(principal, ("owner", "agent"), "Needs the owner or an agent token.").role  # type: ignore[return-value]
+    return cast(Role, _admit(principal, ("owner", "agent"), "Needs the owner or an agent token.").role)
 
 
 def require_agent(principal: Principal = Depends(current_caller)) -> Role:
     """The agent service's own run bookkeeping (claim, heartbeat, finish)."""
-    return _admit(principal, ("agent",), "Agent service only.").role  # type: ignore[return-value]
+    return cast(Role, _admit(principal, ("agent",), "Agent service only.").role)
 
 
 def owner_caller(principal: Principal = Depends(current_caller)) -> Principal:

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     previous_token_hash TEXT,                             -- the one before the last rotation (reuse detection)
     family_id           TEXT NOT NULL,
     rotation_counter    INT NOT NULL DEFAULT 0,
+    rotated_at          TIMESTAMPTZ,                      -- last rotation (grace window for a lost response)
     device_name         TEXT NOT NULL DEFAULT '',
     user_agent          TEXT NOT NULL DEFAULT '',
     ip                  TEXT,

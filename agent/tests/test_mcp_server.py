@@ -1,8 +1,11 @@
 """MCP server: every toolkit tool is registered (same names as the agent's SDK server), calls
-reach the API, errors surface as tool errors, and the HTTP transport demands the bearer token."""
+reach the API, errors surface as tool errors, the HTTP transport demands the bearer token and
+answers local clients only, and the inbound (MCP client) and outbound (API) tokens are kept
+apart."""
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 from typing import Any
 
@@ -10,7 +13,16 @@ import pytest
 from conftest import SAVINGS
 from mcp.server.mcpserver.exceptions import ToolError
 
-from climate_agent.mcp_server import BearerAuth, api_token, build_http_app, build_server, parse_hostport
+from climate_agent.mcp_server import (
+    BearerAuth,
+    api_token,
+    api_token_source,
+    build_http_app,
+    build_server,
+    inbound_token,
+    is_local_client,
+    parse_hostport,
+)
 from climate_agent.toolkit import TOOLS, Toolkit
 from climate_agent.tools import allowed_tool_names, build_tools
 
@@ -76,7 +88,9 @@ def test_sdk_tool_handler_marks_errors(make_api):
     assert out["is_error"] is True and "Not found (404)" in out["content"][0]["text"]
 
 
-async def _asgi(app: Any, headers: list[tuple[bytes, bytes]]) -> tuple[int, list[dict[str, Any]]]:
+async def _asgi(
+    app: Any, headers: list[tuple[bytes, bytes]], client: tuple[str, int] | None = None
+) -> tuple[int, list[dict[str, Any]]]:
     sent: list[dict[str, Any]] = []
 
     async def receive() -> dict[str, Any]:
@@ -85,7 +99,10 @@ async def _asgi(app: Any, headers: list[tuple[bytes, bytes]]) -> tuple[int, list
     async def send(message: dict[str, Any]) -> None:
         sent.append(message)
 
-    await app({"type": "http", "method": "POST", "path": "/mcp", "headers": headers}, receive, send)
+    scope: dict[str, Any] = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
+    if client is not None:
+        scope["client"] = client
+    await app(scope, receive, send)
     return sent[0]["status"], sent
 
 
@@ -101,14 +118,40 @@ def test_http_requires_bearer_token():
     assert asyncio.run(_asgi(app, [(b"authorization", b"Bearer mcp-token")]))[0] == 200
 
 
+def test_http_answers_local_clients_only():
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    app = BearerAuth(inner, "mcp-token")
+    good = [(b"authorization", b"Bearer mcp-token")]
+    for host in ("127.0.0.1", "172.18.0.1", "192.168.1.40", "100.101.2.3", "::1", "fd7a:115c:a1e0::5"):
+        assert asyncio.run(_asgi(app, good, (host, 50000)))[0] == 200, host
+    for host in ("8.8.8.8", "2606:4700::1111", "::ffff:8.8.8.8"):
+        status, sent = asyncio.run(_asgi(app, good, (host, 50000)))
+        assert status == 403 and b"home network" in sent[1]["body"], host
+    assert is_local_client(None) and not is_local_client("not-an-ip")
+
+
 def test_http_app_and_args(make_api):
     api, _ = make_api({})
     app = build_http_app(build_server(Toolkit(api)), "0.0.0.0", "mcp-token")
     assert isinstance(app, BearerAuth)
     assert parse_hostport("0.0.0.0:8765") == ("0.0.0.0", 8765)
     assert parse_hostport("[::1]:9000") == ("::1", 9000)
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         parse_hostport("8765")
-    assert api_token({"CLIMATE_MCP_TOKEN": "m", "CLIMATE_AGENT_TOKEN": "a"}) == "m"
-    assert api_token({"CLIMATE_AGENT_TOKEN": "a"}) == "a"
     asyncio.run(api.aclose())
+
+
+def test_inbound_and_outbound_tokens():
+    cai = "cai_2a_" + "Zz9" * 12
+    both = {"CLIMATE_MCP_TOKEN": "mcp-legacy", "CLIMATE_AGENT_TOKEN": cai}
+    # The API gets the agent token (any format); MCP clients present CLIMATE_MCP_TOKEN.
+    assert api_token_source(both) == ("CLIMATE_AGENT_TOKEN", cai) and api_token(both) == cai
+    assert inbound_token(both) == "mcp-legacy"
+    # Only one set: it does both jobs (the API accepts the legacy MCP token as the agent role).
+    assert api_token_source({"CLIMATE_MCP_TOKEN": "m"}) == ("CLIMATE_MCP_TOKEN", "m")
+    assert inbound_token({"CLIMATE_MCP_TOKEN": "m"}) == "m"
+    assert api_token({"CLIMATE_AGENT_TOKEN": f"Bearer {cai} "}) == cai and inbound_token({"CLIMATE_AGENT_TOKEN": cai}) == cai
+    assert api_token_source({"CLIMATE_AGENT_TOKEN": "  "}) == ("", "")

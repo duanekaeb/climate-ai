@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from climate_agent.api import TOKEN_HELP, normalize_token
+
 DEFAULT_API_URL = "http://app:8000"
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_FALLBACK_MODEL = "claude-sonnet-5-5"
@@ -41,6 +43,15 @@ class ConfigError(ValueError):
 
 class StartupRefused(RuntimeError):
     """The environment is unsafe for a subscription-billed agent; refuse to start."""
+
+
+def _clean_token(raw: str | None) -> str:
+    """The configured API token, normalized (see ``api.normalize_token``). A token that can't
+    be sent in a header is kept as typed so ``idle_reason`` reports it instead of crashing."""
+    try:
+        return normalize_token(raw or "")
+    except ValueError:
+        return (raw or "").strip()
 
 
 def _truthy(value: str | None) -> bool:
@@ -94,7 +105,7 @@ class AgentConfig:
             raise ConfigError("CLIMATE_AGENT_MAX_TURNS must be an integer") from exc
         return cls(
             api_url=(env.get("CLIMATE_API_URL") or DEFAULT_API_URL).strip(),
-            agent_token=(env.get("CLIMATE_AGENT_TOKEN") or "").strip(),
+            agent_token=_clean_token(env.get("CLIMATE_AGENT_TOKEN")),
             oauth_token_present=bool((env.get(OAUTH_ENV_VAR) or "").strip()),
             token_created=token_created,
             model=(env.get("CLIMATE_AGENT_MODEL") or DEFAULT_MODEL).strip(),
@@ -143,7 +154,11 @@ def idle_reason(config: AgentConfig) -> str | None:
     A missing token is not a reason to exit: the agent service is on by default, so exiting
     would make Docker restart it in a loop. It idles and reports "not signed in" instead."""
     if not config.agent_token:
-        return "CLIMATE_AGENT_TOKEN is not set; the agent cannot reach the API."
+        return f"CLIMATE_AGENT_TOKEN is not set, so the agent cannot reach the API. {TOKEN_HELP}."
+    try:
+        normalize_token(config.agent_token)
+    except ValueError as exc:
+        return f"CLIMATE_AGENT_TOKEN is malformed: {exc}. {TOKEN_HELP}."
     if not config.oauth_token_present:
         return f"{OAUTH_ENV_VAR} is not set. Run `claude setup-token` and set it for the agent service."
     return None

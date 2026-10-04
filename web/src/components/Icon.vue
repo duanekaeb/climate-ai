@@ -25,6 +25,11 @@ const PATHS: Record<string, string> = {
   check: 'M20 6 9 17l-5-5',
   x: 'M18 6 6 18M6 6l12 12',
   refresh: 'M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5',
+  lock: 'M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4M12 15v2',
+  key: 'M14.5 9.5a4 4 0 1 0-1.4 3L21 20.4M17 17l2-2M19 19l2-2',
+  copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
+  phone: 'M8 2h8a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zM11 18h2',
+  laptop: 'M5 5h14v10H5zM2 19h20',
 }
 </script>
 

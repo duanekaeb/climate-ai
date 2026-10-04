@@ -1,16 +1,24 @@
-# Climate AI: one home server, Docker Compose v2.
+# Climate AI: one home server (or your Mac), Docker Compose v2.
 #
-#   cp .env.example .env      # then fill in the secrets (see docs/DEPLOY.md)
-#   docker compose up -d --build
+#   make bootstrap            # = scripts/bootstrap.sh: .env with every secret generated, then
+#                             #   docker compose up -d --build, wait for /api/health, print the URL
+#   make help                 # every other command (up, down, logs, doctor, password, reset ...)
+#
+# Doing it by hand instead: cp .env.example .env, fill in the secrets (docs/DEPLOY.md), then
+# `docker compose up -d --build`. Compose refuses to start while a required secret is empty.
 #
 # Default services: db, app, worker, agent. Optional profiles:
 #   homekit  local HomeKit (host networking, Linux only)   docker compose --profile homekit up -d
+#            (macOS: Docker Desktop cannot do mDNS on your LAN; run `make homekit-native`)
 #   mcp      MCP server for Claude Code / Desktop           docker compose --profile mcp up -d
 #   ntfy     self-hosted push notifications                 docker compose --profile ntfy up -d
 # (or set COMPOSE_PROFILES=homekit,mcp in .env to make them stick).
 #
-# Every published port binds to 127.0.0.1 by default: the owner's nginx (or Tailscale) is the
-# only way in. Nothing here should ever be exposed to the internet.
+# Every published port binds to 127.0.0.1 by default. The ways in are a reverse proxy in front
+# of the app only (your nginx, or the GrowWise AppRelay gateway for a public name:
+# docs/PUBLIC_ACCESS.md), Tailscale, or APP_BIND=0.0.0.0 for plain http on your home network.
+# Never port-forward any of these ports on your router; the database and MCP ports never leave
+# this machine.
 #
 # Networks: `data` joins db with app and worker only; the agent, mcp and ntfy containers sit
 # on `default` and cannot even reach Postgres. The homekit service uses the host network
@@ -38,12 +46,29 @@ x-agent-image: &agent-image
     dockerfile: docker/agent.Dockerfile
   image: climate-ai-agent:local
 
+# Container-to-container calls (http://app:8000, http://db, http://ntfy) must never go through an
+# HTTP proxy: Docker injects HTTP(S)_PROXY into every container when ~/.docker/config.json or
+# Docker Desktop has a proxy configured (common on work Macs), and the proxy cannot reach these
+# names. Outbound calls (ecobee, Open-Meteo, Claude) still use the proxy. Add your own
+# exceptions with EXTRA_NO_PROXY in .env (comma separated).
+x-no-proxy: &no-proxy
+  NO_PROXY: app,db,ntfy,localhost,127.0.0.1,::1${EXTRA_NO_PROXY:+,${EXTRA_NO_PROXY}}
+  no_proxy: app,db,ntfy,localhost,127.0.0.1,::1${EXTRA_NO_PROXY:+,${EXTRA_NO_PROXY}}
+
 # CLIMATE_* settings for the app/worker/homekit containers come from .env (env_file). The
 # database URL is derived from POSTGRES_* unless CLIMATE_DATABASE_URL is set in .env.
 x-app-env: &app-env
+  <<: *no-proxy
   TZ: ${TZ:-UTC}
   CLIMATE_DATABASE_URL: ${CLIMATE_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-climate}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-climate}}
   CLIMATE_WEB_DIR: /app/web
+  # Sign-in (docs/specs/users-and-tokens.md): the access-token signing secret and the pepper
+  # for every stored token hash. Required: without them nobody can sign in, so compose refuses
+  # to start instead. `make bootstrap` (scripts/bootstrap.sh) generates both, also into an
+  # existing .env from before they existed. Changing the pepper signs every device out and
+  # voids every API token; changing the JWT secret only ends the current 15-minute tokens.
+  CLIMATE_JWT_SECRET: ${CLIMATE_JWT_SECRET:?set CLIMATE_JWT_SECRET in .env (run scripts/bootstrap.sh or make bootstrap to generate it)}
+  CLIMATE_TOKEN_PEPPER: ${CLIMATE_TOKEN_PEPPER:?set CLIMATE_TOKEN_PEPPER in .env (run scripts/bootstrap.sh or make bootstrap to generate it)}
   # The app never calls Claude; keep the Claude token out of these containers even though
   # it lives in the same .env file.
   CLAUDE_CODE_OAUTH_TOKEN: ""
@@ -182,6 +207,7 @@ services:
     restart: unless-stopped
     init: true
     environment:
+      <<: *no-proxy
       TZ: ${TZ:-UTC}
       CLIMATE_API_URL: http://app:8000
       CLIMATE_AGENT_TOKEN: ${CLIMATE_AGENT_TOKEN:-}
@@ -218,6 +244,7 @@ services:
     restart: unless-stopped
     init: true
     environment:
+      <<: *no-proxy
       TZ: ${TZ:-UTC}
       CLIMATE_API_URL: http://app:8000
       CLIMATE_MCP_TOKEN: ${CLIMATE_MCP_TOKEN:-}

@@ -7,7 +7,6 @@ import Icon from '@/components/Icon.vue'
 import { setTheme, theme } from '@/lib/theme'
 import { routes } from '@/router'
 import { useAuth } from '@/stores/auth'
-import { stopLiveUpdates } from '@/stores/status'
 
 const auth = useAuth()
 const router = useRouter()
@@ -21,7 +20,6 @@ async function signOut() {
   error.value = ''
   try {
     await auth.logout()
-    stopLiveUpdates()
     await router.replace('/login')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -60,7 +58,10 @@ async function signOut() {
     </Card>
 
     <Card title="Account">
-      <p class="text-sm text-muted">Signed in as the {{ auth.state?.role === 'agent' ? 'agent' : 'owner' }} on this device.</p>
+      <p class="text-sm text-muted">
+        Signed in as the owner on this device. Signed-in devices, the password and API tokens
+        are under <RouterLink to="/security" class="text-accent underline">Security</RouterLink>.
+      </p>
       <p v-if="error" role="alert" class="mt-2 text-sm text-bad">{{ error }}</p>
       <button type="button" class="btn mt-3" :disabled="busy" @click="signOut">{{ busy ? 'Signing out…' : 'Sign out' }}</button>
     </Card>

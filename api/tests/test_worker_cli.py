@@ -18,9 +18,12 @@ from climate.store.orm import Job
 
 
 def healthy(db) -> None:
+    from climate.auth_service import set_owner_password
+
     beat(db, "worker", source="simulator", source_ok=True)
     beat(db, "agent", signed_in=True)
     db.commit()
+    set_owner_password("correct horse battery staple")
 
 
 def test_doctor_healthy(db, capsys):
@@ -66,7 +69,8 @@ def test_gen_key(capsys):
     assert cli.main(["gen-key"]) == 0
     lines = dict(line.split("=", 1) for line in capsys.readouterr().out.strip().splitlines())
     Fernet(lines["CLIMATE_SECRET_KEY"].encode())
-    assert len(lines["CLIMATE_SESSION_SECRET"]) >= 40
+    assert len(lines["CLIMATE_JWT_SECRET"]) >= 32 and len(lines["CLIMATE_TOKEN_PEPPER"]) >= 32
+    assert lines["CLIMATE_JWT_SECRET"] != lines["CLIMATE_TOKEN_PEPPER"]
 
 
 def test_set_password(db, capsys):
