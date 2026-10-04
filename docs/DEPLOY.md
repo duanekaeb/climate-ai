@@ -86,10 +86,13 @@ docker compose up -d --build
 Then open `.env` and review the rest. Every variable is commented. The important ones:
 
 - `TZ`: your time zone, for log timestamps (the house time zone is set in the app's Setup).
-- `CLIMATE_COOKIE_SECURE`: `true` as soon as you browse through HTTPS (sections 6 and 8). Over
-  plain http the browser drops the sign-in cookie and sign-in does not stick, so bootstrap
-  writes `false` into a new `.env`. `make doctor` flags an https `CLIMATE_PUBLIC_URL` with
-  `false`.
+- `CLIMATE_COOKIE_SECURE`: `true` as soon as you browse through HTTPS (sections 6 and 8). It
+  makes the refresh cookie `Secure` for every visitor from an internet address. A request that
+  arrives over HTTPS gets a `Secure` cookie whatever the setting says, and plain http from a
+  private address (home network, Tailscale, an SSH tunnel) never does, because the browser
+  would drop it and sign-in would not stick. So `true` does not break plain-http use at home.
+  bootstrap writes `false` into a new `.env` for local http use. `make doctor` flags an https
+  `CLIMATE_PUBLIC_URL` with `false`.
 - `CLIMATE_PUBLIC_URL`: the address you open the app at, e.g. `https://climate.example.home`.
 - **Never set `ANTHROPIC_API_KEY`** here or anywhere on the server (section 11).
 
@@ -214,8 +217,15 @@ all depend on it, as do the sign-in throttle and the internet sign-in pause. So:
   outside Docker connects from the host side of the bridge, which is in that subnet too. Keep
   the network to the proxy and Climate AI (as [PUBLIC_ACCESS.md](PUBLIC_ACCESS.md) does with
   `apprelay_gateway`), so no unrelated container shares it.
-- After any proxy change, check from a device that is not at home (a phone on mobile data):
-  More > Security must list it with its public address, not a `172.x` one.
+- After any proxy change, check what address the app logs. From a device whose address you
+  know (your laptop), open the app through the proxy at `/api/health?fwd-check`, for example
+  `curl -s -o /dev/null 'https://climate.example.home/api/health?fwd-check'`, then on the server
+  `docker compose logs --since 5m app | grep fwd-check`. The line must show the laptop's
+  address, not the proxy's (a `172.x` address, or `127.0.0.1`). A device that is not at home
+  works too: More > Security must list a phone on mobile data with its public address. That
+  second check only works without Cloudflare in front: a request through Cloudflare carries
+  `CF-Connecting-IP`, which the app reads first, so it always shows the public address there
+  (see section 8).
 
 ### HTTPS
 
@@ -229,8 +239,9 @@ Screen") and keeps sign-ins most reliably over HTTPS.
 ## 7. Phones on plain http at home (optional)
 
 Without nginx, `APP_BIND=0.0.0.0` (or `scripts/bootstrap.sh --lan`) opens the app to your home
-network at `http://<server address>:8470`. Keep `CLIMATE_COOKIE_SECURE=false` then. Your router
-must not forward the port.
+network at `http://<server address>:8470`. `CLIMATE_COOKIE_SECURE=false` is the usual setting
+then; `true` works too, since plain http from a private address never gets a `Secure` cookie.
+Your router must not forward the port.
 
 ## 8. Public access through the GrowWise AppRelay gateway
 
@@ -255,8 +266,10 @@ then `docker compose up -d`.
 1. **The owner password is already chosen, from home** (section 4), and it is long and unique.
    Choosing it from the internet is refused anyway (`CLIMATE_ALLOW_REMOTE_SETUP` stays off).
 2. **HTTPS only.** TLS ends at Cloudflare; plain http must be redirected to https (Cloudflare's
-   "Always Use HTTPS" or the gateway) and HSTS sent. `CLIMATE_COOKIE_SECURE=true`, so the refresh cookie (HttpOnly, `SameSite=Lax`, path
-   `/api/auth` only) never travels over plain http. `make doctor` checks this.
+   "Always Use HTTPS" or the gateway) and HSTS sent. Requests over HTTPS get a `Secure` refresh
+   cookie (HttpOnly, `SameSite=Lax`, path `/api/auth` only), and `CLIMATE_COOKIE_SECURE=true`
+   forces `Secure` for every internet address as well, so on the public name the cookie never
+   travels over plain http. `make doctor` checks the setting.
 3. **Real tokens, short-lived and revocable.** The web app holds a 15-minute access token in
    memory only; the refresh cookie rotates on every use, and replaying an old one signs that
    device out. Devices expire after 30 days unused (90 at most) and every sign-in, device and
@@ -267,13 +280,16 @@ then `docker compose up -d`.
    together: past 20 in an hour, sign-in from the internet pauses for 15 minutes (with an alert
    and an audit entry), while sign-in from home and Tailscale always works and signed-in
    devices are unaffected. The gateway adds its own per-address rate limit in front.
-5. **The proxy headers are right** (section 6): the gateway appends the real client address
-   (taken from Cloudflare's `CF-Connecting-IP`) to `X-Forwarded-For` and sets `X-Forwarded-Host`
-   / `X-Forwarded-Proto`; `FORWARDED_ALLOW_IPS` is the `apprelay_gateway` subnet (not the nginx
-   container's address, which changes when nginx is recreated and would then fail open). As a
-   second line, any request carrying `CF-Connecting-IP` is always treated as coming from the
-   internet, so a proxy mistake can never make the internet look like home. Verify from
-   cellular: More > Security should list that device with a public address.
+5. **The client address is right.** The app reads Cloudflare's `CF-Connecting-IP` before
+   anything else, so every request through the tunnel counts as the internet whatever
+   `FORWARDED_ALLOW_IPS` says: behind the gateway a wrong value fails closed, not open. Set
+   `FORWARDED_ALLOW_IPS` to the `apprelay_gateway` subnet anyway (not the nginx container's
+   address, which changes when nginx is recreated), so that uvicorn believes the gateway's
+   `X-Forwarded-For` and `X-Forwarded-Proto` and the app's logs show real addresses. Verify
+   with the two checks in [PUBLIC_ACCESS.md](PUBLIC_ACCESS.md) step 6: a phone on mobile data
+   is listed under More > Security with its public address (this confirms `CF-Connecting-IP`
+   arrives), and the app's log shows the address Cloudflare saw (this confirms
+   `FORWARDED_ALLOW_IPS`).
 6. **Tokens stay home unless you say otherwise.** API tokens are home-network-only by default;
    the agent and MCP service tokens are accepted from private addresses only. Give each service
    its own token with the smallest role.
@@ -458,7 +474,7 @@ docker compose logs -f app worker
 | "Sign-in is not configured" (503 `AUTH_NOT_CONFIGURED`) | `CLIMATE_JWT_SECRET` / `CLIMATE_TOKEN_PEPPER` empty or shorter than 32 characters: `make bootstrap`, `docker compose up -d`. |
 | First screen says to choose the password from your home network | You are coming from an internet address, or your proxy hides the client address (section 6). Choose it over an SSH tunnel, or `make password`. |
 | "Sign-in from the internet is paused" (429 `LOGIN_PAUSED`) | Many failed sign-ins from the internet. It lifts by itself after 15 minutes; from home or Tailscale you can sign in now. Check Recent activity. |
-| Sign-in does not stick / login loops | Plain http with `CLIMATE_COOKIE_SECURE=true`: use HTTPS, or set it to `false` and `docker compose up -d`. |
+| Sign-in does not stick / login loops | Plain http from an internet address with `CLIMATE_COOKIE_SECURE=true`: the browser drops the `Secure` cookie. Use HTTPS. (Plain http from a private address gets a cookie without `Secure` and works either way.) |
 | Every device has to sign in again | After the upgrade to bearer tokens (once), after `CLIMATE_TOKEN_PEPPER` changed, after a password change, or after "sign out everywhere". |
 | An API token stopped working | Revoked, expired, home-network-only and used from outside, or `CLIMATE_TOKEN_PEPPER` changed. Create a new one. |
 | nginx 502 | `docker compose ps app` (healthy?), the upstream port matches `APP_PORT`; in Docker, the app joined `NGINX_NETWORK`. |

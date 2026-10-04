@@ -12,7 +12,9 @@ this): a ``FakeDevice`` sits at ``address``:``port``; the controller holds what 
 mDNS description, or to the pairing data's ``AccessoryIP(s)`` / ``AccessoryPort`` before it has
 one; a description update redirects a pairing that is not connected and reconnects it at once
 (listeners get ``{}``), while a pairing still connected to an address the device left only
-fails when its next request times out. ``FakeMdns`` stands in for zeroconf: a browser signal
+fails when its next request times out. A ``stalled`` pairing is one whose reconnect loop is busy
+trying an address the device left: an update cannot cut that short, and its requests time out
+waiting for the connection. ``FakeMdns`` stands in for zeroconf: a browser signal
 fired on announcements / goodbyes, and ``async_send`` that records queries and lets devices that
 ``answers`` announce themselves in reply.
 
@@ -241,6 +243,9 @@ class FakePairing:
         self.connection = self  # aiohomekit: pairing.connection.connected_host
         self.connects: list[tuple[list[str], int]] = []  # (hosts, port) of every connection attempt
         self.timeouts = 0  # requests lost on a connection to an address the device had left
+        # aiohomekit's reconnect loop is mid-attempt at an address the device left, then backs off
+        # (up to 60 s): reconnect_soon() is a no-op meanwhile, and requests time out waiting
+        self.stalled = False
 
     @property
     def hosts(self) -> list[str]:
@@ -270,7 +275,7 @@ class FakePairing:
         """aiohomekit IpPairing: new mDNS data; reconnect_soon() when not connected, and
         connection_made() tells the listeners with an empty event."""
         self.description = description
-        if self.shut_down or self.is_connected:
+        if self.shut_down or self.is_connected or self.stalled:
             return
         if self._connect():
             self.push({})
@@ -285,6 +290,8 @@ class FakePairing:
                 raise self.fail_always
             if self.fail_next:
                 raise self.fail_next.pop(0)
+            if self.stalled:
+                raise AccessoryDisconnectedError(f"Timeout while waiting for connection to device {self.hosts}")
             dev = self.device
             if self.connected_host is not None and (self.connected_host != dev.address or not dev.reachable):
                 self.connected_host = None  # the device left that address: the request times out

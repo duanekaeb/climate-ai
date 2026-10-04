@@ -441,3 +441,75 @@ def test_reauth_from_the_internet_honours_the_pause(fresh_db, monkeypatch):
                         json={"current_password": OWNER_PASSWORD, "new_password": NEW_PASSWORD})
         assert r.status_code == 429 and code(r) == "LOGIN_PAUSED"
         assert abroad.get("/api/status").status_code == 200  # still signed in
+
+
+# --- the refresh cookie's Secure flag follows the request -----------------------------------
+
+
+HOME_ADDR = ("127.0.0.1", 50000)  # conftest.LOCAL_ADDR: a private (home network) caller
+
+
+@contextmanager
+def client_at(base_url: str, addr: tuple[str, int] = HOME_ADDR) -> Iterator:
+    """A TestClient that calls ``base_url`` (http:// or https://) from ``addr``."""
+    from fastapi.testclient import TestClient
+
+    from climate.api.app import create_app
+
+    with TestClient(create_app(), base_url=base_url, client=addr) as c:
+        yield c
+
+
+def _secure_flags(r) -> tuple[bool, bool]:
+    """(Secure on the refresh cookie set or cleared by ``r``, the cookie was cleared)."""
+    morsel = set_cookie_header(r)[COOKIE]
+    return bool(morsel["secure"]), morsel.value == "" or morsel["max-age"] == "0"
+
+
+@pytest.mark.parametrize("setting", [False, True])
+def test_https_requests_get_a_secure_cookie_and_logout_clears_it_the_same_way(fresh_db, monkeypatch, setting):
+    monkeypatch.setattr(get_settings(), "cookie_secure", setting)
+    with client_at("https://climate.local") as c:
+        assert _secure_flags(c.post("/api/auth/setup", json={"password": OWNER_PASSWORD})) == (True, False)
+        assert _secure_flags(c.post("/api/auth/refresh")) == (True, False)  # the cookie came back over https
+        assert _secure_flags(c.post("/api/auth/logout")) == (True, True)
+
+
+def test_plain_http_from_home_keeps_sign_in_even_with_cookie_secure_on(fresh_db, monkeypatch):
+    """CLIMATE_COOKIE_SECURE=true (the public setup) must not break the private ways in over
+    plain http (LAN, Tailscale, an SSH tunnel): a browser would drop a Secure cookie there."""
+    monkeypatch.setattr(get_settings(), "cookie_secure", True)
+    for addr in (HOME_ADDR, ("192.168.1.30", 50000), ("100.101.102.103", 50000)):
+        with client_at("http://192.168.1.20:8470", addr=addr) as c:
+            sign_in(c)
+            assert _secure_flags(c.post("/api/auth/refresh")) == (False, False), addr
+            assert _secure_flags(c.post("/api/auth/logout")) == (False, True), addr
+
+
+def test_plain_http_from_the_internet_stays_secure_with_cookie_secure_on(fresh_db, monkeypatch):
+    """CLIMATE_COOKIE_SECURE still forces Secure for internet callers, also when uvicorn does not
+    trust the proxy (http scheme) and the visitor only shows up in CF-Connecting-IP."""
+    monkeypatch.setattr(get_settings(), "cookie_secure", True)
+    with make_client() as home:
+        sign_in(home)
+    with client_at("http://climate.example", addr=PUBLIC_ADDR) as c:
+        assert _secure_flags(c.post("/api/auth/login", json={"password": OWNER_PASSWORD})) == (True, False)
+        assert _secure_flags(c.post("/api/auth/logout")) == (True, True)
+    with client_at("http://climate.example", addr=("172.20.0.5", 50000)) as c:
+        cf = {"CF-Connecting-IP": "203.0.113.9"}
+        assert _secure_flags(c.post("/api/auth/login", json={"password": OWNER_PASSWORD}, headers=cf)) == (True, False)
+        assert _secure_flags(c.post("/api/auth/logout", headers=cf)) == (True, True)
+
+
+def test_an_untrusted_https_proxy_header_still_marks_the_cookie_secure(fresh_db, monkeypatch):
+    """A TLS proxy that uvicorn does not trust (FORWARDED_ALLOW_IPS wrong) leaves the scheme at
+    http; its X-Forwarded-Proto: https still keeps the cookie Secure. Plain http stays plain."""
+    monkeypatch.setattr(get_settings(), "cookie_secure", False)
+    with client_at("http://climate.local") as c:
+        sign_in(c)
+        tls = {"X-Forwarded-Proto": "https"}
+        assert _secure_flags(c.post("/api/auth/refresh", headers=tls)) == (True, False)
+        assert _secure_flags(c.post("/api/auth/logout", headers=tls)) == (True, True)
+    with client_at("http://climate.local") as c:
+        sign_in(c)
+        assert _secure_flags(c.post("/api/auth/refresh", headers={"X-Forwarded-Proto": "http"})) == (False, False)

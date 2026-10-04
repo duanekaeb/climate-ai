@@ -150,8 +150,8 @@ elif [ "$(env_get CLIMATE_COOKIE_SECURE)" = "true" ]; then
   case "$(env_get CLIMATE_PUBLIC_URL)" in
     https://*) ;;
     *)
-      note "CLIMATE_COOKIE_SECURE=true: sign-in needs HTTPS (or Chrome/Firefox on localhost). For"
-      note "plain http in Safari or from a phone, set it to false in .env and run this again."
+      note "CLIMATE_COOKIE_SECURE=true: the sign-in cookie is Secure for internet visitors; plain"
+      note "http from your home network or Tailscale still signs in."
       ;;
   esac
 fi
@@ -160,10 +160,10 @@ if [ "$LAN" -eq 1 ]; then
   env_set APP_BIND 0.0.0.0
   case "$(env_get CLIMATE_PUBLIC_URL)" in
     https://*)
-      # Served over HTTPS as well: keep the cookie Secure (make doctor insists) and use the
-      # https name at home too.
+      # Served over HTTPS as well: keep the cookie Secure (make doctor insists). Plain http
+      # from a home or Tailscale address still gets a cookie the browser keeps.
       if [ "$(env_get CLIMATE_COOKIE_SECURE)" != "false" ]; then
-        warn "CLIMATE_PUBLIC_URL is https, so CLIMATE_COOKIE_SECURE stays true: sign in through the https name at home too (plain-http sign-in will not stick)"
+        note "CLIMATE_PUBLIC_URL is https, so CLIMATE_COOKIE_SECURE stays true (plain http at home still signs in)"
       fi
       ;;
     *)

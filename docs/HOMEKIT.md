@@ -106,6 +106,13 @@ before the connection closes.
 - If no code appears on the screen, open the thermostat's HomeKit menu and look there
   (**unverified** path; search summaries mention Main Menu > Settings > HomeKit).
 - Wrong code: start again. The thermostat shows a new code for every attempt.
+- If the thermostat does not answer within 30 seconds, pairing stops with "The thermostat did
+  not answer at ...". The address the network last announced for it is probably out of date (it
+  moved to a new address or lost power without saying so). Check it is on, wait a minute, then
+  try again. The rest of the service (polls, queued writes) waits about 30 seconds (up to a minute if the
+  thermostat had not been heard since a restart).
+  Pairing also refuses a thermostat the network has just reported gone, until it shows online
+  again.
 - `BusyError` / `MaxTriesError`: wait a few minutes, or reset HomeKit on the thermostat.
 
 **From the shell (fallback).** Same result, same encrypted storage, run on the server:
@@ -229,7 +236,7 @@ service follows it on its own, normally within a few seconds and without a resta
 
 | What happened | What the service does | Readings back |
 |---|---|---|
-| The thermostat got a new lease and announced it (the usual case: it rejoined Wi-Fi after a reboot, a power cut or a router restart) | The announcement updates that device id's record; the connection is retried at the new address straight away and the thermostat is polled | within a few seconds |
+| The thermostat got a new lease and announced it (the usual case: it rejoined Wi-Fi after a reboot, a power cut or a router restart) | The announcement updates that device id's record; the connection is retried at the new address straight away and the thermostat is polled. If the library is still busy trying the old address when the announcement arrives, the service replaces the connection rather than wait for the library's next retry (up to 60 s) | within a few seconds |
 | ...and the old connection still looked open | Notices it is still talking to the old address and replaces the connection, instead of waiting for a request to time out (30 s) | within a few seconds |
 | The announcement was lost (multicast dropped somewhere) | The next poll fails (polls run every 60 s; a connection attempt gives up after 10 s). The service then asks the network where that device id is (an mDNS query, at once, again after 5, 15, 30, 60 and 120 s, then every 5 minutes while it keeps failing); the thermostat answers with its new address | about 1 to 2 minutes |
 | The address changed while the service was stopped | At start the browser asks for every HomeKit device; the pairing is loaded at the address the thermostat answers with | a few seconds after start |

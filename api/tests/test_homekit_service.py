@@ -13,7 +13,7 @@ import pytest
 
 pytest.importorskip("aiohomekit")
 
-from aiohomekit.exceptions import AuthenticationError
+from aiohomekit.exceptions import AccessoryDisconnectedError, AuthenticationError
 from sqlalchemy import select, update
 
 from climate import notify
@@ -26,7 +26,14 @@ from climate.store import secrets
 from climate.store.app_settings import SourceSettings, get_heartbeat, put_setting
 from climate.store.db import session_scope
 from climate.store.orm import ControlAction, HomekitDevice, LiveUnit, SecretRow, Sensor, Unit
-from tests.test_homekit_fakes import SECRET_LTSK, FakeController, FakeDevice, disconnected
+from tests.test_homekit_fakes import (
+    SECRET_LTSK,
+    FakeController,
+    FakeDevice,
+    FakeDiscovery,
+    FakePairing,
+    disconnected,
+)
 
 BIG_AID = 4295608971
 
@@ -168,6 +175,27 @@ async def test_already_paired_thermostat_explains_disconnect(env):
     assert row.pairing_state == "failed" and "Disconnect from HomeKit" in (row.pairing_error or "")
 
 
+async def test_a_thermostat_that_never_answers_pair_setup_does_not_freeze_the_service(env, tmp_path, monkeypatch):
+    db, dev = env["db"], env["dev"]
+    bridge = hk.HomekitBridge(tmp_path / "hk2", controller_factory=lambda _p: env["ctl"], pair_start_timeout=0.05)
+    svc = HomekitService(bridge, clock=env["clock"])
+    started: list[FakeDiscovery] = []
+
+    async def never_answers(self: FakeDiscovery, alias: str) -> None:
+        started.append(self)  # aiohomekit retrying an address the thermostat has left, forever
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(FakeDiscovery, "async_start_pairing", never_answers)
+    add_device(db, dev, "requested")
+    await bridge.start()
+    await asyncio.wait_for(svc.process_pairing(), timeout=5)
+    row = device_row(db, dev.id)
+    assert row.pairing_state == "failed"
+    assert "did not answer at 192.168.1.50:51826" in row.pairing_error and "try again" in row.pairing_error
+    assert started and started[0].closed  # the pairing-time connection is closed, its retries stop
+    assert not bridge.has_pending(dev.id)
+
+
 async def test_code_without_a_session_and_timeouts_fail(env):
     db, dev, svc = env["db"], env["dev"], env["svc"]
     add_device(db, dev, "code_submitted", code="123-45-678")
@@ -286,6 +314,32 @@ async def test_three_failed_polls_mark_the_device_offline(env):
     env["ctl"].aliases["hallway"].fail_always = None
     await svc.poll_due()
     assert device_row(db, env["dev"].id).online is True
+
+
+async def test_a_thermostat_that_drops_the_inventory_request_keeps_the_60_s_back_off(env, monkeypatch):
+    dev, svc, clock = env["dev"], env["svc"], env["clock"]
+    dev.paired, dev.status_flags = True, 0
+    with session_scope() as s:
+        save_pairing(s, dev.id, "hallway", "main", dev.pairing_data(), None, clock())
+    attempts: list[datetime] = []
+
+    async def connects_then_drops(self: FakePairing) -> list:
+        attempts.append(clock())
+        self.push({})  # pair-verify worked: aiohomekit tells the listeners it is connected
+        asyncio.get_running_loop().call_soon(self.push, {})  # and reconnects at once after the drop
+        raise AccessoryDisconnectedError("Connection closed")
+
+    monkeypatch.setattr(FakePairing, "list_accessories_and_characteristics", connects_then_drops)
+    await env["bridge"].start()
+    for _ in range(10):  # 20 s of 2 s ticks
+        await svc.step()
+        await asyncio.sleep(0)
+        clock.advance(2)
+    assert len(attempts) == 1, "a reconnect alone must not bring the inventory retry forward"
+    clock.advance(41)  # 61 s after the failed attempt
+    await svc.step()
+    assert len(attempts) == 2
+    assert not svc._states["hallway"].ready
 
 
 async def test_pairing_removed_on_device_asks_for_re_pair(env):

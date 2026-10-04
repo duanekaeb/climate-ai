@@ -839,6 +839,8 @@ class _AliasState:
     ready: bool = False  # inventory stored, aids mapped, subscribed
     next_poll: datetime | None = None  # None = due now
     next_inventory: datetime | None = None
+    # where the device was (bridge.endpoint) when the inventory last failed
+    failed_endpoint: tuple[str | None, int | None] | None = None
     repair_alerted: bool = False
 
 
@@ -986,9 +988,9 @@ class HomekitService:
     # --- discovery --------------------------------------------------------------------
 
     async def sync_discovery(self) -> None:
-        """Store what mDNS shows now (``upsert_discovered``). A pairing still connected to an
-        address its thermostat has left (``bridge.is_moved``) is polled at once: ``poll_due``
-        replaces its connection with one to the new address."""
+        """Store what mDNS shows now (``upsert_discovered``). A pairing not yet connected to the
+        new address its thermostat announced (``bridge.is_moved``) is polled at once:
+        ``poll_due`` replaces its connection with one to the new address."""
         devices = await self.bridge.discover()
         loaded = {self.bridge.device_id(a) for a in self.bridge.aliases()}
         await self._db(upsert_discovered, devices, loaded, self.clock())
@@ -1136,10 +1138,16 @@ class HomekitService:
         if self.bridge.take_config_changed(alias):
             log.info("homekit %r: accessory configuration changed; re-reading the inventory", alias)
             st.ready = False
-        if not st.ready and alias in self._reconnected:
-            # (re)connected after the inventory failed (e.g. it was found at a new address)
-            self._reconnected.discard(alias)
-            st.next_inventory = None
+        if not st.ready:
+            self._reconnected.discard(alias)  # a reconnect alone is no reason to retry the inventory
+            if self.bridge.take_moved(alias):
+                address, port = self.bridge.endpoint(alias)
+                await self.bridge.recreate(alias, f"to follow it to {address}:{port}")
+            if st.failed_endpoint is not None and self.bridge.endpoint(alias) != st.failed_endpoint:
+                # found at a new address since the inventory failed: retry there now. Only then:
+                # a thermostat that accepts the connection but drops it on /accessories
+                # reconnects after every attempt, and the 60 s back-off must hold for it.
+                st.next_inventory = None
         if not st.ready and (st.next_inventory is None or now >= st.next_inventory):
             await self._prepare(st, now)
 
@@ -1148,6 +1156,7 @@ class HomekitService:
             inventory = await self.bridge.inventory(st.alias)
         except HomekitError as exc:
             st.next_inventory = now + timedelta(seconds=self.poll_s)
+            st.failed_endpoint = self.bridge.endpoint(st.alias)
             log.info("homekit %r: inventory failed: %s", st.alias, exc)
             res = ReadResult(st.alias, ok=False, available=self.bridge.is_available(st.alias),
                              needs_repair=self.bridge.needs_repair(st.alias), error=str(exc))
@@ -1162,6 +1171,7 @@ class HomekitService:
             pushed = 0
         st.ready = True
         st.next_inventory = None
+        st.failed_endpoint = None
         st.next_poll = None  # poll right away: /accessories values can be stale
         log.info("homekit %r: %d accessories, %d mapped sensors, %d push characteristics",
                  st.alias, len(inventory), len(st.aid_map), pushed)

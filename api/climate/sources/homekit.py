@@ -69,6 +69,11 @@ CODE_RE = re.compile(r"^\d{3}-\d{2}-\d{3}$")
 MAX_BATCH = 49  # characteristics per GET (Home Assistant's limit)
 FAILS_UNTIL_UNAVAILABLE = 3
 FIND_TIMEOUT_S = 30.0
+# How long starting pair-setup may take to reach the thermostat and get its first answer.
+# aiohomekit's pairing-time connection retries the address of the device's last mDNS record
+# forever, so a thermostat that moved or lost power without saying goodbye would otherwise
+# hold up the whole homekit service.
+PAIR_START_TIMEOUT_S = 30.0
 THERMOSTAT_AID = 1
 STATUS_UNPAIRED = 0x01
 
@@ -197,6 +202,10 @@ ALREADY_PAIRED_MSG = (
 WRONG_CODE_MSG = "Wrong code. Start pairing again: the thermostat shows a new code for each attempt."
 BAD_CODE_FORMAT_MSG = "The code must look like 123-45-678 (8 digits with dashes)."
 NO_PENDING_MSG = "No pairing is in progress for this thermostat (it timed out or the service restarted). Start again."
+LEFT_NETWORK_MSG = (
+    "The thermostat has left the network (it is off, or it is moving to a new address). Check it is powered "
+    "and on the same LAN/VLAN as the server, wait until it shows online here again, then try again."
+)
 REPAIR_MSG = (
     "The thermostat no longer recognizes this server's HomeKit pairing (it was removed or HomeKit was "
     "reset on the device). Unpair it here, then pair again."
@@ -1014,6 +1023,7 @@ class HomekitBridge:
         zeroconf_factory: Callable[[], tuple[Any, Any]] | None = None,
         on_event: EventHook | None = None,
         find_timeout: float = FIND_TIMEOUT_S,
+        pair_start_timeout: float = PAIR_START_TIMEOUT_S,
         load_find_timeout: float = LOAD_FIND_TIMEOUT_S,
         mdns_settle: float = MDNS_SETTLE_S,
         resolve_backoff: Sequence[float] = RESOLVE_BACKOFF_S,
@@ -1027,6 +1037,7 @@ class HomekitBridge:
         self._zeroconf_factory = zeroconf_factory
         self.on_event = on_event
         self._find_timeout = find_timeout
+        self._pair_start_timeout = pair_start_timeout
         self._load_find_timeout = load_find_timeout
         self._mdns_settle = mdns_settle
         self._resolve_backoff = tuple(resolve_backoff) or RESOLVE_BACKOFF_S
@@ -1202,16 +1213,16 @@ class HomekitBridge:
         return True
 
     def _note_endpoint(self, ent: _Paired, dev: DiscoveredDevice) -> None:
-        """Follow ``ent``'s device to where mDNS now shows it. aiohomekit redirects a pairing
-        that is not connected by itself; one still connected to the old address (the thermostat
-        moved without closing the connection) would only notice when a request times out, so
-        it is marked ``moved`` and the service replaces the object (``recreate``)."""
+        """Follow ``ent``'s device to where mDNS now shows it. A pairing not connected there yet
+        is marked ``moved`` and the service replaces the object (``recreate``): one still
+        connected to the old address (the thermostat moved without closing the connection)
+        would only notice when a request times out, and aiohomekit ignores an announcement
+        that lands while it is trying the old address, then waits its back-off (up to 60 s)."""
         if not dev.address or not dev.port or (ent.address, ent.port) == (dev.address, dev.port):
             return
         was = f"{ent.address}:{ent.port}" if ent.address else "unknown"
         ent.address, ent.port = dev.address, dev.port
-        host = self._connected_host(ent)
-        if host is not None and host != dev.address:
+        if self._connected_host(ent) != dev.address:
             ent.moved = True
         log.info("homekit %r: %s is now at %s:%s (was %s)%s", ent.alias, ent.device_id, dev.address, dev.port, was,
                  "; reconnecting there" if ent.moved else "")
@@ -1235,12 +1246,13 @@ class HomekitBridge:
         return ent is not None and ent.moved
 
     def take_moved(self, alias: str) -> bool:
-        """True once when the pairing must be replaced to follow its device (see ``moved``)."""
+        """True once when the pairing must be replaced to follow its device (see ``moved``);
+        False when it has meanwhile connected to the device's current address by itself."""
         ent = self._paired.get(alias)
         if ent is None or not ent.moved:
             return False
         ent.moved = False
-        return True
+        return self._connected_host(ent) != ent.address
 
     def query_device(self, device_id: str) -> bool:
         """Ask the network (one mDNS query) where ``device_id`` is now: its instance's SRV and
@@ -1311,17 +1323,35 @@ class HomekitBridge:
         return None if p is None else time.monotonic() - p.started
 
     async def begin_pairing(self, device_id: str, alias: str) -> DiscoveredDevice:
-        """Start pair-setup (SRP M1). The thermostat now shows a fresh 8-digit code."""
+        """Start pair-setup (SRP M1). The thermostat now shows a fresh 8-digit code.
+
+        Gives up after ``pair_start_timeout`` (see ``PAIR_START_TIMEOUT_S``) and closes the
+        pairing-time connection, which also stops its retries."""
         device_id = device_id.lower()
         await self.cancel_pairing(device_id)
         if alias in self._paired:
             raise HomekitPairingError(f"The alias {alias!r} is already in use by a loaded pairing.")
+        discovery: Any = None
         try:
             discovery = await self._ctl().async_find(device_id, timeout=self._find_timeout)
             device = _discovered(discovery)
-            finish = await discovery.async_start_pairing(alias)
+            if device.service is not None and device.service.lower() in self._gone:
+                raise HomekitPairingError(LEFT_NETWORK_MSG)
+            try:
+                async with asyncio.timeout(self._pair_start_timeout):
+                    finish = await discovery.async_start_pairing(alias)
+            except TimeoutError as exc:
+                raise HomekitPairingError(
+                    f"The thermostat did not answer at {device.address}:{device.port} within "
+                    f"{self._pair_start_timeout:g} s. The address the network last announced for it may be out "
+                    "of date (it moved or lost power). Check it is on, wait a minute, then try again."
+                ) from exc
         except Exception as exc:
+            if discovery is not None:
+                await self._close_quietly(discovery)
             log.info("homekit pairing start failed for %s: %s", device_id, type(exc).__name__)
+            if isinstance(exc, HomekitPairingError):
+                raise
             raise HomekitPairingError(pairing_error_message(exc)) from exc
         self._pending[device_id] = _Pending(alias, device_id, discovery, finish, time.monotonic(), device)
         log.info("homekit pairing started for %s as %r; waiting for the code", device_id, alias)
@@ -1390,7 +1420,11 @@ class HomekitBridge:
 
     @staticmethod
     async def _close_discovery(p: _Pending) -> None:
-        close = getattr(p.discovery, "close", None)
+        await HomekitBridge._close_quietly(p.discovery)
+
+    @staticmethod
+    async def _close_quietly(discovery: Any) -> None:
+        close = getattr(discovery, "close", None)
         if close is not None:
             with contextlib.suppress(Exception):
                 await close()
@@ -1540,9 +1574,9 @@ class HomekitBridge:
     # --- events -----------------------------------------------------------------------
 
     def _on_dispatch(self, alias: str, pairing: Any, event: Mapping[tuple[int, int], Any]) -> None:
-        """aiohomekit listener (sync, on the event loop). Receives {} on every (re)connect (also
-        before the first inventory: a pairing that could not connect yet is retried at once) and
-        optimistic echoes of our own writes; only subscribed read characteristics count."""
+        """aiohomekit listener (sync, on the event loop). Receives {} on every (re)connect (passed
+        on even before the first inventory; the service ignores it there) and optimistic echoes
+        of our own writes; only subscribed read characteristics count."""
         try:
             ent = self._paired.get(alias)
             if ent is None or ent.pairing is not pairing:

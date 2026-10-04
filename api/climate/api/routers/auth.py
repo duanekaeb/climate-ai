@@ -34,7 +34,7 @@ from climate.api.schemas import (
     SetupBody,
     WsTicketOut,
 )
-from climate.api.security import AuthError
+from climate.api.security import AuthError, is_private_address
 from climate.config import get_settings
 
 router = APIRouter(tags=["auth"])
@@ -64,8 +64,23 @@ def _require_same_origin(request: Request) -> None:
         raise AuthError(http.HTTP_403_FORBIDDEN, "FORBIDDEN", "Cross-origin request refused.")
 
 
-def set_refresh_cookie(response: Response, issued: auth_service.Issued) -> None:
-    """HttpOnly, Path=/api/auth, SameSite=Lax, Secure per CLIMATE_COOKIE_SECURE."""
+def cookie_secure(request: Request) -> bool:
+    """Whether this request's cookies are ``Secure``.
+
+    Always when the request arrived over HTTPS: the scheme after uvicorn's trusted proxy
+    headers, or a proxy's ``X-Forwarded-Proto: https`` even when uvicorn does not trust that
+    proxy (the header can only add Secure, so a wrong FORWARDED_ALLOW_IPS never removes it).
+    CLIMATE_COOKIE_SECURE forces it on for everyone else too, except plain http from a private
+    address (home network, Tailscale, an SSH tunnel): a browser drops a Secure cookie sent to a
+    plain-http page, so that sign-in would end with the 15-minute access token."""
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    if request.url.scheme == "https" or forwarded == "https":
+        return True
+    return get_settings().cookie_secure and not is_private_address(auth.client_ip(request))
+
+
+def set_refresh_cookie(request: Request, response: Response, issued: auth_service.Issued) -> None:
+    """HttpOnly, Path=/api/auth, SameSite=Lax, Secure per ``cookie_secure``."""
     response.set_cookie(
         auth_service.REFRESH_COOKIE,
         issued.refresh_token,
@@ -73,7 +88,7 @@ def set_refresh_cookie(response: Response, issued: auth_service.Issued) -> None:
         path=auth_service.REFRESH_COOKIE_PATH,
         httponly=True,
         samesite="lax",
-        secure=get_settings().cookie_secure,
+        secure=cookie_secure(request),
     )
 
 
@@ -81,16 +96,17 @@ def forget_legacy_cookie(request: Request, response: Response) -> None:
     """Expire the old ``climate_session`` cookie (Path=/) a browser may still hold from before
     the upgrade. It grants nothing any more; this only tidies the browser's jar."""
     if LEGACY_COOKIE in request.cookies:
-        response.delete_cookie(LEGACY_COOKIE, path="/", httponly=True, samesite="lax", secure=get_settings().cookie_secure)
+        response.delete_cookie(LEGACY_COOKIE, path="/", httponly=True, samesite="lax", secure=cookie_secure(request))
 
 
-def clear_refresh_cookie(response: Response) -> None:
+def clear_refresh_cookie(request: Request, response: Response) -> None:
+    """Expire the refresh cookie with the attributes ``set_refresh_cookie`` gave it."""
     response.delete_cookie(
         auth_service.REFRESH_COOKIE,
         path=auth_service.REFRESH_COOKIE_PATH,
         httponly=True,
         samesite="lax",
-        secure=get_settings().cookie_secure,
+        secure=cookie_secure(request),
     )
 
 
@@ -109,12 +125,12 @@ def _me(principal: Principal) -> MeOut:
     )
 
 
-def _error_response(err: AuthError, *, clear_cookie: bool) -> JSONResponse:
+def _error_response(request: Request, err: AuthError, *, clear_cookie: bool) -> JSONResponse:
     """An AuthError as a response that can still carry Set-Cookie (an exception would drop it)."""
     headers = {"WWW-Authenticate": "Bearer"} if err.status == http.HTTP_401_UNAUTHORIZED else None
     resp = JSONResponse({"detail": {"code": err.code, "message": err.message}}, status_code=err.status, headers=headers)
     if clear_cookie:
-        clear_refresh_cookie(resp)
+        clear_refresh_cookie(request, resp)
     return resp
 
 
@@ -149,7 +165,7 @@ def setup(body: SetupBody, request: Request, response: Response) -> AccessTokenO
     issued = auth_service.setup(
         body.password, ip=auth.client_ip(request), user_agent=_user_agent(request), device_name=body.device_name
     )
-    set_refresh_cookie(response, issued)
+    set_refresh_cookie(request, response, issued)
     forget_legacy_cookie(request, response)
     return _token_out(issued)
 
@@ -161,7 +177,7 @@ def login(body: LoginBody, request: Request, response: Response) -> AccessTokenO
     issued = auth_service.login(
         body.password, ip=auth.client_ip(request), user_agent=_user_agent(request), device_name=body.device_name
     )
-    set_refresh_cookie(response, issued)
+    set_refresh_cookie(request, response, issued)
     forget_legacy_cookie(request, response)
     return _token_out(issued)
 
@@ -176,10 +192,10 @@ def refresh(request: Request, response: Response):
             request.cookies.get(auth_service.REFRESH_COOKIE), ip=auth.client_ip(request), user_agent=_user_agent(request)
         )
     except AuthError as err:
-        resp = _error_response(err, clear_cookie=err.status == http.HTTP_401_UNAUTHORIZED)
+        resp = _error_response(request, err, clear_cookie=err.status == http.HTTP_401_UNAUTHORIZED)
         forget_legacy_cookie(request, resp)
         return resp
-    set_refresh_cookie(response, issued)
+    set_refresh_cookie(request, response, issued)
     forget_legacy_cookie(request, response)
     return _token_out(issued)
 
@@ -196,7 +212,7 @@ def logout(request: Request) -> Response:
         ip=auth.client_ip(request),
     )
     resp = Response(status_code=http.HTTP_204_NO_CONTENT)
-    clear_refresh_cookie(resp)
+    clear_refresh_cookie(request, resp)
     forget_legacy_cookie(request, resp)
     return resp
 
@@ -264,5 +280,5 @@ def logout_all(request: Request, principal: Principal = OwnerCallerDep) -> Respo
     """Sign out every device, this one included, and clear this device's cookie."""
     auth_service.logout_all(principal, ip=auth.client_ip(request))
     resp = Response(status_code=http.HTTP_204_NO_CONTENT)
-    clear_refresh_cookie(resp)
+    clear_refresh_cookie(request, resp)
     return resp

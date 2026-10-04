@@ -1,0 +1,73 @@
+{
+ "description": "Tunable policy. Defaults are the blueprint's starting values.",
+ "properties": {
+  "bed_wing_independent": {
+   "default": true,
+   "type": "boolean"
+  },
+  "linked_floors_enabled": {
+   "default": true,
+   "type": "boolean"
+  },
+  "linked_heat_gap_f": {
+   "default": 2,
+   "maximum": 6,
+   "minimum": 0,
+   "type": "number"
+  },
+  "linked_offset_f": {
+   "default": 1,
+   "maximum": 4,
+   "minimum": 0,
+   "type": "number"
+  },
+  "precool_degrees_f": {
+   "default": 1,
+   "maximum": 3,
+   "minimum": 0,
+   "type": "number"
+  },
+  "precool_enabled": {
+   "default": false,
+   "type": "boolean"
+  },
+  "precool_min_forecast_high_f": {
+   "default": 90,
+   "maximum": 115,
+   "minimum": 70,
+   "type": "number"
+  },
+  "precool_start_hour": {
+   "default": 13,
+   "maximum": 18,
+   "minimum": 8,
+   "type": "integer"
+  },
+  "recovery_lead_min": {
+   "default": 20,
+   "maximum": 60,
+   "minimum": 0,
+   "type": "integer"
+  },
+  "setback_gap_f": {
+   "default": 2,
+   "maximum": 4,
+   "minimum": 0,
+   "type": "number"
+  }
+ },
+ "required": [
+  "bed_wing_independent",
+  "linked_floors_enabled",
+  "linked_heat_gap_f",
+  "linked_offset_f",
+  "precool_degrees_f",
+  "precool_enabled",
+  "precool_min_forecast_high_f",
+  "precool_start_hour",
+  "recovery_lead_min",
+  "setback_gap_f"
+ ],
+ "title": "PolicyParams",
+ "type": "object"
+}

@@ -1,7 +1,10 @@
 // Plain-language labels for the tunable policy (PolicyParams). Bounds and types come from
-// the backend's JSON Schema (src/api/schema.json, generated with types.ts) so the inputs
-// here can never drift from the validation the API applies.
-import schema from '@/api/schema.json'
+// the backend's JSON Schema so the inputs here can never drift from the validation the API
+// applies. Only the PolicyParams definition is imported (policyParams.schema.json, a copy of
+// $defs.PolicyParams in src/api/schema.json, written by `npm run gen:types` and checked by
+// api/tests/test_web_policy_schema.py): the whole schema.json would ship every API request and
+// response shape in the public bundle.
+import policyParamsSchema from './policyParams.schema.json'
 import type { PolicyParams } from '@/api/types'
 
 export type PolicyKey = keyof PolicyParams
@@ -15,7 +18,7 @@ interface JsonProp {
   default?: number | boolean
 }
 
-const PROPS: Record<string, JsonProp> = schema.$defs.PolicyParams.properties
+const PROPS: Record<string, JsonProp> = policyParamsSchema.properties
 
 export interface ParamMeta {
   key: PolicyKey

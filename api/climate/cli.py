@@ -403,7 +403,8 @@ def _cookie_check(cfg: Any) -> Check:
         return Check("cookies", "fail", "CLIMATE_PUBLIC_URL is https but CLIMATE_COOKIE_SECURE=false; set it to true so the "
                                         "sign-in cookie never travels over plain http")
     if cfg.cookie_secure:
-        return Check("cookies", "ok", "Secure (sign-in needs HTTPS)")
+        return Check("cookies", "ok", "Secure over HTTPS and for internet visitors; plain http at home or over "
+                                      "Tailscale still signs in")
     return Check("cookies", "ok", "not Secure: fine for plain http at home; set CLIMATE_COOKIE_SECURE=true behind HTTPS")
 
 

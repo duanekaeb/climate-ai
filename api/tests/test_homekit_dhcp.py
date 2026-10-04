@@ -129,7 +129,8 @@ async def real_bridge(tmp_path):
                                     char_cache=CharacteristicCacheMemory())
         return ctl_box["ctl"]
 
-    bridge = hk.HomekitBridge(tmp_path / "hk", controller_factory=factory, load_find_timeout=0.05)
+    bridge = hk.HomekitBridge(tmp_path / "hk", controller_factory=factory, load_find_timeout=0.05,
+                              pair_start_timeout=0.3)
     await bridge.start()
     yield bridge, ctl_box["ctl"]
     await bridge.stop()
@@ -158,6 +159,21 @@ async def test_bridge_without_an_mdns_record_uses_the_last_sighting_then_the_pai
     # and the first mDNS record for the device id still redirects it
     ctl.transports[TransportType.IP]._async_handle_loaded_service_info(hap_record("192.168.1.99"))
     await wait_for(lambda: connects and connects[-1] == (["192.168.1.99"], 51826))
+
+
+async def test_pair_setup_at_a_stale_mdns_address_gives_up_and_stops_retrying(real_bridge, connects):
+    bridge, ctl = real_bridge
+    # mDNS still holds a record of an address the thermostat has left (it moved and the
+    # announcement was lost, or it lost power without a goodbye): nothing answers there, and
+    # aiohomekit's pairing-time connection would retry it forever
+    ctl.transports[TransportType.IP]._async_handle_loaded_service_info(hap_record(OLD))
+    with pytest.raises(hk.HomekitPairingError, match=r"did not answer at 192\.168\.1\.50:51826 within 0\.3 s"):
+        await asyncio.wait_for(bridge.begin_pairing(DEVICE_ID, "hallway"), timeout=5)
+    assert connects and all(c == ([OLD], 51826) for c in connects)
+    assert not bridge.has_pending(DEVICE_ID)
+    tried = len(connects)
+    await asyncio.sleep(1.0)  # its next retry was due 0.75 s after the first attempt
+    assert len(connects) == tried, "the pairing-time connection must be closed, not left retrying"
 
 
 # --- 3. the service, the database and a thermostat that moves ---------------------------
@@ -210,7 +226,7 @@ async def test_an_announced_new_address_reconnects_at_once_and_setup_follows(dhc
     assert dhcp.readings, "readings resume at once, without waiting for the next poll"
     row = device_row(dhcp.db, dhcp.dev.id)
     assert (row.address, row.port, row.online, row.pairing_error) == (NEW, 51826, True, None)
-    assert dhcp.ctl.aliases["hallway"] is pairing  # nothing to replace: it was not connected
+    assert dhcp.ctl.aliases["hallway"] is pairing  # nothing to replace: aiohomekit already reconnected it there
     assert dhcp.ctl.mdns.sent == []  # heard the announcement: no need to ask
 
 
@@ -230,6 +246,28 @@ async def test_a_connection_left_on_the_old_address_is_replaced_without_a_timeou
     assert dhcp.readings
     assert device_row(dhcp.db, dhcp.dev.id).address == NEW
     assert dhcp.bridge.endpoint("hallway") == (NEW, 51826)
+
+
+async def test_an_announcement_during_a_connection_attempt_is_followed_at_once(dhcp):
+    old = await paired(dhcp)
+    dhcp.dev.answers = False
+    dhcp.ctl.move(dhcp.dev, NEW, announce=False)  # rebooted onto a new lease, not heard yet
+    dhcp.clock.advance(61)
+    await dhcp.svc.poll_due()  # fails: nothing answers at the old address any more
+    assert dhcp.readings == []
+    # aiohomekit is now busy trying the old address: an announcement cannot cut that attempt
+    # short, and the library would wait its back-off (up to 60 s) before trying the new one
+    old.stalled = True
+    dhcp.ctl.announce(dhcp.dev)
+    assert old.connected_host is None
+
+    await dhcp.svc.step()  # no clock advance: well before the next 60 s poll
+    new = dhcp.ctl.aliases["hallway"]
+    assert new is not old and old.shut_down
+    assert new.connected_host == NEW
+    assert dhcp.readings, "readings resume at once, without waiting for the library's back-off"
+    row = device_row(dhcp.db, dhcp.dev.id)
+    assert (row.address, row.online, row.pairing_error) == (NEW, True, None)
 
 
 async def test_an_unheard_move_is_found_by_asking_mdns_after_a_failure(dhcp):
@@ -267,6 +305,25 @@ async def test_started_before_mdns_answers_it_connects_as_soon_as_the_device_is_
 
     dhcp.ctl.announce(dhcp.dev)  # heard: aiohomekit reconnects there and says so
     await dhcp.svc.step()  # no clock advance: not the 60 s inventory retry
+    assert st.ready and dhcp.readings
+    assert device_row(dhcp.db, dhcp.dev.id).address == NEW
+
+
+async def test_a_first_inventory_follows_an_announcement_that_lands_during_an_attempt(dhcp):
+    with session_scope() as s:
+        save_pairing(s, dhcp.dev.id, "hallway", "main", dhcp.dev.pairing_data(), None, dhcp.clock())
+    dhcp.ctl.move(dhcp.dev, NEW, announce=False)
+    dhcp.dev.visible, dhcp.dev.answers = False, False
+    await dhcp.bridge.start()
+    await dhcp.svc.step()
+    st = dhcp.svc._states["hallway"]
+    assert not st.ready  # the inventory failed at the pairing-time address
+    old = dhcp.ctl.aliases["hallway"]
+    old.stalled = True  # and aiohomekit is busy retrying it when the announcement lands
+
+    dhcp.ctl.announce(dhcp.dev)
+    await dhcp.svc.step()  # no clock advance: not the 60 s inventory retry
+    assert dhcp.ctl.aliases["hallway"] is not old and old.shut_down
     assert st.ready and dhcp.readings
     assert device_row(dhcp.db, dhcp.dev.id).address == NEW
 
@@ -355,6 +412,22 @@ async def test_a_pairing_the_thermostat_rejects_is_not_re_resolved(tmp_path):
     assert ctl.mdns.sent == [] and bridge._paired["hallway"].resolve_task is None
     ctl.aliases["hallway"].fail_always = disconnected()
     await bridge.read("hallway")
+    await bridge.stop()
+
+
+async def test_pairing_refuses_a_thermostat_that_left_the_network(tmp_path):
+    dev = FakeDevice()  # ready to pair
+    ctl = FakeController([dev])
+    bridge = hk.HomekitBridge(tmp_path / "hk", controller_factory=lambda _p: ctl, zeroconf_factory=ctl.zeroconf)
+    await bridge.start()
+    ctl.goodbye(dev)  # aiohomekit keeps its discovery; the browser saw it leave
+    with pytest.raises(hk.HomekitPairingError, match="left the network"):
+        await bridge.begin_pairing(dev.id, "hallway")
+    assert dev.log == [] and not bridge.has_pending(dev.id)
+
+    ctl.announce(dev)  # back
+    await bridge.begin_pairing(dev.id, "hallway")
+    assert dev.log == ["start:hallway"] and bridge.has_pending(dev.id)
     await bridge.stop()
 
 

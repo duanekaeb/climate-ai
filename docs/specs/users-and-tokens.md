@@ -38,7 +38,9 @@ Patterns follow GrowWise AI's auth (`growwise-ai/apps/api/app/core/security.py`,
   `"climate-ai"`. JSON only; the web keeps it in memory. Every request re-checks the session row
   (revoked/expired → 401 `SESSION_REVOKED`), so sign-out and password changes take effect at once.
 - **Refresh token:** `"<session id hex>.<secret>"` in cookie `climate_refresh`: HttpOnly,
-  `Path=/api/auth`, `SameSite=Lax`, `Secure=CLIMATE_COOKIE_SECURE`. Rotates on every refresh;
+  `Path=/api/auth`, `SameSite=Lax`; `Secure` on every HTTPS request, and on every other request
+  when `CLIMATE_COOKIE_SECURE` is on except plain http from a private address (home, Tailscale),
+  so that sign-in still sticks. Rotates on every refresh;
   every retired secret is kept (hashed, last 100); presenting one again revokes the session
   family (`auth.refresh_reuse`), except the immediate previous one within a 60 s grace (two
   tabs racing). A token matching no hash is `NOT_AUTHENTICATED` and revokes nothing.

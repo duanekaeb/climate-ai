@@ -63,8 +63,14 @@ Then `docker compose up -d` (or `make update`). `docker network inspect apprelay
 should now list `climate-ai-app-1`. `make doctor` checks the secrets and flags an https
 `CLIMATE_PUBLIC_URL` with `CLIMATE_COOKIE_SECURE` still false.
 
+`CLIMATE_COOKIE_SECURE=true` makes the refresh cookie `Secure` for every visitor from an
+internet address. A request that arrives over HTTPS gets a `Secure` cookie whatever the setting
+says. Plain http from a private address (your home network, Tailscale, an SSH tunnel) gets the
+cookie without `Secure`, because a browser would refuse a `Secure` cookie there and the sign-in
+would end after 15 minutes; so the private ways in keep working.
+
 **Why the subnet and not the nginx container's IP** is in
-[The one setting that can undo all of this](#the-one-setting-that-can-undo-all-of-this) below.
+[The client address behind the gateway](#the-client-address-behind-the-gateway) below.
 
 ### 4. Apply the gateway on the box
 
@@ -99,11 +105,29 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://climate.apprelay.net/  # 301 (t
 curl -sS -o /dev/null -w '%{http_code}\n' https://climate.apprelay.net/api/docs   # 404
 ```
 
-Then the check that matters most: on your phone, **turn Wi-Fi off**, open
+Then two checks of the client address. First, on your phone, **turn Wi-Fi off**, open
 `https://climate.apprelay.net`, sign in, and look at **More > Security > Signed-in devices**.
-This phone must show your carrier's public address. If it shows a `172.x`, `10.x` or
-`192.168.x` address, the app is treating internet visitors as home: take the name offline
-([below](#taking-it-offline-in-a-hurry)) and fix `FORWARDED_ALLOW_IPS`.
+This phone must show your carrier's public address. The app reads it from `CF-Connecting-IP`,
+the header Cloudflare adds to every request, so this confirms that the header reaches the app.
+If it shows a `172.x`, `10.x` or `192.168.x` address, the app is treating internet visitors as
+home. That only happens when `CF-Connecting-IP` is missing **and** `FORWARDED_ALLOW_IPS` is
+wrong too: take the name offline ([below](#taking-it-offline-in-a-hurry)), find what drops the
+header between Cloudflare and the app, and run the log check below.
+
+That first check passes even when `FORWARDED_ALLOW_IPS` is wrong, so check that one separately.
+On the box, in Climate's folder:
+
+```bash
+curl -4 -s https://climate.apprelay.net/cdn-cgi/trace | grep '^ip='   # you, as Cloudflare sees you
+curl -4 -s -o /dev/null 'https://climate.apprelay.net/api/health?fwd-check'
+docker compose logs --since 5m app | grep fwd-check
+```
+
+The log line must show the same address as `ip=`: uvicorn took it from the gateway's
+`X-Forwarded-For`. If it shows a `172.x` or `10.x` address instead (the gateway's own), uvicorn
+does not trust the gateway: fix `FORWARDED_ALLOW_IPS` (step 3) and `docker compose up -d`.
+[The client address behind the gateway](#the-client-address-behind-the-gateway) explains what
+that does and does not break.
 
 ### 7. The iPhone app
 
@@ -135,16 +159,30 @@ through. Keep `agent` tokens home-only: the agent and MCP server run on the box.
 | **The house stays safe whoever is signed in** | Every thermostat write still goes through the hard limits in code (setpoint range, rate of change, timed holds only). If the server dies, the holds expire and each ecobee runs its own schedule. |
 | **You can see what happened** | More > Security > Recent activity: sign-ins, failures, pauses, password, device and token changes. No passwords or tokens in it. |
 
-## The one setting that can undo all of this
+## The client address behind the gateway
 
 The app decides who is "at home" (first-run setup, home-only tokens, the service tokens, which
-failures count toward the internet pause) from the client address. Behind the gateway that
-address arrives in `X-Forwarded-For`, and uvicorn believes that header only from
-`FORWARDED_ALLOW_IPS`.
+failures count toward the internet pause) from the client address.
 
-If nginx's address is **not** covered, uvicorn ignores the header and the app sees every
-visitor as nginx itself: a private Docker address, so **the whole internet counts as home**.
-That fails open, silently. Hence:
+Behind the gateway that decision does not depend on `FORWARDED_ALLOW_IPS`. Cloudflare adds
+`CF-Connecting-IP` (the visitor's real address; a visitor cannot set it) to every request, the
+gateway passes it on, and the app reads it before anything else. A request that carries it
+always counts as the internet. So here a wrong `FORWARDED_ALLOW_IPS` fails closed: nobody on
+the internet becomes "home".
+
+`FORWARDED_ALLOW_IPS` still matters. uvicorn believes the gateway's `X-Forwarded-For` and
+`X-Forwarded-Proto` only from addresses it covers:
+
+- **Behind the gateway**, an uncovered nginx makes the app's own log lines show the gateway's
+  address for every visitor, and the app sees the request as plain http. Sign-in decisions are
+  unaffected, and the refresh cookie stays `Secure` (the gateway's `X-Forwarded-Proto: https`
+  and `CLIMATE_COOKIE_SECURE=true` each keep it on). Step 6's log check is how you notice.
+- **On any path in without Cloudflare** (a host nginx or a LAN nginx,
+  [DEPLOY.md](DEPLOY.md) section 6) there is no `CF-Connecting-IP`, only `X-Forwarded-For`.
+  There an uncovered proxy makes every visitor look like the proxy itself, a private address,
+  so **the whole internet counts as home**. That fails open, silently.
+
+Hence:
 
 - **Use the `apprelay_gateway` subnet**, not the nginx container's IP. The network outlives
   every container on it; the container's IP changes whenever it is recreated (an image update,
@@ -157,7 +195,7 @@ That fails open, silently. Hence:
   can reach `climate-ai-app:8000` directly anyway, and connecting directly from a Docker
   address already counts as home. The trust boundary is the box: keep only software you run
   yourself on that network.
-- Re-check the signed-in devices list (step 6) after any change to the gateway or this setting.
+- Re-run both checks in step 6 after any change to the gateway or this setting.
 
 ## Home vs. the public name
 
@@ -166,6 +204,10 @@ back, so the app sees your home's **public** address: the internet sign-in pause
 home-only tokens are refused on that name. "Home always works" means the private ways in:
 Tailscale, your home network (`APP_BIND=0.0.0.0`), an SSH tunnel, or `make password` on the
 server. If an internet pause ever catches you, sign in one of those ways or wait 15 minutes.
+
+Those ways in work over plain http (`http://<home address>:8470`, `http://<Tailscale
+address>:8470`) even with `CLIMATE_COOKIE_SECURE=true`: plain http from a private address gets
+a refresh cookie without `Secure` (step 3), so the device stays signed in.
 
 The gateway's rate limit is per address too, and your whole household shares one public
 address on the public name. Normal use is far below it.
@@ -215,5 +257,6 @@ running: nothing on Climate's side stops, and home access is unchanged.
 | `429` with `RATE_LIMITED` | The gateway's per-address limit. Wait a minute. |
 | `429` with `TOO_MANY_ATTEMPTS` | The app's own limit: 10 failures from one address in 5 minutes, or too many password checks queued at once. Wait a few minutes. |
 | `429` with `LOGIN_PAUSED` | The app's internet sign-in pause after many failures. Check Recent activity; sign in from home or wait 15 minutes. |
-| Signed-in devices show a `172.x` address for a phone on mobile data | `FORWARDED_ALLOW_IPS` does not cover nginx: [see above](#the-one-setting-that-can-undo-all-of-this). Take the name offline until fixed. |
+| Signed-in devices show a `172.x` address for a phone on mobile data | `CF-Connecting-IP` is not reaching the app (something between Cloudflare and the app drops it) and `FORWARDED_ALLOW_IPS` does not cover nginx either: [see above](#the-client-address-behind-the-gateway). Take the name offline until fixed. |
+| Step 6's log check shows a `172.x` or `10.x` address | `FORWARDED_ALLOW_IPS` does not cover nginx. Set it to the `apprelay_gateway` subnet (step 3) and `docker compose up -d`. Sign-in decisions were not affected: [see above](#the-client-address-behind-the-gateway). |
 | `524` from Cloudflare | A request took over 100 s to start answering: see Limits. |
