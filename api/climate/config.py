@@ -65,6 +65,24 @@ class Settings(BaseSettings):
     # Cookies: set Secure when served over HTTPS by the reverse proxy.
     cookie_secure: bool = False
 
+    # --- users and tokens (docs/specs/users-and-tokens.md) ---------------------------------
+    # Signs the 15-minute access tokens (HS256). Required outside tests: sign-in refuses to
+    # run without it (scripts/bootstrap.sh generates it).
+    jwt_secret: str = ""
+    # HMAC key for every stored token hash (refresh, API, invitation, reset). Required.
+    token_pepper: str = ""
+    access_ttl_minutes: int = Field(default=15, ge=1, le=60)
+    refresh_ttl_days: int = Field(default=30, ge=1, le=90)
+    session_max_days: int = Field(default=90, ge=1, le=365)
+    reauth_window_minutes: int = Field(default=10, ge=1, le=60)
+    password_min_length: int = Field(default=10, ge=8, le=128)
+    login_max_attempts: int = Field(default=8, ge=3, le=50)
+    login_lockout_minutes: int = Field(default=15, ge=1, le=1440)
+    # First-run setup (creating the first admin from the browser) is only accepted from a
+    # private address (LAN, Docker, Tailscale) unless this is true. Public internet visitors
+    # can never claim the house.
+    allow_remote_setup: bool = False
+
     log_level: str = "INFO"
     version: str = "0.1.0"
 

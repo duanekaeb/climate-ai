@@ -28,29 +28,203 @@ from climate.store.app_settings import (
 )
 
 OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com"
-Role = Literal["owner", "agent"]
+# Who is calling: a signed-in person (admin / member / viewer) or an API token (agent /
+# viewer / member; tokens are never admin). docs/specs/users-and-tokens.md has the matrix.
+Role = Literal["admin", "member", "viewer", "agent"]
+UserRole = Literal["admin", "member", "viewer"]
+TokenRole = Literal["agent", "viewer", "member"]
 
 # ---------------------------------------------------------------------------------------
 # auth / health
 # ---------------------------------------------------------------------------------------
 
 
+class UserOut(BaseModel):
+    id: int
+    username: str
+    display_name: str
+    role: UserRole
+    is_active: bool
+    password_set: bool  # False until an invitation is accepted
+    locked_until: datetime | None = None
+    last_login_at: datetime | None = None
+    created_at: datetime
+
+
 class AuthState(BaseModel):
+    """GET /api/auth/state (public). ``password_set`` False = no user exists yet: show the
+    first-run screen, which only works from a private address unless allowed (``setup_allowed``)."""
+
     authenticated: bool
     role: Role | None = None
-    password_set: bool  # False -> show the first-run "choose a password" screen
+    password_set: bool
+    setup_allowed: bool = False
+    user: UserOut | None = None
 
 
-class PasswordBody(BaseModel):
-    """Choosing a password (first-run setup)."""
+class SetupBody(BaseModel):
+    """First-run: create the first admin (only while no user exists)."""
 
-    password: str = Field(min_length=8, max_length=200)
+    username: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._@-]*$")
+    password: str = Field(min_length=8, max_length=200)  # the server enforces password_min_length
+    display_name: str = Field(default="", max_length=100)
 
 
 class LoginBody(BaseModel):
-    """Signing in. No minimum here: CLIMATE_OWNER_PASSWORD may predate the 8-character rule."""
-
+    username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1, max_length=200)
+    device_name: str = Field(default="", max_length=100)  # e.g. "Duane's iPhone"; defaults from the user agent
+
+
+class AccessTokenOut(BaseModel):
+    """Login / refresh / setup / accept-invitation / reset-password result. The access token is
+    kept in memory by the web app (never stored); the refresh token travels only as the HttpOnly
+    ``climate_refresh`` cookie (Path=/api/auth)."""
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int  # seconds
+    user: UserOut
+
+
+class MeOut(BaseModel):
+    user: UserOut | None = None  # None for an API token caller
+    role: Role
+    session_id: int | None = None
+    token_id: int | None = None
+    recently_authenticated: bool = False  # within reauth_window_minutes (sensitive admin actions)
+
+
+class SessionOut(BaseModel):
+    id: int
+    device_name: str
+    user_agent: str
+    ip: str | None = None
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    current: bool = False
+
+
+class ReauthBody(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+class ResetPasswordBody(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+class InvitationInfo(BaseModel):
+    """GET /api/auth/invitation?token=… (public): what the invite is for."""
+
+    username: str
+    role: UserRole
+    expires_at: datetime
+
+
+class AcceptInvitationBody(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    password: str = Field(min_length=8, max_length=200)
+    display_name: str = Field(default="", max_length=100)
+
+
+class UserCreateBody(BaseModel):
+    """Admin: create a user. With ``password`` the account is ready now (a temporary password
+    the person changes); without it an invitation link is returned (shown once)."""
+
+    username: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._@-]*$")
+    role: UserRole = "member"
+    display_name: str = Field(default="", max_length=100)
+    password: str | None = Field(default=None, min_length=8, max_length=200)
+
+
+class UserCreateOut(BaseModel):
+    user: UserOut | None = None  # set when created with a password
+    invitation_url: str | None = None  # set for an invitation; shown once
+    invitation_expires_at: datetime | None = None
+
+
+class UserUpdateBody(BaseModel):
+    role: UserRole | None = None
+    is_active: bool | None = None
+    display_name: str | None = Field(default=None, max_length=100)
+
+
+class ResetLinkOut(BaseModel):
+    url: str  # one-time link, shown once (there is no email)
+    expires_at: datetime
+
+
+class InvitationOut(BaseModel):
+    id: int
+    username: str
+    role: UserRole
+    created_at: datetime
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiTokenCreateBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    role: TokenRole = "agent"
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)  # None = no expiry
+    local_only: bool = True  # refused from public (internet) addresses
+
+
+class ApiTokenOut(BaseModel):
+    id: int
+    name: str
+    token_hint: str  # last 4 characters
+    role: TokenRole
+    local_only: bool
+    created_at: datetime
+    created_by: str | None = None  # username
+    expires_at: datetime | None = None
+    last_used_at: datetime | None = None
+    last_used_ip: str | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiTokenCreated(ApiTokenOut):
+    token: str  # "cai_<id hex>_<secret>"; shown exactly once
+
+
+class AuditEventOut(BaseModel):
+    id: int
+    ts: datetime
+    actor_type: Literal["user", "api_token", "system"]
+    actor_label: str
+    actor_role: str | None = None
+    event_type: str
+    target_type: str | None = None
+    target_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    ip: str | None = None
+
+
+class WsTicketOut(BaseModel):
+    """POST /api/auth/ws-ticket: a single-use ticket for /api/ws?ticket=… (browsers cannot set
+    a bearer header on a WebSocket)."""
+
+    ticket: str
+    expires_in: int  # seconds (30)
+
+
+class AuthErrorDetail(BaseModel):
+    """``detail`` of a 401/403/423 from the auth layer, so clients can react precisely:
+    TOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to login),
+    REAUTHENTICATION_REQUIRED (ask for the password, then replay), ACCOUNT_LOCKED,
+    INVALID_CREDENTIALS, FORBIDDEN, SETUP_NOT_ALLOWED, INVALID_RESET_TOKEN, INVALID_INVITATION."""
+
+    code: str
+    message: str
 
 
 class Health(BaseModel):

@@ -1,5 +1,57 @@
 {
  "$defs": {
+  "AcceptInvitationBody": {
+   "properties": {
+    "display_name": {
+     "default": "",
+     "maxLength": 100,
+     "type": "string"
+    },
+    "password": {
+     "maxLength": 200,
+     "minLength": 8,
+     "type": "string"
+    },
+    "token": {
+     "maxLength": 200,
+     "minLength": 10,
+     "type": "string"
+    }
+   },
+   "required": [
+    "token",
+    "password"
+   ],
+   "title": "AcceptInvitationBody",
+   "type": "object"
+  },
+  "AccessTokenOut": {
+   "description": "Login / refresh / setup / accept-invitation / reset-password result. The access token is\nkept in memory by the web app (never stored); the refresh token travels only as the HttpOnly\n``climate_refresh`` cookie (Path=/api/auth).",
+   "properties": {
+    "access_token": {
+     "type": "string"
+    },
+    "expires_in": {
+     "type": "integer"
+    },
+    "token_type": {
+     "const": "bearer",
+     "default": "bearer",
+     "type": "string"
+    },
+    "user": {
+     "$ref": "#/$defs/UserOut"
+    }
+   },
+   "required": [
+    "access_token",
+    "expires_in",
+    "token_type",
+    "user"
+   ],
+   "title": "AccessTokenOut",
+   "type": "object"
+  },
   "AgentFinishBody": {
    "properties": {
     "error": {
@@ -533,6 +585,252 @@
    "title": "AlertOut",
    "type": "object"
   },
+  "ApiTokenCreateBody": {
+   "properties": {
+    "expires_in_days": {
+     "anyOf": [
+      {
+       "maximum": 3650,
+       "minimum": 1,
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "local_only": {
+     "default": true,
+     "type": "boolean"
+    },
+    "name": {
+     "maxLength": 100,
+     "minLength": 1,
+     "type": "string"
+    },
+    "role": {
+     "default": "agent",
+     "enum": [
+      "agent",
+      "viewer",
+      "member"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "title": "ApiTokenCreateBody",
+   "type": "object"
+  },
+  "ApiTokenCreated": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "created_by": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "expires_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "id": {
+     "type": "integer"
+    },
+    "last_used_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "last_used_ip": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "local_only": {
+     "type": "boolean"
+    },
+    "name": {
+     "type": "string"
+    },
+    "revoked_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "role": {
+     "enum": [
+      "agent",
+      "viewer",
+      "member"
+     ],
+     "type": "string"
+    },
+    "token": {
+     "type": "string"
+    },
+    "token_hint": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "created_at",
+    "created_by",
+    "expires_at",
+    "id",
+    "last_used_at",
+    "last_used_ip",
+    "local_only",
+    "name",
+    "revoked_at",
+    "role",
+    "token",
+    "token_hint"
+   ],
+   "title": "ApiTokenCreated",
+   "type": "object"
+  },
+  "ApiTokenOut": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "created_by": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "expires_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "id": {
+     "type": "integer"
+    },
+    "last_used_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "last_used_ip": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "local_only": {
+     "type": "boolean"
+    },
+    "name": {
+     "type": "string"
+    },
+    "revoked_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "role": {
+     "enum": [
+      "agent",
+      "viewer",
+      "member"
+     ],
+     "type": "string"
+    },
+    "token_hint": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "created_at",
+    "created_by",
+    "expires_at",
+    "id",
+    "last_used_at",
+    "last_used_ip",
+    "local_only",
+    "name",
+    "revoked_at",
+    "role",
+    "token_hint"
+   ],
+   "title": "ApiTokenOut",
+   "type": "object"
+  },
   "ArmIn": {
    "properties": {
     "key": {
@@ -569,7 +867,112 @@
    "title": "AskBody",
    "type": "object"
   },
+  "AuditEventOut": {
+   "properties": {
+    "actor_label": {
+     "type": "string"
+    },
+    "actor_role": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "actor_type": {
+     "enum": [
+      "user",
+      "api_token",
+      "system"
+     ],
+     "type": "string"
+    },
+    "event_type": {
+     "type": "string"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "ip": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "payload": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "target_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "target_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "ts": {
+     "format": "date-time",
+     "type": "string"
+    }
+   },
+   "required": [
+    "actor_label",
+    "actor_role",
+    "actor_type",
+    "event_type",
+    "id",
+    "ip",
+    "payload",
+    "target_id",
+    "target_type",
+    "ts"
+   ],
+   "title": "AuditEventOut",
+   "type": "object"
+  },
+  "AuthErrorDetail": {
+   "description": "``detail`` of a 401/403/423 from the auth layer, so clients can react precisely:\nTOKEN_EXPIRED (refresh and replay once), SESSION_REVOKED / NOT_AUTHENTICATED (go to login),\nREAUTHENTICATION_REQUIRED (ask for the password, then replay), ACCOUNT_LOCKED,\nINVALID_CREDENTIALS, FORBIDDEN, SETUP_NOT_ALLOWED, INVALID_RESET_TOKEN, INVALID_INVITATION.",
+   "properties": {
+    "code": {
+     "type": "string"
+    },
+    "message": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "code",
+    "message"
+   ],
+   "title": "AuthErrorDetail",
+   "type": "object"
+  },
   "AuthState": {
+   "description": "GET /api/auth/state (public). ``password_set`` False = no user exists yet: show the\nfirst-run screen, which only works from a private address unless allowed (``setup_allowed``).",
    "properties": {
     "authenticated": {
      "type": "boolean"
@@ -581,10 +984,27 @@
      "anyOf": [
       {
        "enum": [
-        "owner",
+        "admin",
+        "member",
+        "viewer",
         "agent"
        ],
        "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "setup_allowed": {
+     "default": false,
+     "type": "boolean"
+    },
+    "user": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/UserOut"
       },
       {
        "type": "null"
@@ -596,7 +1016,9 @@
    "required": [
     "authenticated",
     "password_set",
-    "role"
+    "role",
+    "setup_allowed",
+    "user"
    ],
    "title": "AuthState",
    "type": "object"
@@ -928,6 +1350,26 @@
     "trial_start"
    ],
    "title": "ChangeOut",
+   "type": "object"
+  },
+  "ChangePasswordBody": {
+   "properties": {
+    "current_password": {
+     "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    },
+    "new_password": {
+     "maxLength": 200,
+     "minLength": 8,
+     "type": "string"
+    }
+   },
+   "required": [
+    "current_password",
+    "new_password"
+   ],
+   "title": "ChangePasswordBody",
    "type": "object"
   },
   "Checkpoint": {
@@ -2932,6 +3374,94 @@
    "title": "IntradayUnit",
    "type": "object"
   },
+  "InvitationInfo": {
+   "description": "GET /api/auth/invitation?token=\u2026 (public): what the invite is for.",
+   "properties": {
+    "expires_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "role": {
+     "enum": [
+      "admin",
+      "member",
+      "viewer"
+     ],
+     "type": "string"
+    },
+    "username": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "expires_at",
+    "role",
+    "username"
+   ],
+   "title": "InvitationInfo",
+   "type": "object"
+  },
+  "InvitationOut": {
+   "properties": {
+    "accepted_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "expires_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "revoked_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "role": {
+     "enum": [
+      "admin",
+      "member",
+      "viewer"
+     ],
+     "type": "string"
+    },
+    "username": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "accepted_at",
+    "created_at",
+    "expires_at",
+    "id",
+    "revoked_at",
+    "role",
+    "username"
+   ],
+   "title": "InvitationOut",
+   "type": "object"
+  },
   "JobOut": {
    "properties": {
     "created_at": {
@@ -3073,15 +3603,25 @@
    "type": "object"
   },
   "LoginBody": {
-   "description": "Signing in. No minimum here: CLIMATE_OWNER_PASSWORD may predate the 8-character rule.",
    "properties": {
+    "device_name": {
+     "default": "",
+     "maxLength": 100,
+     "type": "string"
+    },
     "password": {
      "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    },
+    "username": {
+     "maxLength": 100,
      "minLength": 1,
      "type": "string"
     }
    },
    "required": [
+    "username",
     "password"
    ],
    "title": "LoginBody",
@@ -3111,6 +3651,65 @@
     "cool_f"
    ],
    "title": "ManualHoldBody",
+   "type": "object"
+  },
+  "MeOut": {
+   "properties": {
+    "recently_authenticated": {
+     "default": false,
+     "type": "boolean"
+    },
+    "role": {
+     "enum": [
+      "admin",
+      "member",
+      "viewer",
+      "agent"
+     ],
+     "type": "string"
+    },
+    "session_id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "token_id": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "user": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/UserOut"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "recently_authenticated",
+    "role",
+    "session_id",
+    "token_id",
+    "user"
+   ],
+   "title": "MeOut",
    "type": "object"
   },
   "ModeBody": {
@@ -3474,21 +4073,6 @@
     "ts"
    ],
    "title": "OutdoorPoint",
-   "type": "object"
-  },
-  "PasswordBody": {
-   "description": "Choosing a password (first-run setup).",
-   "properties": {
-    "password": {
-     "maxLength": 200,
-     "minLength": 8,
-     "type": "string"
-    }
-   },
-   "required": [
-    "password"
-   ],
-   "title": "PasswordBody",
    "type": "object"
   },
   "PersonHold": {
@@ -3959,6 +4543,20 @@
    "title": "PublishReportBody",
    "type": "object"
   },
+  "ReauthBody": {
+   "properties": {
+    "password": {
+     "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "password"
+   ],
+   "title": "ReauthBody",
+   "type": "object"
+  },
   "ReportOut": {
    "properties": {
     "agent_run_id": {
@@ -4044,6 +4642,43 @@
     "title"
    ],
    "title": "ReportOut",
+   "type": "object"
+  },
+  "ResetLinkOut": {
+   "properties": {
+    "expires_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "url": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "expires_at",
+    "url"
+   ],
+   "title": "ResetLinkOut",
+   "type": "object"
+  },
+  "ResetPasswordBody": {
+   "properties": {
+    "new_password": {
+     "maxLength": 200,
+     "minLength": 8,
+     "type": "string"
+    },
+    "token": {
+     "maxLength": 200,
+     "minLength": 10,
+     "type": "string"
+    }
+   },
+   "required": [
+    "token",
+    "new_password"
+   ],
+   "title": "ResetPasswordBody",
    "type": "object"
   },
   "RoomHistory": {
@@ -4664,6 +5299,58 @@
    "title": "SensorOut",
    "type": "object"
   },
+  "SessionOut": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "current": {
+     "default": false,
+     "type": "boolean"
+    },
+    "device_name": {
+     "type": "string"
+    },
+    "expires_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "ip": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "last_seen_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "user_agent": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "created_at",
+    "current",
+    "device_name",
+    "expires_at",
+    "id",
+    "ip",
+    "last_seen_at",
+    "user_agent"
+   ],
+   "title": "SessionOut",
+   "type": "object"
+  },
   "SetpointPoint": {
    "properties": {
     "cool_sp_f": {
@@ -4827,6 +5514,33 @@
     }
    },
    "title": "SettingsUpdate",
+   "type": "object"
+  },
+  "SetupBody": {
+   "description": "First-run: create the first admin (only while no user exists).",
+   "properties": {
+    "display_name": {
+     "default": "",
+     "maxLength": 100,
+     "type": "string"
+    },
+    "password": {
+     "maxLength": 200,
+     "minLength": 8,
+     "type": "string"
+    },
+    "username": {
+     "maxLength": 64,
+     "minLength": 2,
+     "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]*$",
+     "type": "string"
+    }
+   },
+   "required": [
+    "username",
+    "password"
+   ],
+   "title": "SetupBody",
    "type": "object"
   },
   "SetupState": {
@@ -5674,6 +6388,207 @@
    "title": "UnitTarget",
    "type": "object"
   },
+  "UserCreateBody": {
+   "description": "Admin: create a user. With ``password`` the account is ready now (a temporary password\nthe person changes); without it an invitation link is returned (shown once).",
+   "properties": {
+    "display_name": {
+     "default": "",
+     "maxLength": 100,
+     "type": "string"
+    },
+    "password": {
+     "anyOf": [
+      {
+       "maxLength": 200,
+       "minLength": 8,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "role": {
+     "default": "member",
+     "enum": [
+      "admin",
+      "member",
+      "viewer"
+     ],
+     "type": "string"
+    },
+    "username": {
+     "maxLength": 64,
+     "minLength": 2,
+     "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]*$",
+     "type": "string"
+    }
+   },
+   "required": [
+    "username"
+   ],
+   "title": "UserCreateBody",
+   "type": "object"
+  },
+  "UserCreateOut": {
+   "properties": {
+    "invitation_expires_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "invitation_url": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "user": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/UserOut"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "required": [
+    "invitation_expires_at",
+    "invitation_url",
+    "user"
+   ],
+   "title": "UserCreateOut",
+   "type": "object"
+  },
+  "UserOut": {
+   "properties": {
+    "created_at": {
+     "format": "date-time",
+     "type": "string"
+    },
+    "display_name": {
+     "type": "string"
+    },
+    "id": {
+     "type": "integer"
+    },
+    "is_active": {
+     "type": "boolean"
+    },
+    "last_login_at": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "locked_until": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "password_set": {
+     "type": "boolean"
+    },
+    "role": {
+     "enum": [
+      "admin",
+      "member",
+      "viewer"
+     ],
+     "type": "string"
+    },
+    "username": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "created_at",
+    "display_name",
+    "id",
+    "is_active",
+    "last_login_at",
+    "locked_until",
+    "password_set",
+    "role",
+    "username"
+   ],
+   "title": "UserOut",
+   "type": "object"
+  },
+  "UserUpdateBody": {
+   "properties": {
+    "display_name": {
+     "anyOf": [
+      {
+       "maxLength": 100,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "is_active": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "role": {
+     "anyOf": [
+      {
+       "enum": [
+        "admin",
+        "member",
+        "viewer"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    }
+   },
+   "title": "UserUpdateBody",
+   "type": "object"
+  },
   "UtilityEventOut": {
    "description": "A utility energy-saving (demand-response) event on one thermostat.",
    "properties": {
@@ -6370,10 +7285,33 @@
    ],
    "title": "WsEvent",
    "type": "object"
+  },
+  "WsTicketOut": {
+   "description": "POST /api/auth/ws-ticket: a single-use ticket for /api/ws?ticket=\u2026 (browsers cannot set\na bearer header on a WebSocket).",
+   "properties": {
+    "expires_in": {
+     "type": "integer"
+    },
+    "ticket": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "expires_in",
+    "ticket"
+   ],
+   "title": "WsTicketOut",
+   "type": "object"
   }
  },
  "additionalProperties": false,
  "properties": {
+  "AcceptInvitationBody": {
+   "$ref": "#/$defs/AcceptInvitationBody"
+  },
+  "AccessTokenOut": {
+   "$ref": "#/$defs/AccessTokenOut"
+  },
   "AgentFinishBody": {
    "$ref": "#/$defs/AgentFinishBody"
   },
@@ -6392,11 +7330,26 @@
   "AlertOut": {
    "$ref": "#/$defs/AlertOut"
   },
+  "ApiTokenCreateBody": {
+   "$ref": "#/$defs/ApiTokenCreateBody"
+  },
+  "ApiTokenCreated": {
+   "$ref": "#/$defs/ApiTokenCreated"
+  },
+  "ApiTokenOut": {
+   "$ref": "#/$defs/ApiTokenOut"
+  },
   "ArmIn": {
    "$ref": "#/$defs/ArmIn"
   },
   "AskBody": {
    "$ref": "#/$defs/AskBody"
+  },
+  "AuditEventOut": {
+   "$ref": "#/$defs/AuditEventOut"
+  },
+  "AuthErrorDetail": {
+   "$ref": "#/$defs/AuthErrorDetail"
   },
   "AuthState": {
    "$ref": "#/$defs/AuthState"
@@ -6412,6 +7365,9 @@
   },
   "ChangeOut": {
    "$ref": "#/$defs/ChangeOut"
+  },
+  "ChangePasswordBody": {
+   "$ref": "#/$defs/ChangePasswordBody"
   },
   "Checkpoint": {
    "$ref": "#/$defs/Checkpoint"
@@ -6533,6 +7489,12 @@
   "IntradayUnit": {
    "$ref": "#/$defs/IntradayUnit"
   },
+  "InvitationInfo": {
+   "$ref": "#/$defs/InvitationInfo"
+  },
+  "InvitationOut": {
+   "$ref": "#/$defs/InvitationOut"
+  },
   "JobOut": {
    "$ref": "#/$defs/JobOut"
   },
@@ -6544,6 +7506,9 @@
   },
   "ManualHoldBody": {
    "$ref": "#/$defs/ManualHoldBody"
+  },
+  "MeOut": {
+   "$ref": "#/$defs/MeOut"
   },
   "ModeBody": {
    "$ref": "#/$defs/ModeBody"
@@ -6562,9 +7527,6 @@
   },
   "OutdoorPoint": {
    "$ref": "#/$defs/OutdoorPoint"
-  },
-  "PasswordBody": {
-   "$ref": "#/$defs/PasswordBody"
   },
   "PersonHold": {
    "$ref": "#/$defs/PersonHold"
@@ -6593,8 +7555,17 @@
   "PublishReportBody": {
    "$ref": "#/$defs/PublishReportBody"
   },
+  "ReauthBody": {
+   "$ref": "#/$defs/ReauthBody"
+  },
   "ReportOut": {
    "$ref": "#/$defs/ReportOut"
+  },
+  "ResetLinkOut": {
+   "$ref": "#/$defs/ResetLinkOut"
+  },
+  "ResetPasswordBody": {
+   "$ref": "#/$defs/ResetPasswordBody"
   },
   "RoomHistory": {
    "$ref": "#/$defs/RoomHistory"
@@ -6629,6 +7600,9 @@
   "SensorOut": {
    "$ref": "#/$defs/SensorOut"
   },
+  "SessionOut": {
+   "$ref": "#/$defs/SessionOut"
+  },
   "SetpointPoint": {
    "$ref": "#/$defs/SetpointPoint"
   },
@@ -6637,6 +7611,9 @@
   },
   "SettingsUpdate": {
    "$ref": "#/$defs/SettingsUpdate"
+  },
+  "SetupBody": {
+   "$ref": "#/$defs/SetupBody"
   },
   "SetupState": {
    "$ref": "#/$defs/SetupState"
@@ -6683,6 +7660,18 @@
   "UnitTarget": {
    "$ref": "#/$defs/UnitTarget"
   },
+  "UserCreateBody": {
+   "$ref": "#/$defs/UserCreateBody"
+  },
+  "UserCreateOut": {
+   "$ref": "#/$defs/UserCreateOut"
+  },
+  "UserOut": {
+   "$ref": "#/$defs/UserOut"
+  },
+  "UserUpdateBody": {
+   "$ref": "#/$defs/UserUpdateBody"
+  },
   "UtilityEventOut": {
    "$ref": "#/$defs/UtilityEventOut"
   },
@@ -6709,6 +7698,9 @@
   },
   "WsEvent": {
    "$ref": "#/$defs/WsEvent"
+  },
+  "WsTicketOut": {
+   "$ref": "#/$defs/WsTicketOut"
   }
  },
  "title": "ApiTypes",
