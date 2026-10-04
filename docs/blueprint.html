@@ -493,7 +493,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
     <div class="answer">
       <span class="k">Your question 2</span>
       <h4>Does it put occupied rooms first?</h4>
-      <p><b>Yes, with the hardware you have.</b> Every room already reports occupancy: six SmartSensors plus the Hallway and Bedroom thermostats. The app builds its own estimate for each room from them (live motion, sleep windows, learned habits) and never trades an occupied room's comfort for runtime. Most runtime savings come from empty floors, timing and the linked-floors rule.</p>
+      <p><b>Yes, with the hardware you have.</b> 8 of your 11 rooms already report occupancy: six SmartSensors plus the Hallway and Bedroom thermostats. The Twins' Room, Olive's Room and Foyer have no sensor yet, so the app uses bedtimes there and shows their temperature as unknown. The app builds its own estimate for each room from them (live motion, sleep windows, learned habits) and never trades an occupied room's comfort for runtime. Most runtime savings come from empty floors, timing and the linked-floors rule.</p>
       <a href="#occupancy">How occupancy works</a>
     </div>
     <div class="answer">
@@ -522,7 +522,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
   <figure class="diagram" style="margin:0">
     <svg viewBox="0 0 1000 450" role="img" aria-labelledby="dia-title dia-desc">
       <title id="dia-title">House elevation with three HVAC zones</title>
-      <desc id="dia-desc">Two-story block on the left with the upstairs (Toy Room, Girls' Room) above the main floor (School Room, Hallway, Living Room, Kitchen). One-story bedroom wing on the right (Bedroom, Office). Heat rises from the main floor into the upstairs through the floor and stairwell. The sun heats the roof. A weak link may exist between the main floor and the bedroom wing. No link between upstairs and the wing.</desc>
+      <desc id="dia-desc">Two-story block on the left with the upstairs (Toy Room, Girls' Room) above the main floor (School Room, Hallway, Living Room, Kitchen, Twins' Room, Olive's Room). One-story wing on the right (Bedroom, Office, Foyer). The Twins' Room, Olive's Room and Foyer have no sensor yet. Heat rises from the main floor into the upstairs through the floor and stairwell. The sun heats the roof. A weak link may exist between the main floor and the bedroom wing. No link between upstairs and the wing.</desc>
       <defs>
         <marker id="arwA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
         <marker id="arwM" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--muted)"/></marker>
@@ -540,78 +540,87 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
       <!-- sun -->
       <g aria-hidden="true"><circle cx="92" cy="46" r="15" style="fill:var(--s-a)"/>
         <g style="stroke:var(--s-a)" stroke-width="2.4" stroke-linecap="round"><line x1="92" y1="18" x2="92" y2="24"/><line x1="92" y1="68" x2="92" y2="74"/><line x1="64" y1="46" x2="70" y2="46"/><line x1="114" y1="46" x2="120" y2="46"/><line x1="72" y1="26" x2="76" y2="30"/><line x1="108" y1="62" x2="112" y2="66"/><line x1="72" y1="66" x2="76" y2="62"/><line x1="108" y1="30" x2="112" y2="26"/></g></g>
-      <path d="M118 58 Q160 70 196 92" fill="none" style="stroke:var(--accent)" stroke-width="2" marker-end="url(#arwA)"/>
+      <path d="M118 58 Q150 70 182 84" fill="none" style="stroke:var(--accent)" stroke-width="2" marker-end="url(#arwA)"/>
       <text x="132" y="30" class="dnb">Roof &amp; afternoon sun</text>
       <!-- two-story roof -->
-      <polygon points="40,122 300,44 560,122" fill="var(--surface-2)" stroke="var(--ink-2)" stroke-width="2"/>
-      <text x="300" y="104" text-anchor="middle" class="dn">attic</text>
+      <polygon points="40,122 350,44 660,122" fill="var(--surface-2)" stroke="var(--ink-2)" stroke-width="2"/>
+      <text x="350" y="104" text-anchor="middle" class="dn">attic</text>
       <!-- upstairs -->
-      <rect x="60" y="122" width="480" height="130" style="fill:color-mix(in srgb,var(--s-up) 11%,var(--surface))"/>
-      <line x1="300" y1="122" x2="300" y2="252" class="part"/>
+      <rect x="60" y="122" width="580" height="130" style="fill:color-mix(in srgb,var(--s-up) 11%,var(--surface))"/>
+      <line x1="350" y1="122" x2="350" y2="252" class="part"/>
       <text x="74" y="146" class="dz">Upstairs</text>
       <text x="74" y="166" class="dr">Toy Room</text>
-      <text x="314" y="146" class="dr">Girls' Room</text>
-      <!-- main floor -->
-      <rect x="60" y="252" width="480" height="130" style="fill:color-mix(in srgb,var(--s-main) 11%,var(--surface))"/>
-      <line x1="180" y1="252" x2="180" y2="382" class="part"/><line x1="300" y1="252" x2="300" y2="382" class="part"/><line x1="420" y1="252" x2="420" y2="382" class="part"/>
+      <text x="364" y="146" class="dr">Girls' Room</text>
+      <!-- main floor: six rooms -->
+      <rect x="60" y="252" width="580" height="130" style="fill:color-mix(in srgb,var(--s-main) 11%,var(--surface))"/>
+      <line x1="150" y1="252" x2="150" y2="382" class="part"/><line x1="290" y1="252" x2="290" y2="382" class="part"/><line x1="385" y1="252" x2="385" y2="382" class="part"/><line x1="465" y1="252" x2="465" y2="382" class="part"/><line x1="552" y1="252" x2="552" y2="382" class="part"/>
       <text x="74" y="276" class="dz">Main floor</text>
-      <text x="74" y="296" class="dr">School Room</text>
-      <text x="194" y="276" class="dr">Hallway</text>
-      <text x="314" y="276" class="dr">Living Room</text>
-      <text x="434" y="276" class="dr">Kitchen</text>
+      <text x="74" y="296" class="dr">School</text>
+      <text x="178" y="296" class="dr">Hallway</text>
+      <text x="300" y="296" class="dr">Living Room</text>
+      <text x="395" y="296" class="dr">Kitchen</text>
+      <text x="474" y="296" class="dr">Twins'</text>
+      <text x="561" y="296" class="dr">Olive's</text>
       <!-- stairs -->
-      <polyline points="196,382 196,368 212,368 212,354 228,354 228,340 244,340 244,326 260,326 260,312 276,312 276,298 292,298 292,252" fill="none" stroke="var(--line-strong)" stroke-width="1.5"/>
-      <rect x="196" y="249" width="96" height="6" fill="var(--surface)"/>
+      <polyline points="170,382 170,368 186,368 186,354 202,354 202,340 218,340 218,326 234,326 234,312 250,312 250,298 266,298 266,252" fill="none" stroke="var(--line-strong)" stroke-width="1.5"/>
+      <rect x="170" y="249" width="96" height="6" fill="var(--surface)"/>
       <!-- outer walls two-story -->
-      <rect x="60" y="122" width="480" height="260" class="wall"/>
-      <line x1="60" y1="252" x2="196" y2="252" stroke="var(--ink-2)" stroke-width="2"/><line x1="292" y1="252" x2="540" y2="252" stroke="var(--ink-2)" stroke-width="2"/>
-      <!-- wing -->
-      <polygon points="584,252 770,198 956,252" fill="var(--surface-2)" stroke="var(--ink-2)" stroke-width="2"/>
-      <rect x="600" y="252" width="340" height="130" style="fill:color-mix(in srgb,var(--s-bed) 11%,var(--surface))"/>
-      <line x1="770" y1="252" x2="770" y2="382" class="part"/>
-      <rect x="600" y="252" width="340" height="130" class="wall"/>
-      <text x="614" y="276" class="dz">Bed / Office wing</text>
-      <text x="614" y="296" class="dr">Bedroom</text>
-      <text x="784" y="296" class="dr">Office</text>
-      <!-- devices: thermostats (rounded squares) and sensors (circles) -->
+      <rect x="60" y="122" width="580" height="260" class="wall"/>
+      <line x1="60" y1="252" x2="170" y2="252" stroke="var(--ink-2)" stroke-width="2"/><line x1="266" y1="252" x2="640" y2="252" stroke="var(--ink-2)" stroke-width="2"/>
+      <!-- wing: three rooms -->
+      <polygon points="684,252 830,198 976,252" fill="var(--surface-2)" stroke="var(--ink-2)" stroke-width="2"/>
+      <rect x="700" y="252" width="260" height="130" style="fill:color-mix(in srgb,var(--s-bed) 11%,var(--surface))"/>
+      <line x1="790" y1="252" x2="790" y2="382" class="part"/><line x1="875" y1="252" x2="875" y2="382" class="part"/>
+      <rect x="700" y="252" width="260" height="130" class="wall"/>
+      <text x="714" y="276" class="dz">Bed / Office wing</text>
+      <text x="714" y="296" class="dr">Bedroom</text>
+      <text x="800" y="296" class="dr">Office</text>
+      <text x="885" y="296" class="dr">Foyer</text>
+      <text x="885" y="371" class="dn">fed here?</text>
+      <!-- devices: thermostats (rounded squares), SmartSensors (solid circles), no sensor yet (dashed circles) -->
       <g aria-hidden="true">
         <rect x="74" y="178" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="83" cy="190" r="4" style="fill:var(--s-up)"/>
-        <circle cx="330" cy="168" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="330" cy="168" r="2.5" style="fill:var(--ink)"/>
-        <circle cx="250" cy="150" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="250" cy="150" r="2.5" style="fill:var(--ink)"/>
-        <rect x="194" y="290" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="203" cy="302" r="4" style="fill:var(--s-main)"/>
+        <circle cx="300" cy="168" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="300" cy="168" r="2.5" style="fill:var(--ink)"/>
+        <circle cx="380" cy="168" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="380" cy="168" r="2.5" style="fill:var(--ink)"/>
+        <rect x="156" y="318" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="165" cy="330" r="4" style="fill:var(--s-main)"/>
         <circle cx="90" cy="318" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="90" cy="318" r="2.5" style="fill:var(--ink)"/>
-        <circle cx="330" cy="298" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="330" cy="298" r="2.5" style="fill:var(--ink)"/>
-        <circle cx="450" cy="298" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="450" cy="298" r="2.5" style="fill:var(--ink)"/>
-        <rect x="614" y="308" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="623" cy="320" r="4" style="fill:var(--s-bed)"/>
-        <circle cx="800" cy="320" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="800" cy="320" r="2.5" style="fill:var(--ink)"/>
+        <circle cx="320" cy="318" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="320" cy="318" r="2.5" style="fill:var(--ink)"/>
+        <circle cx="420" cy="318" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="420" cy="318" r="2.5" style="fill:var(--ink)"/>
+        <circle cx="508" cy="320" r="8" fill="none" style="stroke:var(--muted)" stroke-width="1.6" stroke-dasharray="3 3"/>
+        <circle cx="596" cy="320" r="8" fill="none" style="stroke:var(--muted)" stroke-width="1.6" stroke-dasharray="3 3"/>
+        <rect x="714" y="308" width="18" height="24" rx="5" style="fill:var(--ink)"/><circle cx="723" cy="320" r="4" style="fill:var(--s-bed)"/>
+        <circle cx="830" cy="320" r="8" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/><circle cx="830" cy="320" r="2.5" style="fill:var(--ink)"/>
+        <circle cx="915" cy="330" r="8" fill="none" style="stroke:var(--muted)" stroke-width="1.6" stroke-dasharray="3 3"/>
       </g>
+      <text x="508" y="324" text-anchor="middle" class="dn">?</text>
+      <text x="596" y="324" text-anchor="middle" class="dn">?</text>
+      <text x="915" y="334" text-anchor="middle" class="dn">?</text>
       <text x="98" y="196" class="dn">ecobee Essential</text>
-      <text x="218" y="307" class="dn">ecobee</text>
-      <text x="638" y="326" class="dn">ecobee</text>
+      <text x="738" y="345" class="dn">ecobee</text>
       <!-- heat flow main -> upstairs -->
       <g style="stroke:var(--accent)" stroke-width="3" fill="none" stroke-linecap="round">
-        <line x1="360" y1="348" x2="360" y2="214" marker-end="url(#arwA)"/>
-        <line x1="420" y1="348" x2="420" y2="214" marker-end="url(#arwA)" opacity=".75"/>
-        <line x1="480" y1="348" x2="480" y2="214" marker-end="url(#arwA)" opacity=".55"/>
-        <path d="M244 362 C244 300 250 250 262 214" marker-end="url(#arwA)"/>
+        <line x1="455" y1="350" x2="455" y2="214" marker-end="url(#arwA)"/>
+        <line x1="535" y1="350" x2="535" y2="214" marker-end="url(#arwA)" opacity=".75"/>
+        <line x1="620" y1="350" x2="620" y2="214" marker-end="url(#arwA)" opacity=".55"/>
+        <path d="M218 362 C218 300 224 250 236 214" marker-end="url(#arwA)"/>
       </g>
-      <rect x="368" y="150" width="166" height="46" rx="6" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.2"/>
-      <text x="378" y="169" class="dnb">Strong link: heat rises</text>
-      <text x="378" y="186" class="dn">floor + open stairwell</text>
+      <rect x="440" y="150" width="166" height="46" rx="6" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.2"/>
+      <text x="450" y="169" class="dnb">Strong link: heat rises</text>
+      <text x="450" y="186" class="dn">floor + open stairwell</text>
       <!-- main <-> wing -->
-      <line x1="548" y1="330" x2="592" y2="330" style="stroke:var(--muted)" stroke-width="1.8" stroke-dasharray="4 4" marker-start="url(#arwM)" marker-end="url(#arwM)"/>
-      <text x="548" y="352" class="dn">weak?</text>
-      <text x="548" y="367" class="dn">measure</text>
+      <line x1="648" y1="330" x2="692" y2="330" style="stroke:var(--muted)" stroke-width="1.8" stroke-dasharray="4 4" marker-start="url(#arwM)" marker-end="url(#arwM)"/>
+      <text x="646" y="352" class="dn">weak?</text>
       <!-- upstairs x wing -->
-      <text x="600" y="150" class="dn">Upstairs and the wing don't share</text>
-      <text x="600" y="167" class="dn">walls or air: no link expected</text>
-      <!-- outside -->
-      <text x="975" y="410" text-anchor="end" class="dn">Outdoor air, humidity and sun load all three units</text>
-      <text x="25" y="410" class="dn">Thermostat (built-in sensor)</text>
+      <text x="700" y="150" class="dn">Upstairs and the wing don't share</text>
+      <text x="700" y="167" class="dn">walls or air: no link expected</text>
+      <!-- legend -->
       <rect x="25" y="420" width="12" height="16" rx="3" style="fill:var(--ink)"/>
-      <text x="44" y="433" class="dn">ecobee</text>
-      <circle cx="122" cy="428" r="6" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/>
-      <text x="134" y="433" class="dn">SmartSensor (temp + motion)</text>
+      <text x="44" y="433" class="dn">ecobee thermostat</text>
+      <circle cx="170" cy="428" r="6" style="fill:var(--surface);stroke:var(--ink)" stroke-width="2"/>
+      <text x="182" y="433" class="dn">SmartSensor (temp + occupancy)</text>
+      <circle cx="470" cy="428" r="6" fill="none" style="stroke:var(--muted)" stroke-width="1.6" stroke-dasharray="3 3"/>
+      <text x="482" y="433" class="dn">no sensor yet: temperature unknown</text>
+      <text x="975" y="408" text-anchor="end" class="dn">Outdoor air, humidity and sun load all three units</text>
     </svg>
   </figure>
 
@@ -619,13 +628,13 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
     <table class="t">
       <thead><tr><th>Unit</th><th>Thermostat</th><th>Room sensors</th><th>What it fights</th><th>What the app will measure</th></tr></thead>
       <tbody>
-        <tr><td><span class="swatch" style="background:var(--s-main)"></span><b>Main floor</b></td><td>ecobee in the Hallway (temperature, humidity, occupancy)</td><td>School Room, Living Room, Kitchen</td><td>Outdoor heat, kitchen loads, sun on its windows</td><td>How much of its heat ends up upstairs. Its own cooling rate.</td></tr>
+        <tr><td><span class="swatch" style="background:var(--s-main)"></span><b>Main floor</b></td><td>ecobee in the Hallway (temperature, humidity, occupancy)</td><td>School Room, Living Room, Kitchen <span class="muted">· no sensor: Twins' Room, Olive's Room</span></td><td>Outdoor heat, kitchen loads, sun on its windows</td><td>How much of its heat ends up upstairs. Its own cooling rate. Night comfort for the two bedrooms without sensors.</td></tr>
         <tr><td><span class="swatch" style="background:var(--s-up)"></span><b>Upstairs</b></td><td>ecobee Smart Thermostat Essential in the Toy Room (temperature, humidity)</td><td>Toy Room, Girls' Room</td><td>Roof and attic heat, plus heat rising from the main floor</td><td>Its load as a function of the main-floor temperature, outdoor temperature and sun</td></tr>
-        <tr><td><span class="swatch" style="background:var(--s-bed)"></span><b>Bed / Office</b></td><td>ecobee in the Bedroom (temperature, humidity, occupancy)</td><td>Office</td><td>Outdoor heat on the far side of the house</td><td>Whether the main floor affects it at all. If not, it gets its own schedule.</td></tr>
+        <tr><td><span class="swatch" style="background:var(--s-bed)"></span><b>Bed / Office</b></td><td>ecobee in the Bedroom (temperature, humidity, occupancy)</td><td>Office <span class="muted">· no sensor: Foyer (fed by this unit? confirm)</span></td><td>Outdoor heat on the far side of the house</td><td>Whether the main floor affects it at all. If not, it gets its own schedule.</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="small muted" style="margin-top:10px">Nine temperature points in total: three thermostats and six SmartSensors. Every room reports occupancy. The Hallway and Bedroom thermostats sense it themselves, and each SmartSensor reports it. The Essential in the Toy Room doesn't, but the Toy Room's own SmartSensor covers that room. So no extra hardware is needed for occupancy. Humidity comes from the thermostats only. ecobee reports a sensor as occupied for 30 minutes after it last saw motion; the app reads motion live instead (see <a href="#occupancy">Occupancy</a>).</p>
+  <p class="small muted" style="margin-top:10px">Eleven rooms, nine temperature points: three thermostats and six SmartSensors. Eight rooms report temperature and occupancy. The Hallway and Bedroom thermostats sense occupancy themselves, and each SmartSensor reports it; the Essential in the Toy Room doesn't, but the Toy Room's own SmartSensor covers that room. Three rooms have no sensor yet, so their temperature is unknown: the Twins' Room and Olive's Room on the main floor, and the Foyer, which is probably fed by the bedroom unit. Humidity comes from the thermostats only. ecobee reports a sensor as occupied for 30 minutes after it last saw motion; the app reads motion live instead (see <a href="#occupancy">Occupancy</a>).</p>
 </section>
 
 <!-- ================= APP MOCKUP ================= -->
@@ -679,6 +688,8 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
               <div class="room"><span class="nm"><i class="occ"></i><span>Living Room</span></span><span class="tag">sensor</span><span class="v">77.9°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>Kitchen</span></span><span class="tag">sensor</span><span class="v">78.3°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>School Room</span></span><span class="tag">sensor</span><span class="v">76.8°</span></div>
+              <div class="room"><span class="nm"><i class="occ" title="No sensor"></i><span>Twins' Room</span></span><span class="tag">no sensor</span><span class="v">—</span></div>
+              <div class="room"><span class="nm"><i class="occ" title="No sensor"></i><span>Olive's Room</span></span><span class="tag">no sensor</span><span class="v">—</span></div>
             </div>
             <div class="zone-f"><div class="duty"><small>Duty, last hour · 54%</small><div class="meter"><i style="width:54%;background:var(--s-main)"></i></div></div><div class="rt">4h 12m<small>today</small></div></div>
           </article>
@@ -699,6 +710,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
             <div class="rooms">
               <div class="room"><span class="nm"><i class="occ on" title="Occupied"></i><span>Office</span></span><span class="tag">sensor + radar</span><span class="v">75.8°</span></div>
               <div class="room"><span class="nm"><i class="occ"></i><span>Bedroom</span></span><span class="tag">ecobee</span><span class="v">76.4°</span></div>
+              <div class="room"><span class="nm"><i class="occ" title="No sensor"></i><span>Foyer</span></span><span class="tag">no sensor</span><span class="v">—</span></div>
             </div>
             <div class="zone-f"><div class="duty"><small>Duty, last hour · 33%</small><div class="meter"><i style="width:33%;background:var(--s-bed)"></i></div></div><div class="rt">2h 05m<small>today</small></div></div>
           </article>
@@ -742,7 +754,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
           </div>
         </div>
         <div class="row c21">
-          <div class="panel"><div class="panel-h"><h5>When each room is usually in use</h5><span class="sub">weekdays · learned from 12 months of SmartSensor history</span></div><div id="ch-occ"></div>
+          <div class="panel"><div class="panel-h"><h5>When each room is usually in use</h5><span class="sub">weekdays · learned from 12 months of sensor history (Twins' and Olive's: bedtime schedule, no sensor)</span></div><div id="ch-occ"></div>
             <p class="small muted" style="margin-top:6px">Nights in the Girls' Room and the Bedroom come from the sleep schedule. Motion sensors can't see people sleeping.</p></div>
           <div class="panel"><div class="panel-h"><h5>Rules for occupied rooms</h5></div>
             <ul class="small" style="margin:0;padding-left:1.1em;color:var(--ink-2);display:grid;gap:6px">
@@ -751,7 +763,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
               <li><b>Each room has its own "empty" window</b>, short for the hallway, longer for the office. Back in use: it counts immediately.</li>
               <li><b>Over the band:</b> at most 1°F for 15 min in an occupied room, 0.5°F for 10 min in a sleeping one.</li>
               <li><b>Predicted use</b> starts recovery early: the School Room is cooled before 8 AM on school days.</li>
-              <li><b>An empty main floor is still a buffer</b> while anyone is upstairs (the linked-floors rule).</li>
+              <li><b>An empty main floor is a buffer</b> during the day while anyone is upstairs. At night the Twins' and Olive's rooms are asleep, so it holds sleep comfort instead.</li>
             </ul>
           </div>
         </div>
@@ -903,13 +915,13 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
               <table class="band-table">
                 <thead><tr><th>Zone</th><th>Day</th><th>Evening</th><th>Night</th><th>Rooms that count</th></tr></thead>
                 <tbody>
-                  <tr><td>Main floor</td><td class="num">76–78</td><td class="num">76–77</td><td class="num">buffer</td><td>Living, Kitchen, School</td></tr>
+                  <tr><td>Main floor</td><td class="num">76–78</td><td class="num">76–77</td><td class="num">72–75</td><td>Living, Kitchen, School · Hallway at night (nearest the Twins' and Olive's rooms)</td></tr>
                   <tr><td>Upstairs</td><td class="num">77–79</td><td class="num">76–78</td><td class="num">74–76</td><td>Toy Room day · Girls' Room night</td></tr>
                   <tr><td>Bed / Office</td><td class="num">75–77</td><td class="num">76–78</td><td class="num">72–74</td><td>Office day · Bedroom night</td></tr>
                 </tbody>
               </table>
             </div>
-            <p class="small muted" style="margin-top:8px">"Buffer" means the zone has no comfort target and is managed for the floors around it by the linked rule.</p>
+            <p class="small muted" style="margin-top:8px">When the main floor is empty during the day, it has no comfort target of its own and is managed for the upstairs by the linked rule. Rooms without a sensor (Twins', Olive's, Foyer) can't be measured, so the app goes by their bedtimes and the nearest reading.</p>
             <div class="form-grid" style="margin-top:10px">
               <div class="f-row"><div>ecobee Smart Home/Away<small>Off. It would fight the linked rule.</small></div><span class="pill">Off · set by app</span></div>
               <div class="f-row"><div>ecobee Follow Me<small>Off. The app picks sensors per time block instead.</small></div><span class="pill">Off · set by app</span></div>
@@ -950,7 +962,7 @@ footer.foot{padding-block:40px 64px;color:var(--muted);font-size:.85rem;border-t
     <div class="card"><h4>Linked floors</h4><p>When the main floor is empty but someone is upstairs, the main floor doesn't float. Its target is tied to the upstairs target plus a learned offset. The starting offset is 1°F cooler than upstairs.</p><p style="margin-top:8px"><span class="pill accent">Learns: offset by temperature, sun and hour</span></p></div>
     <div class="card"><h4>Setback and recovery move together</h4><p>When the whole house is empty, both floors set back together with the main floor still the cooler one, as in your example: main 80°F, upstairs 82°F. The setback gap is learned separately from the 1°F occupied offset. On recovery the main floor starts first, so the upstairs cools down with less heat coming from below. Your rule (upstairs 82→78 means main goes to 77) is the starting point.</p><p style="margin-top:8px"><span class="pill accent">Learns: recovery lead, 0–45 min</span></p></div>
     <div class="card"><h4>Pre-cool with the forecast</h4><p>On hot, sunny days the upstairs is cooled 1–2°F below target before noon. The outdoor air is cooler then and the AC removes heat more efficiently. The upstairs then coasts through the solar peak. On mild days the app skips it, because there it only adds runtime.</p><p style="margin-top:8px"><span class="pill accent">Learns: depth, start time, the forecast threshold</span></p></div>
-    <div class="card"><h4>The right sensors at the right time</h4><p>ecobee comfort settings decide which sensors count. Upstairs uses the Toy Room by day and the Girls' Room at night. Main floor uses the Living Room, Kitchen and School Room. The wing uses the Office 9–5 and the Bedroom at night. The app writes these into each ecobee program and turns Follow Me off so ecobee doesn't override them. ecobee temperature holds use the <em>Home</em> setting's sensors, so the current time block's set is written into Home too.</p></div>
+    <div class="card"><h4>The right sensors at the right time</h4><p>ecobee comfort settings decide which sensors count. Upstairs uses the Toy Room by day and the Girls' Room at night. Main floor uses the Living Room, Kitchen and School Room by day, and the Hallway thermostat at night as the nearest reading to the Twins' and Olive's rooms, which have no sensors. The wing uses the Office 9–5 and the Bedroom at night. The app writes these into each ecobee program and turns Follow Me off so ecobee doesn't override them. ecobee temperature holds use the <em>Home</em> setting's sensors, so the current time block's set is written into Home too.</p></div>
     <div class="card"><h4>Bed / Office runs on its own</h4><p>Unless the data shows the main floor affecting the wing, it stays independent. Its savings come from its schedule, with the office empty in the evening and the bedroom only at night, and from sensor sets. If coupling shows up in the data, the wing joins the linked rules.</p></div>
     <div class="card"><h4>Protect the equipment and the air</h4><p>Minimum run and off times prevent short cycling, and cycles per hour are tracked as a health signal. Indoor humidity has to stay under about 58%: a strategy that saves runtime by raising humidity loses. If someone adjusts a thermostat by hand, the app backs off and records it as feedback.</p></div>
   </div>
@@ -986,7 +998,7 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
         <tr><td class="num">Midday</td><td>The main floor empties out. The linked rule keeps it tied to the upstairs instead of floating to 80°F.</td><td>Controller</td></tr>
         <tr><td class="num">3–6 PM</td><td>Solar peak. Every 3 minutes the app watches upstairs duty and room temperatures. If the upstairs is about to max out, it lowers the main-floor target within your limits.</td><td>Controller, alerts to you</td></tr>
         <tr><td class="num">5:30 PM</td><td>Recovery for the evening. The main floor leads the upstairs by the learned lead time.</td><td>Controller</td></tr>
-        <tr><td class="num">9–10 PM</td><td>Night sensor sets: the Girls' Room upstairs at the 9 PM bedtime, the Bedroom in the wing at 10 PM. The main floor becomes a buffer. Quiet hours begin at 10 PM.</td><td>ecobee program, written by the app</td></tr>
+        <tr><td class="num">Bedtimes</td><td>Night sensor sets switch at each room's bedtime, which you set: the Hallway on the main floor (the nearest reading to the Twins' and Olive's rooms), the Girls' Room upstairs, the Bedroom in the wing. From then on the main floor holds sleep comfort. Quiet hours begin at 10 PM.</td><td>ecobee program, written by the app</td></tr>
       </tbody>
     </table>
   </div>
@@ -1005,7 +1017,7 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
   <div class="sec-head">
     <p class="eyebrow">Occupancy</p>
     <h2 id="h-occ">Rooms in use come first</h2>
-    <p>Yes, and your house already has what it needs. Every room reports occupancy: six SmartSensors plus the Hallway and Bedroom thermostats, so no extra hardware is required. The app keeps its own estimate for each room instead of trusting ecobee's flag. An occupied room's comfort is never traded for runtime. Expect room-by-room priority mostly to buy comfort; the runtime savings come from whole floors being empty, from timing, and from the linked-floors rule.</p>
+    <p>Yes, and your house already has what it needs. 8 of your 11 rooms report occupancy: six SmartSensors plus the Hallway and Bedroom thermostats. That's enough to run without buying anything; the three rooms without a sensor are covered below. The app keeps its own estimate for each room instead of trusting ecobee's flag. An occupied room's comfort is never traded for runtime. Expect room-by-room priority mostly to buy comfort; the runtime savings come from whole floors being empty, from timing, and from the linked-floors rule.</p>
   </div>
 
   <div class="grid-2">
@@ -1043,6 +1055,27 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
   </div>
   <p class="small muted" style="margin-top:8px">It starts with three states and adds "Arriving" once a few weeks of data show the predictions are right. A missed arrival costs comfort, while a false "occupied" only costs some runtime, so every tie goes to comfort.</p>
 
+  <h3 style="margin:36px 0 14px">Rooms without a sensor: Twins' Room, Olive's Room, Foyer</h3>
+  <div class="grid-2" style="align-items:start">
+    <div class="card">
+      <h4>How the app treats them today</h4>
+      <ul>
+        <li><b>Temperature: unknown.</b> They show as "no sensor" and are never given the thermostat's number as if it were theirs.</li>
+        <li><b>Occupancy: from schedules.</b> You set bedtimes for the Twins' and Olive's rooms, and they count as asleep through the night, the same as the Girls' Room. The Foyer is a walk-through space with no comfort target.</li>
+        <li><b>Control at night:</b> the main floor's night sensor set is the Hallway thermostat, the nearest reading to those two bedrooms. If they run warmer or cooler than the hallway, the app can't see it until they're measured.</li>
+        <li><b>The Foyer's unit:</b> to confirm it's on the bedroom system, run only the bedroom unit for a few minutes and feel whether the Foyer vent blows.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>How to learn them, cheapest first</h4>
+      <ul>
+        <li><b>Calibration week, no purchase.</b> Move one of your SmartSensors into each room for about a week (the School Room's during a school break, say). The app learns how that room runs against the Hallway reading by hour, outdoor temperature and sun. After you move it back, it shows a labeled <em>estimated</em> temperature with a range.</li>
+        <li><b>A SmartSensor in each bedroom</b> (about $50 each). Measures the room, adds occupancy, and can join the main floor's night set so the thermostat itself listens to the bedrooms. The best fit for rooms people sleep in.</li>
+        <li><b>A Zigbee temperature sensor</b> (about $16). Only the app can read it, the ecobee can't use it, and it has no occupancy. Fine for the Foyer.</li>
+      </ul>
+    </div>
+  </div>
+
   <div class="grid-2" style="margin-top:28px">
     <div class="card">
       <h4>How occupancy steers each thermostat</h4>
@@ -1055,7 +1088,7 @@ subject to  occupied rooms inside their comfort band ≥ 97% of minutes
     <div class="card">
       <h4>Occupancy and the linked floors</h4>
       <ul>
-        <li><b>Main floor empty, anyone upstairs (including sleeping):</b> the main floor becomes a buffer tied to the upstairs target. It never floats to its Away setting. On summer nights this is the normal state.</li>
+        <li><b>Main floor empty during the day, anyone upstairs:</b> the main floor becomes a buffer tied to the upstairs target. It never floats to its Away setting. At night the main floor isn't empty: the Twins' and Olive's rooms are asleep, so both floors hold sleep comfort, and the offset only decides how cooling is shared between them.</li>
         <li><b>Whole house empty:</b> adults' phones away <em>and</em> no motion anywhere for 45 minutes <em>and</em> outside sleep windows. Both floors set back together, with the main floor still the cooler one.</li>
         <li><b>Coming home:</b> recovery is timed from the learned arrival pattern, with the main floor leading.</li>
         <li><b>Bed / Office wing:</b> sets back only when both rooms are empty.</li>
@@ -1486,11 +1519,12 @@ options = ClaudeAgentOptions(
   </div>
 
   <h3 style="margin:36px 0 14px">Hardware worth adding, in priority order</h3>
-  <p class="prose small muted" style="margin:-6px 0 12px">None of this is needed for occupancy: every room already reports it. These add measurements the ecobees can't take.</p>
+  <p class="prose small muted" style="margin:-6px 0 12px">None of this is needed to run the app: 8 of your 11 rooms already report temperature and occupancy. These fill the gaps and add measurements the ecobees can't take.</p>
   <div class="table-wrap">
     <table class="t">
       <thead><tr><th>Add</th><th>What it fixes</th><th>Rough cost</th></tr></thead>
       <tbody>
+        <tr><td><b>SmartSensors in the Twins' and Olive's rooms</b>, or a calibration week with an existing sensor first</td><td>The two main-floor bedrooms have no sensor, so their night temperature is unknown</td><td class="num">~$50 each</td></tr>
         <tr><td><b>2 temperature sensors at the top and bottom of the stairwell</b> (Zigbee, e.g. SONOFF SNZB-02D)</td><td>Measures the stairwell heat flow directly instead of inferring it</td><td class="num">~$16 each</td></tr>
         <tr><td><b>Power monitoring on each condenser and air handler</b> (Emporia Vue 3 flashed to ESPHome, or Shelly EM Gen3 per unit)</td><td>Real kW per unit, so the app optimizes energy instead of minutes. Also catches a compressor that fails to start.</td><td class="num">~$200 total, or ~$82 per unit</td></tr>
         <tr><td><b>mmWave presence</b>, optional, only for rooms that get marked empty while someone sits still (likely the Office)</td><td>Motion sensors can miss people sitting still for a long time</td><td class="num">$35–60 each</td></tr>
@@ -1580,7 +1614,7 @@ options = ClaudeAgentOptions(
       <div class="table-wrap"><table class="t" style="min-width:420px">
         <thead><tr><th>Table</th><th>Holds</th></tr></thead>
         <tbody>
-          <tr><td class="num">units, sensors</td><td>3 thermostats, 6 SmartSensors (9 temperature points), room names, which floor</td></tr>
+          <tr><td class="num">units, sensors</td><td>11 rooms, 3 thermostats, 6 SmartSensors (9 temperature points), which floor, rooms with no sensor flagged</td></tr>
           <tr><td class="num">readings_5m</td><td>Per sensor: temp, occupancy. Per unit: humidity, targets, mode, comfort setting, equipment</td></tr>
           <tr><td class="num">runtime_5m</td><td>Per unit: compCool1/2, compHeat1/2, auxHeat1/2, fan seconds (stage 1 already includes stage 2)</td></tr>
           <tr><td class="num">occupancy_events, room_state_1m</td><td>Every motion, presence and door signal; each room's state and confidence by minute</td></tr>
@@ -1626,9 +1660,9 @@ options = ClaudeAgentOptions(
     <p>Each phase ends in something you can use. Apart from Phase 0's HomeKit pairing and a one-night test hold, nothing writes to a thermostat until phase 4, and complexity is earned: the simple linked-floors rule goes first, and the full house model only replaces it if it does better. It's October, so the backfill hands you last summer's cooling data right away. Heating season gets its own learning pass, and that's when heat rising from the main floor starts working in your favor.</p>
   </div>
   <div>
-    <div class="phase"><div class="when"><b>Phase 0</b>this week</div><div><h4>Access, local pairing, and the facts</h4><ul><li>ecobee sign-in with TOTP or SMS MFA; HomeKit pairing for all three thermostats (decide on Apple Home first)</li><li>Run the <a href="#ecobee">Phase 0 tests</a>: compressor columns, history depth, model numbers, hold sensor behavior, Smart Away type</li><li>Confirm all six SmartSensors show up on both links, order the two stairwell sensors, database schema and Open-Meteo for your location</li></ul><p class="exit"><b>Done when</b>all 9 temperature points stream live and the Phase 0 tests have answers</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 0</b>this week</div><div><h4>Access, local pairing, and the facts</h4><ul><li>ecobee sign-in with TOTP or SMS MFA; HomeKit pairing for all three thermostats (decide on Apple Home first)</li><li>Run the <a href="#ecobee">Phase 0 tests</a>: compressor columns, history depth, model numbers, hold sensor behavior, Smart Away type</li><li>Confirm all six SmartSensors show up on both links and which unit feeds the Foyer; order the two stairwell sensors; database schema and Open-Meteo for your location</li></ul><p class="exit"><b>Done when</b>all 9 temperature points stream live and the Phase 0 tests have answers</p></div></div>
     <div class="phase"><div class="when"><b>Phase 1</b>weeks 1–2</div><div><h4>History and the live dashboard</h4><ul><li>Backfill all available 5-minute history and matching weather</li><li>Live, Rooms and Runtime screens; daily digest to your phone</li></ul><p class="exit"><b>Done when</b>daily runtime per unit matches ecobee's own reports within 1%</p></div></div>
-    <div class="phase"><div class="when"><b>Phase 2</b>weeks 2–4</div><div><h4>Baselines, the history study, occupancy v1</h4><ul><li>Weather-expected runtime per unit and the attribution waterfall</li><li>History study of past warm-main-floor afternoons for a first coupling estimate</li><li>Room occupancy with three states (occupied, asleep, empty) and learned patterns</li></ul><p class="exit"><b>Done when</b>baselines pass their checks on held-out days, and you've spot-checked a week of room states</p></div></div>
+    <div class="phase"><div class="when"><b>Phase 2</b>weeks 2–4</div><div><h4>Baselines, the history study, occupancy v1</h4><ul><li>Weather-expected runtime per unit and the attribution waterfall</li><li>History study of past warm-main-floor afternoons for a first coupling estimate</li><li>Room occupancy with three states (occupied, asleep, empty), learned patterns, and bedtimes for the rooms without sensors; optional calibration week for the Twins' and Olive's rooms</li></ul><p class="exit"><b>Done when</b>baselines pass their checks on held-out days, and you've spot-checked a week of room states</p></div></div>
     <div class="phase"><div class="when"><b>Phase 3</b>weeks 3–5</div><div><h4>Claude as analyst (read-only)</h4><ul><li>House tools, nightly review with sign-off of model changes, weekly report, Ask Claude tab, all on your Claude subscription through the Agent SDK</li><li>MCP server so you can ask from Claude Code or Desktop on your subscription</li></ul><p class="exit"><b>Done when</b>the weekly report tells you something you didn't know</p></div></div>
     <div class="phase"><div class="when"><b>Phase 4</b>weeks 5–8</div><div><h4>Controller, Suggest mode, Linked floors</h4><ul><li>Guardrails, timed holds with read-back, audit log, ecobee feature settings, sensor sets per time block</li><li>Linked floors checked against the weather baseline before and after (a 10–15% effect shows within weeks), then its offset tuned with one switchback, its success measure and checkpoints fixed in advance</li></ul><p class="exit"><b>Done when</b>upstairs maxed-out minutes are near zero and total-house savings have a 90% interval</p></div></div>
     <div class="phase"><div class="when"><b>Phase 5</b>week 8 on</div><div><h4>House model, tuning, Auto mode, heating season</h4><ul><li>The full house model, forecast pre-cooling and automatic tuning, each adopted only if it beats the linked-floors rule in backtests</li><li>Predicted arrivals, equipment health alerts, a heating-season learning pass</li></ul><p class="exit"><b>Done when</b>experiments stop finding gains larger than their uncertainty</p></div></div>
@@ -1644,7 +1678,8 @@ options = ClaudeAgentOptions(
     <div class="q"><b>Stairwell.</b> Open, or is there a door you could close?</div>
     <div class="q"><b>Server.</b> What will run this? Is Home Assistant already running (useful for add-on sensors)?</div>
     <div class="q"><b>Location and rates.</b> ZIP for the weather point, and a flat or time-of-use electricity rate?</div>
-    <div class="q"><b>Routines.</b> Bedtimes for the Girls' Room and Bedroom, school hours, office hours.</div>
+    <div class="q"><b>Routines.</b> Bedtimes for the Girls', Twins' and Olive's rooms and the Bedroom; school hours; office hours. (I've assumed the Twins' and Olive's rooms are bedrooms.)</div>
+    <div class="q"><b>Foyer.</b> Which unit blows air into it? Run only the bedroom unit for a few minutes and feel the Foyer vent.</div>
     <div class="q"><b>Comfort.</b> Your preferred band per floor and time of day.</div>
   </div>
 </section>
@@ -2027,6 +2062,8 @@ const OCC=[
   {room:"Living Room",zc:"--s-main",p:P(.03,{7:.3,8:.2,"9-15":.1,16:.25,17:.4,18:.6,19:.85,20:.9,21:.8,22:.4,23:.1})},
   {room:"Kitchen",zc:"--s-main",p:P(.05,{6:.2,7:.7,8:.4,11:.3,12:.6,13:.2,16:.3,17:.7,18:.8,19:.4})},
   {room:"School Room",zc:"--s-main",p:P(.02,{8:.7,"9-11":.9,12:.4,"13-14":.85,15:.3})},
+  {room:"Twins' Room",zc:"--s-main",p:P(.03,{"0-6":.95,7:.5,"20-23":.95}),src:h=>"bedtime schedule (no sensor)"},
+  {room:"Olive's Room",zc:"--s-main",p:P(.03,{"0-6":.95,7:.5,"20-23":.95}),src:h=>"bedtime schedule (no sensor)"},
   {room:"Toy Room",zc:"--s-up",p:P(.05,{7:.2,8:.1,15:.6,16:.85,17:.8,18:.5,19:.4,20:.2})},
   {room:"Girls' Room",zc:"--s-up",p:P(.05,{"0-6":.95,7:.6,8:.15,20:.6,"21-23":.95}),src:sleepSrc(21,7)},
   {room:"Office",zc:"--s-bed",p:P(.03,{8:.6,"9-11":.9,12:.5,"13-16":.9,17:.4})},
@@ -2035,13 +2072,16 @@ const ROOMS=[
   ["Hallway","Main floor","--s-main",false,"5%","Thermostat's own occupancy sensor: no motion for 1 h 50 min; a walk-through space","—","No","77.4° · buffer"],
   ["Living Room","Main floor","--s-main",false,"6%","No motion for 2 h 10 min (live over HomeKit)","Evenings","Yes","77.9° · buffer"],
   ["Kitchen","Main floor","--s-main",false,"4%","No motion for 2 h 40 min","—","Yes","78.3° · buffer"],
+  ["Twins' Room","Main floor","--s-main",false,"none","No sensor. Counts as asleep from 8 PM (the bedtime you set).","Nights","No","unknown"],
+  ["Olive's Room","Main floor","--s-main",false,"none","No sensor. Counts as asleep from 8 PM (the bedtime you set).","Nights","No","unknown"],
   ["School Room","Main floor","--s-main",false,"9%","School ended 3 PM on the schedule; no motion since 2:51 PM","School days 8–3","Yes","76.8° · buffer"],
   ["Toy Room","Upstairs","--s-up",true,"97%","Motion 1 min ago (SmartSensor)","Daytime","Yes (day set)","78.6° · 77–79 ✓"],
   ["Girls' Room","Upstairs","--s-up",false,"8%","No motion since 9:05 AM; counts as asleep from 9 PM (sleep window)","Nights","Night set only","78.1° · relaxed"],
   ["Office","Bed / Office","--s-bed",true,"91%","Radar sensor (optional add-on) sees someone at the desk. No motion for 22 min, so ecobee alone would call it empty in 8 min.","Weekdays 9–5","Yes (9–5 set)","75.8° · 75–77 ✓"],
-  ["Bedroom","Bed / Office","--s-bed",false,"3%","Empty; counts as asleep from 10 PM (sleep window)","Nights","Night set only","76.4° · relaxed"]];
+  ["Bedroom","Bed / Office","--s-bed",false,"3%","Empty; counts as asleep from 10 PM (sleep window)","Nights","Night set only","76.4° · relaxed"],
+  ["Foyer","Bed / Office","--s-bed",false,"none","No sensor. A walk-through space with no comfort target; probably fed by this unit.","—","No","unknown"]];
 (function(){const tb=$("#roomsTable tbody");ROOMS.forEach(r=>{const tr=H("tr",null,null,tb);const c0=H("td",null,null,tr);const sw=H("span","swatch",null,c0);sw.style.background=C(r[2]);H("b",null,r[0],c0);
-  H("td",null,r[1],tr);const c2=H("td",null,null,tr);H("span",r[3]?"pill good":"pill",r[3]?`In use · ${r[4]}`:`Empty · ${r[4]}`,c2);
+  H("td",null,r[1],tr);const c2=H("td",null,null,tr);if(r[4]==="none")H("span","pill warn","No sensor",c2);else H("span",r[3]?"pill good":"pill",r[3]?`In use · ${r[4]}`:`Empty · ${r[4]}`,c2);
   H("td",null,r[5],tr);H("td",null,r[6],tr);H("td",null,r[7],tr);H("td","num",r[8],tr);});})();
 
 /* ---- model: upstairs forecast vs actual, noon to 6 PM ---- */

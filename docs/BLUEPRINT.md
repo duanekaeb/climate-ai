@@ -16,14 +16,29 @@ The interactive version of this document, including a working mockup of the app,
 
 | Unit | Thermostat | Remote sensors | Notes |
 |---|---|---|---|
-| **Main floor** | ecobee in the Hallway (temperature, humidity, occupancy) | School Room, Living Room, Kitchen | Its heat rises into the upstairs through the floor and the open stairwell |
+| **Main floor** | ecobee in the Hallway (temperature, humidity, occupancy) | School Room, Living Room, Kitchen · no sensor: Twins' Room, Olive's Room | Its heat rises into the upstairs through the floor and the open stairwell |
 | **Upstairs** | ecobee Smart Thermostat Essential in the Toy Room (`attisRetail`; temperature, humidity) | Toy Room, Girls' Room | Under the roof. Loaded by the sun and by heat from the main floor |
-| **Bed / Office** | ecobee in the Bedroom (temperature, humidity, occupancy) | Office | Opposite side of the house. No link to the upstairs; a weak link to the main floor at most |
+| **Bed / Office** | ecobee in the Bedroom (temperature, humidity, occupancy) | Office · no sensor: Foyer (fed by this unit? confirm) | Opposite side of the house. No link to the upstairs; a weak link to the main floor at most |
 
-There are nine temperature points: three thermostats and six SmartSensors. Every room reports
-occupancy: the Hallway and Bedroom thermostats sense it themselves, and each SmartSensor reports it.
-The Essential has no occupancy sensor, but the Toy Room's SmartSensor covers that room. No extra
-hardware is needed for occupancy. Humidity comes from the thermostats only.
+There are eleven rooms and nine temperature points: three thermostats and six SmartSensors.
+Eight rooms report temperature and occupancy. The Hallway and Bedroom thermostats sense occupancy
+themselves, and each SmartSensor reports it; the Essential has none, but the Toy Room's SmartSensor
+covers that room. Three rooms have no sensor and their temperature is unknown: the Twins' Room and
+Olive's Room (main-floor bedrooms) and the Foyer (probably on the bedroom unit). Humidity comes from
+the thermostats only.
+
+**Rooms without a sensor.** Their temperature is never assumed; it shows as unknown. Occupancy for
+them comes from schedules (bedtimes for the two bedrooms; the Foyer is a walk-through space with no
+comfort target). At night the main floor's sensor set is the Hallway, the nearest reading to the
+two bedrooms. To learn them:
+- **Without buying anything:** do a calibration week, moving one SmartSensor into each room. The
+  app learns the room's offset from the Hallway by hour, outdoor temperature and sun, then shows a
+  labeled estimate with a range.
+- **SmartSensors in the two bedrooms** (about $50 each): measured temperature, occupancy, and they
+  can join the night set.
+- **A Zigbee sensor** (about $16): app-only, fine for the Foyer.
+
+To confirm the Foyer's unit, run only the bedroom unit and feel the Foyer vent.
 
 **Observed problem.** When the main floor is empty, ecobee Smart Away lets it float warm (about
 80°F). If someone is upstairs holding 77°F, heat from the warmer main floor rises. That extra load is
@@ -39,9 +54,11 @@ backfill's calendar events show which one fired.
 
 ### Controller rules
 
-1. **Linked floors (buffer zone).** When the main floor is empty but anyone is upstairs (including
-   asleep), the main floor's target is tied to the upstairs target plus a learned offset, starting
-   at 1°F cooler. It never floats to its Away setting.
+1. **Linked floors (buffer zone).** When the main floor is empty during the day but anyone is
+   upstairs, the main floor's target is tied to the upstairs target plus a learned offset, starting
+   at 1°F cooler. It never floats to its Away setting. At night the main floor is not empty (the
+   Twins' and Olive's rooms are asleep), so both floors hold sleep comfort, steered on the main
+   floor by the Hallway thermostat.
 2. **Setback and recovery move together.** When the whole house is empty, both floors set back
    together with the main floor still the cooler one (for example main 80°F, upstairs 82°F). The
    setback gap is learned separately from the 1°F occupied offset. On recovery the main floor leads by a
@@ -80,7 +97,8 @@ sleeping. Every room has a signal; the Toy Room's comes from its SmartSensor.
   since last motion".
 - Learned per-room patterns from the 5-minute sensor history (school days, weekends, holidays
   separately), for every room with a SmartSensor.
-- Sleep windows for the Girls' Room and Bedroom: they count as occupied all night.
+- Sleep windows for the Girls', Twins' and Olive's rooms and the Bedroom: they count as occupied all
+  night. The Twins' and Olive's rooms have no sensor, so bedtimes are their only occupancy signal.
 - Optional add-on presence sensors (mmWave), only for a room that keeps getting marked empty while
   someone sits still (likely the Office). Door contacts on bedrooms (closed after motion means
   someone is probably inside).
@@ -326,13 +344,14 @@ becomes a hard requirement, use a listed thermostat with a local API (Venstar Co
 T6 Pro Z-Wave).
 
 **Hardware to add (read-only), in priority order:**
-None of this is needed for occupancy.
-1. Stairwell top/bottom temperature sensors.
-2. Per-unit power monitoring (Emporia Vue 3 or Shelly EM Gen3).
-3. Optional mmWave for a room where people sit still and get marked empty.
-4. Bedroom/Office door contacts.
-5. A wired attic probe.
-6. A 24V call monitor with supply/return probes.
+None of this is needed to run the app.
+1. SmartSensors in the Twins' and Olive's rooms, or a calibration week with an existing sensor first.
+2. Stairwell top/bottom temperature sensors.
+3. Per-unit power monitoring (Emporia Vue 3 or Shelly EM Gen3).
+4. Optional mmWave for a room where people sit still and get marked empty.
+5. Bedroom/Office door contacts.
+6. A wired attic probe.
+7. A 24V call monitor with supply/return probes.
 
 **Adapter rules.**
 - Read back every write; the library swallows HTTP errors.
@@ -392,7 +411,7 @@ Phase 4.
 
 | Phase | When | Deliverable | Done when |
 |---|---|---|---|
-| 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, confirm all six SmartSensors appear on both links, order stairwell sensors | all 9 points stream live; tests answered |
+| 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, confirm all six SmartSensors appear on both links and which unit feeds the Foyer, order stairwell sensors | all 9 points stream live; tests answered |
 | 1 | weeks 1–2 | backfill, Live/Rooms/Runtime screens, daily digest | runtime per unit matches ecobee within 1% |
 | 2 | weeks 2–4 | baselines, attribution, history study, occupancy v1 (3 states) | baselines pass checks; a week of room states spot-checked |
 | 3 | weeks 3–5 | Claude analyst on your subscription (read-only tools + sign-off of model changes), weekly report, MCP server | the weekly report says something new |
@@ -409,6 +428,8 @@ Phase 4.
 6. Is the stairwell open, or is there a door?
 7. What server runs this? Is Home Assistant already running?
 8. Weather point (ZIP), and flat or time-of-use electricity rate?
-9. Bedtimes, school hours, office hours.
+9. Bedtimes (Girls', Twins' and Olive's rooms, Bedroom), school hours, office hours. Are the Twins' and
+   Olive's rooms bedrooms (assumed)?
 10. Comfort bands per floor and time.
 11. Which Claude plan (Pro or Max)? It sets how much room the nightly runs have.
+12. Which unit feeds the Foyer?

@@ -5,13 +5,17 @@ Read `docs/BLUEPRINT.md` before building anything. It is the plan of record.
 ## The house
 
 - **Main floor:** ecobee in the Hallway (temperature, humidity, occupancy); SmartSensors in the
-  School Room, Living Room and Kitchen.
+  School Room, Living Room and Kitchen. **No sensor:** Twins' Room, Olive's Room (bedrooms).
 - **Upstairs:** ecobee Smart Thermostat Essential (`attisRetail`) in the Toy Room (temperature and
   humidity, no occupancy); SmartSensors in the Toy Room and the Girls' Room.
 - **Bed / Office wing:** ecobee in the Bedroom (temperature, humidity, occupancy); SmartSensor in
-  the Office.
-- Six SmartSensors, nine temperature points. Every room reports occupancy (the six SmartSensors
-  plus the Hallway and Bedroom thermostats), so no extra hardware is needed for it.
+  the Office. **No sensor:** Foyer (probably fed by this unit; confirm).
+- Eleven rooms, six SmartSensors, nine temperature points. Eight rooms report temperature and
+  occupancy; the three without sensors are schedule-only.
+- **Never invent a temperature for a room without a sensor.** Show "unknown", or a labeled
+  estimate with a range only after a calibration week. At night the main floor's sensor set is the
+  Hallway (nearest the Twins' and Olive's rooms), and the main floor holds sleep comfort; it is a
+  buffer only when it is empty during the day.
 - The main floor drives heat into the upstairs (floor + open stairwell). The wing is independent
   of the upstairs and at most weakly linked to the main floor. Measure; don't assume.
 
