@@ -31,3 +31,5 @@ ios/**/xcuserdata/
 ios/**/DerivedData/
 ios/*.xcodeproj/
 build/
+# reviewer scratch tests
+api/tests/test_zz_*.py
