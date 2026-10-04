@@ -6,7 +6,7 @@
 // and shows the app's writes as they are logged, then the job's steps.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/client'
-import type { ControlActionOut, EcobeeOriginal, SensorOut, UnitOut } from '@/api/types'
+import type { ControlActionOut, EcobeeOriginal, HandbackStep, SensorOut, UnitOut } from '@/api/types'
 import { onEvent } from '@/api/ws'
 import AsyncState from '@/components/AsyncState.vue'
 import Card from '@/components/Card.vue'
@@ -120,8 +120,25 @@ onBeforeUnmount(() => {
   stopPolling()
 })
 
+// A restore that was skipped (no thermostat source, the simulator, only HomeKit data, a person's
+// hold or an event in the way) is not done: it still needs another hand-back. The same rule as
+// the closing alert's "Not done yet" (climate.control.handback.pending_steps): the sensor-set and
+// Smart Away / Follow Me restores whose detail starts "Skipped", unless nothing was captured.
+// Any other skipped step (our hold, which ends on its own) is shown as neither done nor failed.
+const PENDING_STEPS = new Set(['Home sensors restored', 'Smart Away and Follow Me restored'])
+const skipped = (s: HandbackStep) => s.ok && s.detail.startsWith('Skipped')
+const pendingStep = (s: HandbackStep) =>
+  skipped(s) && PENDING_STEPS.has(s.what) && !s.detail.startsWith('Skipped: no ecobee')
+function stepLook(s: HandbackStep): { icon: string; cls: string; label: string } {
+  if (!s.ok) return { icon: 'x', cls: 'text-bad', label: 'Failed' }
+  if (pendingStep(s)) return { icon: 'alert', cls: 'text-warn', label: 'Not done yet' }
+  if (skipped(s)) return { icon: 'more', cls: 'text-muted', label: 'Skipped' }
+  return { icon: 'check', cls: 'text-good', label: 'Done' }
+}
+
 const steps = computed(() => info.value?.steps ?? [])
 const failedSteps = computed(() => steps.value.filter((s) => !s.ok).length)
+const pendingSteps = computed(() => steps.value.filter(pendingStep).length)
 </script>
 
 <template>
@@ -191,13 +208,21 @@ const failedSteps = computed(() => steps.value.filter((s) => !s.ok).length)
             <span v-if="job.status === 'failed' || failedSteps" class="text-bad">
               · {{ job.status === 'failed' ? 'failed' : `${failedSteps} step${failedSteps === 1 ? '' : 's'} failed` }}
             </span>
+            <span v-if="pendingSteps" class="text-warn">
+              · {{ pendingSteps }} not done yet
+            </span>
           </p>
           <p v-if="job.error" class="mt-1 text-xs text-bad break-words">{{ job.error }}</p>
+          <p v-if="pendingSteps" class="mt-1 text-xs text-muted">
+            Some restores couldn't run. Hand back again once the thermostats can be reached to finish them.
+          </p>
           <ul class="mt-1 space-y-1">
             <li v-for="(s, i) in steps" :key="i" class="flex items-start gap-1.5 text-sm">
-              <Icon :name="s.ok ? 'check' : 'x'" :size="14" class="mt-1 shrink-0" :class="s.ok ? 'text-good' : 'text-bad'" />
+              <Icon :name="stepLook(s).icon" :size="14" class="mt-1 shrink-0" :class="stepLook(s).cls" />
               <span class="min-w-0 break-words">
+                <span class="sr-only">{{ stepLook(s).label }}: </span>
                 <template v-if="s.unit_key">{{ unitName(s.unit_key) }}: </template>{{ s.what }}
+                <span v-if="pendingStep(s)" class="text-warn"> · not done yet</span>
                 <span v-if="s.detail" class="text-muted"> · {{ s.detail }}</span>
               </span>
             </li>

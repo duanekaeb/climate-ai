@@ -65,7 +65,7 @@ from climate.store.app_settings import (
     put_setting,
 )
 from climate.store.db import get_session
-from climate.store.orm import Change, ControlAction, Job, LiveUnit, PolicyVersion, Unit
+from climate.store.orm import AppSetting, Change, ControlAction, Job, LiveUnit, PolicyVersion, Unit
 from climate.timeutil import utcnow
 
 log = logging.getLogger(__name__)
@@ -290,8 +290,19 @@ def get_settings_route(_: Role = ReaderDep, session: Session = SessionDep) -> Se
 def put_settings_route(
     body: SettingsUpdate, _: Role = OwnerDep, session: Session = SessionDep
 ) -> SettingsOut:
+    """Save the sections given. ``control.mode`` is never changed here: the stored mode is
+    kept whatever the body says (read under a row lock, so a hand-back committing meanwhile is
+    not undone either). The mode changes only through ``POST /control/mode`` and the worker's
+    hand-back, which switches it off, so a form loaded before a hand-back cannot switch the
+    controller back on by saving its stale copy of the control settings."""
     violations: list[tuple[str, str]] = []
     if body.control is not None:
+        session.execute(select(AppSetting.key).where(AppSetting.key == "control").with_for_update())
+        stored = get_setting(session, "control", ControlSettings).mode
+        if body.control.mode != stored:
+            log.info("PUT /control/settings: ignoring control.mode %r (stored %r; use POST /control/mode)",
+                     body.control.mode, stored)
+        body.control = body.control.model_copy(update={"mode": stored})
         violations += control_violations(body.control)
     if body.occupancy is not None:
         violations += occupancy_violations(body.occupancy)
@@ -353,7 +364,16 @@ def list_actions(
 
 
 def _queue_action(session: Session, unit_key: str, action: str, reason: str, request: dict) -> ControlActionOut:
-    kind = get_setting(session, "source", SourceSettings).kind
+    """Queue the owner's action for the worker, on the source's channel. While the ecobee cloud
+    circuit is open and HomeKit has taken over (``controller._homekit_fallback``), a resume
+    ("Resume schedule" / "Back to automatic") goes on channel 'homekit' instead, keeping its
+    ``request.kind``: the homekit service clears the hold locally, so a person's hold seen
+    during the outage can still be ended from the app (the cloud call would only fail).
+    Owner holds stay on the source's channel."""
+    src = get_setting(session, "source", SourceSettings)
+    kind = src.kind
+    if action == "resume_program" and controller._homekit_fallback(src, None, utcnow()):
+        kind = "homekit"
     row = ControlAction(
         unit_key=unit_key,
         actor="owner",

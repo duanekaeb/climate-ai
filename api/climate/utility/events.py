@@ -9,7 +9,8 @@ Lifecycle of a row (one per thermostat and event):
 - ``ingest`` (every live ecobee / simulator poll, never HomeKit, which shows no events):
   a listed ``demandResponse`` event that runs is 'running' (``started_at`` = first seen
   running); one not running yet is 'announced'. A row the unit's snapshot no longer lists is
-  over: a running one 'opted_out' when our skip went through, else 'ended'; an announced one
+  over: a running one 'opted_out' when our skip went through (including an opt-out that went
+  out without a confirming read-back, ``skips.landed``), else 'ended'; an announced one
   'cancelled' while its start is still ahead (or unknown), else 'ended'. ``ended_at`` is the
   snapshot time. An opt-out is final; an event listed again after it ended or was cancelled
   (ecobee extended or re-listed it) is open again.
@@ -245,16 +246,17 @@ def alert_exists(session: Session, dedupe_key: str) -> bool:
 
 def phase_alert(
     session: Session, dedupe_key: str, level: str, title: str, body: str, *, push_info: bool = False,
-    kind: str = ALERT_KIND,
+    kind: str = ALERT_KIND, again: bool = False,
 ) -> int | None:
-    """Raise an alert at most once per key, ever: a resolved one is never raised again. While
-    it is open its title and body are kept current (another thermostat joined the event)
-    without pushing again. Returns the new alert's id, else None."""
+    """Raise an alert at most once per key, ever: a resolved one is never raised again (with
+    ``again``, it is: for a condition that can clear and come back, like a skip waiting for
+    the cloud). While it is open its title and body are kept current (another thermostat
+    joined the event) without pushing again. Returns the new alert's id, else None."""
     last = session.execute(
         select(Alert.id, Alert.resolved_at, Alert.title, Alert.body)
         .where(Alert.dedupe_key == dedupe_key).order_by(Alert.id.desc()).limit(1)
     ).first()
-    if last is None:
+    if last is None or (again and last.resolved_at is not None):
         return notify.raise_alert(session, kind, level, title, body, dedupe_key=dedupe_key, push_info=push_info)
     if last.resolved_at is None and (last.title, last.body) != (title, body):
         session.execute(update(Alert).where(Alert.id == last.id).values(title=title, body=body))
@@ -374,6 +376,27 @@ def _copy(row: UtilityEvent, ev: ThermostatEvent) -> None:
     row.detail = {**ev.model_dump(mode="json"), **own}
 
 
+def _close_running(session: Session, row: UtilityEvent, at: datetime) -> None:
+    """A running event is over on this thermostat (no longer running in its snapshot, or past
+    its end by the clock): 'opted_out' when our skip went through, else 'ended'. A skip still
+    requested whose opt-out went out without a confirming read-back (``skips.landed``) went
+    through: it is settled 'done' here (the "Skipped" alert, not "ended")."""
+    row.ended_at = at
+    if row.skip == "done":
+        row.status = "opted_out"
+        return
+    row.status = "ended"
+    if row.skip != "requested":
+        return
+    from climate.utility import skips  # local: skips imports this module
+
+    action_id = skips.landed(session, row, at)
+    if action_id is not None:
+        log.info("utility event %s on %s vanished after an unconfirmed opt-out (action %s): it landed",
+                 row.id, row.unit_key, action_id)
+        skips.settle_landed(session, row, action_id, at)
+
+
 def _apply(session: Session, newest: dict[str, UnitSnapshot], now: datetime) -> tuple[list[int], set[str]]:
     """Upsert the units' rows from their snapshots, each seen at its snapshot's time (never
     later than ``now``: a thermostat clock running ahead puts no sighting in the future).
@@ -426,8 +449,7 @@ def _apply(session: Session, newest: dict[str, UnitSnapshot], now: datetime) -> 
                     row.started_at = row.started_at or ts
                     row.ended_at = None
             elif row.status == "running":
-                row.status = "opted_out" if row.skip == "done" else "ended"
-                row.ended_at = ts
+                _close_running(session, row, ts)
             elif row.status == "cancelled" and (row.end_at is None or row.end_at > ts):
                 row.status = "announced"  # listed again ahead of its end
                 row.ended_at = None
@@ -441,10 +463,10 @@ def _apply(session: Session, newest: dict[str, UnitSnapshot], now: datetime) -> 
             if row.last_seen_at is not None and ts < _utc(row.last_seen_at):
                 continue
             if row.status == "running":
-                row.status = "opted_out" if row.skip == "done" else "ended"
+                _close_running(session, row, ts)
             else:
                 row.status = "cancelled" if row.start_at is None or _utc(row.start_at) > ts else "ended"
-            row.ended_at = ts
+                row.ended_at = ts
             changed.append(row)
             touched.add(key)
     if changed:
@@ -578,21 +600,23 @@ def _resolve_stale_alerts(session: Session, now: datetime) -> list[int]:
 def sweep(session: Session, now: datetime) -> list[int]:
     """The clock closes what no snapshot did (a snapshot can lag, or the cloud be down): a
     'running' event 10 minutes past its end and an 'announced' one past its end become 'ended'
-    (``ended_at`` = now). An announced event whose start has passed stays announced until a
-    snapshot or its end decides. Then resolves stale event alerts. Returns the ids closed.
+    (``ended_at`` = now; a running one 'opted_out' when our skip went through, as in ingest).
+    An announced event whose start has passed stays announced until a snapshot or its end
+    decides. Then resolves stale event alerts. Returns the ids closed.
     Cheap when nothing is due: one indexed read of open rows and one of open event alerts."""
     closed: list[UtilityEvent] = []
-    for row in session.execute(
+    due = session.execute(
         select(UtilityEvent).where(UtilityEvent.status.in_(OPEN), UtilityEvent.end_at < now)
         .order_by(UtilityEvent.id).with_for_update(skip_locked=True)
-    ).scalars():
+    ).scalars().all()
+    for row in due:
         if row.status == "running":
             if row.end_at is not None and _utc(row.end_at) >= now - RUNNING_GRACE:
                 continue
-            row.status = "opted_out" if row.skip == "done" else "ended"
+            _close_running(session, row, now)
         else:
             row.status = "ended"
-        row.ended_at = now
+            row.ended_at = now
         closed.append(row)
     if closed:
         session.flush()

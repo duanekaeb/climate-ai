@@ -10,12 +10,13 @@ belong to other modules).
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
 pytest.importorskip("aiohomekit")
 
+from aiohomekit.exceptions import AccessoryDisconnectedError
 from sqlalchemy import select
 
 from climate import notify
@@ -24,8 +25,9 @@ from climate.collector import ingest
 from climate.collector.homekit_service import HomekitService
 from climate.sources import homekit as hk
 from climate.sources.base import HoldInfo, ThermostatEvent, UnitSnapshot, UtilityInfo
-from climate.state import MANUAL_KIND
-from climate.store.app_settings import SourceSettings, put_setting
+from climate.state import MANUAL_KIND, load_house_state
+from climate.store.app_settings import ControlSettings, SourceSettings, put_setting
+from climate.store.db import session_scope
 from climate.store.orm import ControlAction, LiveUnit, UtilityEvent
 from tests.test_homekit_fakes import FakeController, FakeDevice
 from tests.test_homekit_service import Clock, action, paired_and_ready
@@ -70,7 +72,7 @@ def hand_rows(db) -> list[ControlAction]:
 
 def queue(db, request: dict, *, actor: str = "controller", ts=None) -> int:
     row = ControlAction(unit_key="main", actor=actor, mode="act", channel="homekit",
-                        action="resume_program" if request["kind"] == "clear_hold" else "set_hold",
+                        action="resume_program" if request["kind"] in svc_mod.CLEAR_HOLD_KINDS else "set_hold",
                         status="queued", reason="test", request=request)
     if ts is not None:
         row.ts = ts
@@ -306,6 +308,272 @@ async def test_homekit_snapshots_never_carry_events_or_utility(env):
     db.expire_all()
     snap = UnitSnapshot.model_validate(db.get(LiveUnit, "main").snapshot)
     assert snap.source == "homekit" and snap.events == [] and snap.utility is None
+
+
+# --- review findings: earlier outages, unverified writes, unpolled changes, events, owner ---
+
+
+def _live_snapshot(db) -> UnitSnapshot:
+    db.expire_all()
+    return UnitSnapshot.model_validate(db.get(LiveUnit, "main").snapshot)
+
+
+def _person_hold(db, clock):
+    db.expire_all()
+    return load_house_state(db, clock()).units["main"].person_hold
+
+
+@pytest.mark.parametrize("circuit", ["open", "closed"])
+async def test_an_earlier_outages_hand_change_never_comes_back(env, circuit):
+    """Finding 7: a hand change logged in one outage is that outage's. Each HomeKit snapshot
+    records when HomeKit took over (settings['homekit_since']); once the cloud has reported in
+    between, a later HomeKit run starts afresh and the old row is not a person's hold again
+    (with the cloud circuit open again, or merely a cloud snapshot more than 10 minutes old)."""
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    hold_id = queue(db, away_hold(clock))
+    await env["svc"].execute_actions()
+    assert action(db, hold_id).status == "verified"
+    await poll(env)
+    started = _live_snapshot(db).settings["homekit_since"]  # this HomeKit run's first snapshot
+    assert datetime.fromisoformat(started) <= clock()
+    pick(dev, 0, *HOME_C)  # someone picks Home at the wall
+    await poll(env)
+    (row,) = hand_rows(db)
+    assert _live_snapshot(db).settings["homekit_since"] == started  # the same run
+    assert _person_hold(db, clock).detection_id == row.id
+
+    # the cloud is back and shows no hold: that change has ended
+    clock.advance(30 * 60)
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True))
+    put_live(db, clock())
+    assert _person_hold(db, clock) is None
+
+    # two days later the cloud's snapshot is stale again; nobody touched the thermostat
+    clock.advance(2 * 24 * 3600)
+    open_until = clock() + timedelta(minutes=15) if circuit == "open" else None
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True, cloud_circuit_open_until=open_until))
+    put_live(db, clock() - timedelta(minutes=11))
+    await poll(env)
+    snap = _live_snapshot(db)
+    assert snap.source == "homekit" and snap.settings["homekit_since"] == clock().isoformat()
+    assert len(hand_rows(db)) == 1  # nothing new was logged
+    assert _person_hold(db, clock) is None
+
+
+@pytest.mark.parametrize("on_put", [False, True], ids=["readback_get_failed", "put_answer_lost"])
+async def test_our_hold_that_went_out_unverified_is_not_a_person(env, on_put):
+    """Finding 19: our Sleep hold reached the thermostat but its read-back GET failed (or the
+    put's answer was lost): it may have landed, so the Sleep the next poll shows is ours."""
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    aid = queue(db, away_hold(clock))
+    await env["svc"].execute_actions()
+    assert action(db, aid).status == "verified"
+    await poll(env)
+    pairing = env["ctl"].aliases["hallway"]
+    orig = pairing.put_characteristics
+    hold_iid = dev.k(1, "VENDOR_ECOBEE_SET_HOLD_SCHEDULE")
+
+    async def put_then_lose(rows):
+        res = await orig(rows)
+        if any((a, i) == hold_iid for a, i, _ in rows):
+            if on_put:
+                raise AccessoryDisconnectedError("connection lost")
+            pairing.fail_next = [AccessoryDisconnectedError("connection lost")]
+        return res
+
+    pairing.put_characteristics = put_then_lose
+    later = queue(db, {**away_hold(clock), "climate": "sleep"})
+    await env["svc"].execute_actions()
+    pairing.put_characteristics = orig
+    row = action(db, later)
+    assert row.status == "failed" and row.readback["sent"] is True and row.readback_ok is False
+    assert dev.get(1, MODE) == 1  # Sleep is on the thermostat
+    await poll(env)
+    await poll(env)
+    assert hand_rows(db) == []
+    assert _person_hold(db, clock) is None
+
+
+@pytest.mark.parametrize("lost", ["readback_get_failed", "readback_empty"])
+async def test_our_resume_that_went_out_unverified_is_not_a_person(env, lost):
+    """Finding 19: our resume reached the thermostat but was not verified; it is newer than
+    our verified Away hold, so the schedule's Home the next poll shows may be its doing."""
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    aid = queue(db, away_hold(clock))
+    await env["svc"].execute_actions()
+    assert action(db, aid).status == "verified"
+    await poll(env)
+    pairing = env["ctl"].aliases["hallway"]
+    orig = pairing.put_characteristics
+    clear_iid = dev.k(1, "VENDOR_ECOBEE_CLEAR_HOLD")
+
+    async def put_then_lose(rows):
+        res = await orig(rows)
+        if any((a, i) == clear_iid for a, i, _ in rows):
+            if lost == "readback_get_failed":
+                pairing.fail_next = [AccessoryDisconnectedError("connection lost")]
+            else:  # the read-back answers with statuses instead of values
+                pairing.missing = {dev.k(1, "VENDOR_ECOBEE_TIMESTAMP"), dev.k(1, MODE)}
+        return res
+
+    pairing.put_characteristics = put_then_lose
+    later = queue(db, {"kind": "clear_hold"})
+    await env["svc"].execute_actions()
+    pairing.put_characteristics, pairing.missing = orig, set()
+    row = action(db, later)
+    assert row.status == "failed" and isinstance(row.readback, dict)
+    assert dev.get(1, MODE) == 0  # the schedule's Home
+    await poll(env)
+    assert hand_rows(db) == []
+    assert _person_hold(db, clock) is None
+
+
+async def test_our_verified_resume_after_our_away_hold_is_not_a_person(env):
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    aid = queue(db, away_hold(clock))
+    await env["svc"].execute_actions()
+    await poll(env)
+    rid = queue(db, {"kind": "clear_hold"})
+    await env["svc"].execute_actions()
+    assert action(db, aid).status == action(db, rid).status == "verified"
+    await poll(env)
+    assert (dev.get(1, MODE), dev.get(1, HEAT), dev.get(1, COOL)) == (0, *HOME_C)
+    assert hand_rows(db) == []
+
+
+@pytest.mark.parametrize("kind", ["sleep_hold", "renew_away", "clear_hold"])
+async def test_a_change_since_the_last_poll_blocks_the_controllers_next_write(env, kind):
+    """Finding 20: a person changed the thermostat 40 s after the last poll and the
+    controller (which could not know) queued a write 5 s later. The service reads the
+    thermostat right before claiming it: the change is logged first and the write is not
+    sent, so the person's change stays."""
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    aid = queue(db, away_hold(clock))
+    await env["svc"].execute_actions()
+    assert action(db, aid).status == "verified"
+    await poll(env)
+    clock.advance(40)
+    pick(dev, 0, *HOME_C)
+    clock.advance(5)
+    req = {"sleep_hold": {**away_hold(clock), "climate": "sleep"}, "renew_away": away_hold(clock),
+           "clear_hold": {"kind": "clear_hold"}}[kind]
+    later = queue(db, req, ts=clock())
+    writes = len(dev.writes)
+    clock.advance(2)
+    await env["svc"].step()  # a real service step: the 60 s poll is not due for another 14 s
+    (hand,) = hand_rows(db)
+    assert hand.request["climate_ref"] == "home"
+    row = action(db, later)
+    assert row.status == "failed" and row.error.startswith(svc_mod.NOT_SENT_MSG) and f"action {hand.id}" in row.error
+    assert len(dev.writes) == writes and dev.get(1, MODE) == 0  # nothing written over the person's Home
+
+
+async def test_an_owner_row_is_sent_without_waiting_for_a_fresh_read(env):
+    db, clock = env["db"], env["clock"]
+    await paired_and_ready(env)
+    await poll(env)
+    gets = sum(1 for kind, _ in env["ctl"].aliases["hallway"].calls if kind == "get")
+    owner = queue(db, away_hold(clock), actor="owner")
+    await env["svc"].execute_actions()
+    assert action(db, owner).status == "verified"
+    calls = env["ctl"].aliases["hallway"].calls
+    # only the write's own reads: comfort targets, the GET before, the read-back
+    assert sum(1 for kind, _ in calls if kind == "get") - gets == 3
+
+
+async def test_an_unrecognised_ecobee_event_from_the_cloud_is_never_a_person(env):
+    """Finding 21: the cloud's last snapshot showed an unrecognised event (relative, cooling
+    2°F above Home's target, 3 more hours). Every HomeKit snapshot keeps it until its end, so
+    no poll reads its setpoints as a person's change; after its end a real change is seen."""
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    ev = HoldInfo(kind="temperature", hold_type="switchOccupancy", is_relative=True, cool_offset_f=2.0,
+                  start=clock() - timedelta(hours=1), end=clock() + timedelta(hours=3))
+    put_live(db, clock() - timedelta(minutes=11), hold=ev)
+    pick(dev, 0, 20.0, 25.6)  # Home in force, cooling 2°F above Home's 76°F
+    for _ in range(3):
+        await poll(env)
+        assert _live_snapshot(db).hold == ev
+    assert hand_rows(db) == []
+    clock.advance(3 * 3600)  # the event has ended; the cloud is still down
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True,
+                                             cloud_circuit_open_until=clock() + timedelta(minutes=15)))
+    db.commit()
+    await poll(env)
+    assert _live_snapshot(db).hold is None
+    assert [r.request["cool_f"] for r in hand_rows(db)] == [78.0]  # now a person's setpoint
+
+
+@pytest.mark.parametrize("hold_type", ["switchOccupancy", "demandResponse"])
+async def test_the_controller_stays_hands_off_an_event_the_cloud_reported(db, hold_type):
+    """Finding 21: after the first HomeKit poll the controller still sees the running event
+    (its own guard reads the snapshot's hold) and queues no HomeKit write over it."""
+    from climate.control import controller
+    from tests.test_controller_tick import NOW, FakeSource, refresh_sensors, setup_house
+
+    setup_house(db, mode="act", act_units=["up"])
+    t = NOW + timedelta(minutes=30)
+    ev = HoldInfo(kind="temperature", hold_type=hold_type, is_relative=True, cool_offset_f=2.0,
+                  start=t - timedelta(hours=1), end=t + timedelta(hours=3))
+    cloud = UnitSnapshot(unit_key="up", ts=t - timedelta(minutes=11), source="ecobee", hvac_mode="cool",
+                         heat_sp_f=60.0, cool_sp_f=85.0, climate_ref="home", hold=ev, zone_temp_f=76.0,
+                         zone_humidity=45.0)
+    db.merge(LiveUnit(unit_key="up", ts=cloud.ts, source="ecobee", revision="1|2",
+                      snapshot=cloud.model_dump(mode="json")))
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True,
+                                             cloud_circuit_open_until=t + timedelta(minutes=15)))
+    db.commit()
+    values = {1: {MODE: 0, HEAT: 15.6, COOL: 29.4, "HEATING_COOLING_TARGET": 2, "TEMPERATURE_CURRENT": 24.4,
+                  "RELATIVE_HUMIDITY_CURRENT": 45}}
+    with session_scope() as s:
+        assert svc_mod.write_homekit_snapshot(s, "up", values, {}, t)
+    refresh_sensors(db, t)
+    db.commit()
+    assert UnitSnapshot.model_validate(db.get(LiveUnit, "up").snapshot).hold == ev
+    await controller.tick(FakeSource(kind="ecobee"), t + timedelta(seconds=30))
+    db.expire_all()
+    queued = db.execute(select(ControlAction).where(ControlAction.unit_key == "up",
+                                                    ControlAction.status == "queued")).scalars().all()
+    assert queued == []
+
+
+@pytest.mark.parametrize("kind", ["automatic", "resume_schedule"])
+async def test_the_owners_resume_ends_a_hand_change_over_homekit(env, kind):
+    """Finding 22: while the cloud is down the owner's Back to automatic / Resume schedule is
+    queued on channel 'homekit' with its own kind: it runs as CLEAR_HOLD (never blocked by the
+    hand change: the owner is the person), is verified, and ends that person's hold."""
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    pick(dev, 3, 21.1, 25.0)  # someone set 70/77°F at the wall
+    await poll(env)
+    (hand,) = hand_rows(db)
+    assert _person_hold(db, clock).detection_id == hand.id
+    owner = queue(db, {"kind": kind, "unit_key": "main", "reason": "Owner: test"}, actor="owner", ts=clock())
+    await env["svc"].execute_actions()
+    row = action(db, owner)
+    assert row.status == "verified", row.error
+    assert row.request["kind"] == kind and row.action == "resume_program"  # the owner's kind is kept
+    assert dev.writes[-1] == (*dev.k(1, "VENDOR_ECOBEE_CLEAR_HOLD"), True)
+    assert _person_hold(db, clock) is None
+    await poll(env)  # the schedule's Home now shows: not a new change
+    assert len(hand_rows(db)) == 1 and _person_hold(db, clock) is None
+
+
+async def test_the_owners_homekit_actions_fail_while_the_controller_is_off(env):
+    db, dev = env["db"], env["dev"]
+    await paired_and_ready(env)
+    put_setting(db, "control", ControlSettings(mode="off"))
+    db.commit()
+    owner = queue(db, {"kind": "automatic", "unit_key": "main", "reason": "Owner: test"}, actor="owner")
+    await env["svc"].execute_actions()
+    row = action(db, owner)
+    assert (row.status, row.error) == ("failed", "Not sent: the controller is off.")
+    assert row.completed_at is not None and dev.writes == []
 
 
 # --- the pure detector ----------------------------------------------------------------

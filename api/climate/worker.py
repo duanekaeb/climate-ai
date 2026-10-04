@@ -14,7 +14,9 @@ Every loop is wrapped: a failure is logged (redacted) and retried with backoff; 
 kills the process or the other loops. Other modules are imported when a loop runs, so an
 unfinished or broken module only stalls its own loop. Every call into the source goes
 through one lock (``LockedSource``): ecobee wants one request at a time, and two concurrent
-token refreshes would race each other for the rotating refresh token.
+token refreshes would race each other for the rotating refresh token. The steps that write for
+the controller (tick + utility step, queued owner actions, settings) and the hand-back job also
+share ``Worker.control_lock``, so a hand-back never interleaves with their writes.
 """
 
 from __future__ import annotations
@@ -417,6 +419,11 @@ class Worker:
         # every worker start checks them once
         self._settings_done: tuple[int, str, str] | None = None
         self._settings_retry_mono: float | None = None
+        # Held by every step that writes to the thermostats for the controller (the tick and the
+        # utility step after it, queued owner actions, the settings check) and by the hand-back
+        # job: a hand-back waits for a write already in flight, and nothing writes in the middle
+        # of one. Taken outside the source lock, never inside it.
+        self.control_lock = asyncio.Lock()
         self._stop = asyncio.Event()
 
     # --- lifecycle --------------------------------------------------------------------
@@ -653,17 +660,19 @@ class Worker:
     async def tick_step(self) -> None:
         """The controller tick, then ``utility_step``, which runs even when the tick failed (the
         tick's error is raised after it, so the loop still logs it and backs off). Not when the
-        worker is stopping: a cancelled tick ends the step at once."""
+        worker is stopping: a cancelled tick ends the step at once. Both run under
+        ``control_lock`` (a hand-back waits for them)."""
         from climate.control import controller
 
-        now = utcnow()
-        error: Exception | None = None
-        try:
-            await controller.tick(self.source, now)
-            self.last_tick_at = now
-        except Exception as exc:  # noqa: BLE001 - re-raised below, after the utility step
-            error = exc
-        await self.utility_step(now)
+        async with self.control_lock:
+            now = utcnow()
+            error: Exception | None = None
+            try:
+                await controller.tick(self.source, now)
+                self.last_tick_at = now
+            except Exception as exc:  # noqa: BLE001 - re-raised below, after the utility step
+                error = exc
+            await self.utility_step(now)
         if error is not None:
             raise error
 
@@ -685,9 +694,11 @@ class Worker:
             log.warning("utility event skips failed: %s", safe_error(exc))
 
     async def execute_step(self) -> None:
+        """Queued owner actions (``controller.execute_queued``), under ``control_lock``."""
         from climate.control import controller
 
-        await controller.execute_queued(self.source, utcnow())
+        async with self.control_lock:
+            await controller.execute_queued(self.source, utcnow())
 
     async def settings_step(self) -> None:
         """Keep Smart Away and Follow Me off (``controller.keep_settings``): at start, again once
@@ -707,7 +718,8 @@ class Worker:
         from climate.control import controller
 
         try:
-            result = await controller.keep_settings(src, now)
+            async with self.control_lock:
+                result = await controller.keep_settings(src, now)
         except Exception:
             self._settings_retry_mono = mono + SETTINGS_RETRY_S  # don't hammer ecobee; the loop logs it
             raise
@@ -793,6 +805,8 @@ class Worker:
         """The 'handback' job (POST /api/control/handback): ``controller.hand_back`` switches the
         controller off and restores what it changed on the thermostats. It runs without a
         source too (no thermostat to reach: those steps come back as skipped, not failed).
+        It holds ``control_lock``: a controller tick (or owner action, or settings check)
+        already writing finishes first, and the next one sees the controller off.
         Result ``{"steps": [HandbackStep...]}``; an exception fails the job with its error."""
         from climate.control import controller
 
@@ -803,7 +817,8 @@ class Worker:
             except Exception as exc:  # noqa: BLE001 - hand back without one
                 log.warning("hand back: no data source (%s)", safe_error(exc))
                 src = None
-        steps = await controller.hand_back(src, now)
+        async with self.control_lock:
+            steps = await controller.hand_back(src, now)
         return {"steps": list(steps)}
 
 

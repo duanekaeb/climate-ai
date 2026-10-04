@@ -34,6 +34,16 @@ export const useControl = defineStore('control', () => {
     return loadInto(settings, 'current', () => api.get<SettingsOut>('/control/settings'))
   }
 
+  /** Re-read settings in the background (the worker or another device may have changed them,
+   * e.g. a hand-back switching the mode off). Keeps what is shown when the read fails. */
+  async function refreshSettings() {
+    try {
+      settings.data = await api.get<SettingsOut>('/control/settings')
+    } catch {
+      /* the next status event tries again */
+    }
+  }
+
   /** Load settings once (other screens need the current policy and sign-off ranges). */
   function ensureSettings() {
     if (settings.data || settings.loading) return Promise.resolve(settings.data)
@@ -140,6 +150,7 @@ export const useControl = defineStore('control', () => {
     actions,
     handback,
     loadSettings,
+    refreshSettings,
     ensureSettings,
     loadPlan,
     loadChanges,

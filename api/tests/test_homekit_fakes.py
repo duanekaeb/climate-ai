@@ -158,8 +158,12 @@ class FakeDevice:
             self.set(1, "TEMPERATURE_COOLING_THRESHOLD", self.get(1, cool_t))
         elif ctype == CHAR_TYPES["VENDOR_ECOBEE_CLEAR_HOLD"]:
             if value:
+                # back to the schedule, which runs Home here: Home's own targets become the
+                # active setpoints (as with a hold of it)
                 self.set(1, "VENDOR_ECOBEE_CURRENT_MODE", 0)
                 self.set(1, "VENDOR_ECOBEE_TIMESTAMP", f"2026-10-04T22:00:00-05:00{self.suffix}")
+                self.set(1, "TEMPERATURE_HEATING_THRESHOLD", self.get(1, HOME_TARGET_HEAT))
+                self.set(1, "TEMPERATURE_COOLING_THRESHOLD", self.get(1, HOME_TARGET_COOL))
         else:
             self.values[(aid, iid)] = value
 

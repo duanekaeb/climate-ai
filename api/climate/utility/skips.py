@@ -17,22 +17,34 @@ event any other way. ``utility_events.skip`` goes requested -> done | failed | r
   requested skip whose unit's live snapshot shows that event running on top: a
   ``control_actions`` row (action 'opt_out_event', rule 'utility_opt_out', mode 'act', actor
   'owner', or 'controller' for a rule, channel = the source kind) is committed as 'sent'
-  BEFORE the call, then marked verified / failed with the read-back. Owner skips run in
-  suggest and act mode; rule skips only in act mode for units in act_units. Mode 'off', and
-  an open cloud circuit (HomeKit can neither see nor cancel events), make a skip wait, with
-  one alert saying so. A failed call is retried on later loops, at most 3 attempts in all
+  BEFORE the call, then marked verified / failed with the read-back. The call names the event
+  (``link_ref`` / ``name`` / ``start`` from the row), so the source refuses rather than opt
+  out of a different event that is on top by then. Owner skips run in suggest and act mode;
+  rule skips only in act mode for units in act_units. Nothing is sent before the event is due
+  (running, or its start has passed) or once it is over by the clock. Mode 'off', and an open
+  cloud circuit (HomeKit can neither see nor cancel events), make a due skip wait, with an
+  alert saying so that is resolved as soon as the cause clears (raised again if it comes
+  back). A failed call is retried on later loops, at most 3 attempts in all
   (``detail.skip_attempts``, counted before each call), then the skip is 'failed'. A refusal
-  because the event is mandatory makes it 'refused'.
+  showing the event is no longer on top (another utility event is, or none runs: the
+  snapshot the skip was decided on is older than the thermostat) is not an attempt: the skip
+  waits for the next snapshot. A refusal because the event is mandatory makes it 'refused'.
+- An opt-out whose call went out (``request.sent``) but could not be confirmed (the
+  read-back failed or lagged) is settled 'done' once the event is seen gone: by ``_record``
+  when the row closed meanwhile, and by ``events`` ingest / sweep through ``landed`` when
+  the event disappears later (the row is 'opted_out', not 'ended').
 
 Alerts are grouped per event (kind 'utility_event', ``events.phase_alert``: once per event
 and phase, text kept current while open): 'skipped' (info, pushed; only while
 ``UtilityEventSettings.alerts`` is on), 'skip_refused' (warn), 'skip_failed' (error),
-'skip_waiting_off' (info, pushed), 'skip_waiting_cloud' (warn) and 'rule:<unit>' (info,
+'skip_waiting_off' (info, pushed) and 'skip_waiting_cloud' (warn) (these two once per wait:
+resolved when the cause clears, raised again if it returns), and 'rule:<unit>' (info,
 pushed). The sweep resolves them once the event is over (``events.sweep``).
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -61,6 +73,7 @@ REQUEST_KIND = "utility_opt_out"
 OWNER_REASON = "Skipped from the app"
 MAX_ATTEMPTS = 3
 RULE_LOOKAHEAD = timedelta(minutes=5)  # rules consider events running or starting this soon
+LANDED_WITHIN = timedelta(minutes=15)  # an unconfirmed opt-out this recent explains an event that vanished
 OUTDOOR_COOLING_F = 65.0  # 'auto' mode with nothing else to go on: cooling at or above this
 _ROOM_ORDER = {r.key: i for i, r in enumerate(ROOMS)}
 Direction = Literal["cool", "heat"]
@@ -76,6 +89,9 @@ class _OptOut:
     attempt: int
     reason: str
     channel: str
+    link_ref: str | None = None  # the event's identity, so the source opts out of this one only
+    name: str | None = None
+    start: datetime | None = None
 
 
 # ---------------------------------------------------------------------------------------
@@ -287,20 +303,21 @@ def _rows_of(session: Session, key: str) -> list[UtilityEvent]:
 
 
 def _waiting(session: Session, row: UtilityEvent, why: Literal["off", "cloud"]) -> None:
-    """Say once per event why its requested skip is not being sent."""
+    """Say why a due skip is not being sent: one open alert per event and cause, resolved by
+    ``_prepare`` once the cause clears, and raised again if it comes back."""
     units = [r.unit_key for r in _rows_of(session, row.event_key) if r.skip == "requested"] or [row.unit_key]
     where = events.unit_names(units, lead=False)
     if why == "off":
         events.phase_alert(
             session, events.alert_key(row.event_key, "skip_waiting_off"), "info", "Skip waiting: the controller is off",
             f"The skip of the utility event on {where} waits until the controller is switched to Suggest or Act. "
-            "The event runs as planned meanwhile.", push_info=True,
+            "The event runs as planned meanwhile.", push_info=True, again=True,
         )
     else:
         events.phase_alert(
             session, events.alert_key(row.event_key, "skip_waiting_cloud"), "warn", "Skip waiting for the ecobee cloud",
             "The ecobee cloud isn't answering, and HomeKit can neither see nor cancel utility events. The skip of the "
-            f"event on {where} is sent once the cloud is back; the event runs as planned meanwhile.",
+            f"event on {where} is sent once the cloud is back; the event runs as planned meanwhile.", again=True,
         )
 
 
@@ -355,6 +372,8 @@ def _prepare_row(
     if row.is_optional is False:
         _settle(session, row, "refused", None, now)  # known mandatory: nothing to send
         return None
+    if not _due(row, now):
+        return None  # not started yet, or over by the clock (ingest / the sweep close it): nothing to say
     if control.mode == "off":
         _waiting(session, row, "off")
         return None
@@ -382,12 +401,24 @@ def _prepare_row(
     session.add(action)
     session.flush()
     publish(session, "action", action.id)
-    return _OptOut(action.id, row.id, row.unit_key, attempt, reason, kind)
+    detail = row.detail if isinstance(row.detail, dict) else {}
+    return _OptOut(action.id, row.id, row.unit_key, attempt, reason, kind,
+                   link_ref=detail.get("link_ref") or None, name=row.name or detail.get("name") or None,
+                   start=row.start_at)
+
+
+def _due(row: UtilityEvent, now: datetime) -> bool:
+    """The skip could go now: the event runs (or its start has passed; the snapshot may lag) and
+    it is not over by the clock."""
+    if row.end_at is not None and row.end_at <= now:
+        return False
+    return row.status == "running" or (row.start_at is not None and row.start_at <= now)
 
 
 def _prepare(session: Session, source: ThermostatSource | None, now: datetime) -> list[_OptOut]:
     """Log a 'sent' row for each requested skip that can go now (committed by the caller
-    before any call); the others wait (and say why, once)."""
+    before any call); the others wait (a due one says why, ``_waiting``). Resolves the "skip
+    waiting" alerts of these events whose cause has cleared."""
     rows = list(session.execute(
         select(UtilityEvent).where(UtilityEvent.skip == "requested", UtilityEvent.status.in_(events.OPEN))
         .order_by(UtilityEvent.id).with_for_update(skip_locked=True)
@@ -407,6 +438,10 @@ def _prepare(session: Session, source: ThermostatSource | None, now: datetime) -
                 out.append(p)
         except Exception:  # one row's failure never stops the others
             log.exception("could not prepare the skip of utility event %s", row.id)
+    # a wait whose cause has cleared (the cloud is back, the controller is on again) is over
+    cleared = [phase for phase, over in (("skip_waiting_cloud", not circuit_open),
+                                         ("skip_waiting_off", control.mode != "off")) if over]
+    events.resolve_keys(session, [events.alert_key(k, phase) for k in {r.event_key for r in rows} for phase in cleared])
     return out
 
 
@@ -421,11 +456,25 @@ async def _send(source: ThermostatSource | None, p: _OptOut) -> WriteResult:
     try:
         if source is None:
             raise RuntimeError("no thermostat source is running")
-        return await source.opt_out_event(p.unit_key, p.reason[:500])
+        if not _takes_identity(source.opt_out_event):  # an older source: it cannot check the event anyway
+            return await source.opt_out_event(p.unit_key, p.reason[:500])
+        return await source.opt_out_event(p.unit_key, p.reason[:500], link_ref=p.link_ref, name=p.name,
+                                          start=p.start)
     except Exception as exc:  # noqa: BLE001 - the error is the record
         log.warning("opt-out on %s failed: %s", p.unit_key, safe_error(exc))
         channel = p.channel if p.channel in ("ecobee", "simulator") else "none"
         return WriteResult(ok=False, channel=channel, error=safe_error(exc, 1000))  # type: ignore[arg-type]
+
+
+def _takes_identity(fn: Any) -> bool:
+    """The source's ``opt_out_event`` accepts the event identity (``link_ref`` / ``name`` /
+    ``start``, or ``**kwargs``, like the worker's locked wrapper). Decided from the signature,
+    never by retrying a call that failed: the first call may have reached ecobee."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return True
+    return "link_ref" in params or any(v.kind is inspect.Parameter.VAR_KEYWORD for v in params.values())
 
 
 def _record(session: Session, p: _OptOut, result: WriteResult, now: datetime) -> None:
@@ -447,17 +496,74 @@ def _record(session: Session, p: _OptOut, result: WriteResult, now: datetime) ->
     ).scalar_one_or_none()
     if row is None:
         return
+    req = result.request if isinstance(result.request, dict) else {}
     if result.ok:
         _settle(session, row, "done", p.action_id, now)
     elif row.skip != "requested":
         return  # the owner took the skip back meanwhile
+    elif req.get("sent") is True and row.status not in events.OPEN:
+        # The opt-out went out, the read-back could not confirm it, and a snapshot has shown
+        # the event gone meanwhile: it landed.
+        settle_landed(session, row, p.action_id, now)
     elif _mandatory(result):
         _settle(session, row, "refused", p.action_id, now)
+    elif _gone(req, result.before if isinstance(result.before, dict) else {}):
+        # Another event is on top, or none runs: not this skip's failure, and not an attempt.
+        # The next snapshot closes the row (settled 'done' when our earlier opt-out landed).
+        row.detail = {**(row.detail or {}), "skip_attempts": max(0, p.attempt - 1)}
+        log.info("opt-out of utility event %s on %s not sent: %s; waiting for the next snapshot",
+                 row.id, row.unit_key, result.error or "the event is not on top")
     elif p.attempt >= MAX_ATTEMPTS:
         _settle(session, row, "failed", p.action_id, now, error=result.error)
     else:
         log.info("opt-out of utility event %s on %s failed (attempt %d of %d); retrying on a later loop",
                  row.id, row.unit_key, p.attempt, MAX_ATTEMPTS)
+
+
+def _gone(sent: dict[str, Any], before: dict[str, Any]) -> bool:
+    """A refusal showing the event the skip is for is no longer on top: a different utility
+    event is (``other_event``), or no utility event runs at all (the source's fresh read)."""
+    if not sent.get("refused") or sent.get("mandatory") is True:
+        return False
+    return bool(sent.get("other_event")) or before.get("demand_response_running") is False
+
+
+def landed(session: Session, row: UtilityEvent, at: datetime) -> int | None:
+    """The id of the opt-out that explains why this event, with its skip still requested, is
+    no longer listed at ``at``: the newest finished attempt from the last 15 minutes that
+    tells anything (refusals showing the event already gone are skipped) went out
+    (``request.sent``) without a confirming read-back. None otherwise (it ran to its end, or no
+    opt-out went out). An attempt still in flight is left to ``_record``."""
+    if row.skip != "requested":
+        return None
+    attempts = session.execute(
+        select(ControlAction).where(
+            ControlAction.action == ACTION,
+            ControlAction.status.in_(("verified", "failed")),
+            ControlAction.ts >= at - LANDED_WITHIN,
+            ControlAction.request["event_id"].as_integer() == row.id,
+        ).order_by(ControlAction.ts.desc(), ControlAction.id.desc())
+    ).scalars()
+    for action in attempts:
+        req = action.request if isinstance(action.request, dict) else {}
+        sent = req.get("sent") if isinstance(req.get("sent"), dict) else {}
+        before = action.before if isinstance(action.before, dict) else {}
+        source_before = before.get("source") if isinstance(before.get("source"), dict) else {}
+        if _gone(sent, source_before):
+            continue
+        return action.id if sent.get("sent") is True else None
+    return None
+
+
+def settle_landed(session: Session, row: UtilityEvent, action_id: int, at: datetime) -> None:
+    """Record an opt-out found to have landed (``landed``): the skip 'done', the row
+    'opted_out', and the "Skipped" alert, as for a confirmed one."""
+    action = session.get(ControlAction, action_id)
+    if action is not None and action.status == "failed":
+        note = "the event was gone at the next snapshot, so the opt-out landed"
+        action.error = f"{action.error or 'Not confirmed'}; {note}."[:1000]
+        publish(session, "action", action.id)
+    _settle(session, row, "done", action_id, at)
 
 
 async def run(source: ThermostatSource | None, now: datetime | None = None) -> list[int]:

@@ -178,6 +178,27 @@ def test_hold_parsing_types():
     assert P.running_override([dict(ev, running=False)]) is None
 
 
+def test_ours_excludes_the_owners_hold_and_includes_a_landed_unverified_write():
+    """Finding 9 support: the adapter refuses a controller write over a hold that is not ours,
+    so 'ours' must be exact. The owner's hold from the app is a person's, never ours; our write
+    whose read-back failed but which landed (``attempt``: setpoints + end window) is ours."""
+    hall = tstat("411111111111")
+    off = P.thermostat_utc_offset(hall)
+    ev = P.running_override(hall["events"])  # 68/75, ends 21:00Z
+    ours = {"heat_f": 68.0, "cool_f": 75.0, "end": "2026-10-04T21:00:00+00:00"}
+    assert P.parse_hold(ev, off, hall["program"], ours).set_by_us is True
+    assert P.parse_hold(ev, off, hall["program"], {**ours, "by_owner": True}).set_by_us is False
+    window = {"heat_f": 68.0, "cool_f": 75.0, "end_from": "2026-10-04T20:50:00+00:00",
+              "end_to": "2026-10-04T21:15:00+00:00"}
+    older = {"heat_f": 66.0, "cool_f": 78.0, "end": "2026-10-04T20:00:00+00:00"}
+    assert P.parse_hold(ev, off, hall["program"], {**older, "attempt": window}).set_by_us is True
+    assert P.parse_hold(ev, off, hall["program"], {"attempt": window}).set_by_us is True
+    late = {**window, "end_from": "2026-10-04T21:05:00+00:00"}
+    assert P.parse_hold(ev, off, hall["program"], {"attempt": late}).set_by_us is False
+    other = {**window, "cool_f": 76.0}
+    assert P.parse_hold(ev, off, hall["program"], {**older, "attempt": other}).set_by_us is False
+
+
 def test_event_overrides_keep_their_type_and_are_never_ours():
     """Finding 2: Smart Home/Away, vacation, demand response and quick save are told apart
     from plain holds by hold_type, and never count as the controller's hold."""

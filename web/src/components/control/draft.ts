@@ -1,6 +1,6 @@
 // Editable copy of one settings section. The draft follows the server value until the owner
 // edits it; after a save, `reset()` adopts what the server stored.
-import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, getCurrentScope, onScopeDispose, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { errorText } from '@/components/analysis/stats'
 
 function clone<T>(v: T): T {
@@ -13,10 +13,24 @@ export interface Draft<T> {
   reset: () => void
 }
 
+// The dirty flags of every mounted draft, so a page can tell whether the owner is editing
+// anything before it refreshes the settings underneath.
+const mounted = new Set<ComputedRef<boolean>>()
+
+/** True while any mounted settings form has unsaved edits. */
+export function anyDraftDirty(): boolean {
+  for (const dirty of mounted) if (dirty.value) return true
+  return false
+}
+
 export function useDraft<T>(source: () => T): Draft<T> {
   const draft = ref(clone(source())) as Ref<T>
   const snapshot = ref(JSON.stringify(source()))
   const dirty = computed(() => JSON.stringify(draft.value) !== snapshot.value)
+  if (getCurrentScope()) {
+    mounted.add(dirty)
+    onScopeDispose(() => mounted.delete(dirty))
+  }
 
   watch(
     source,

@@ -224,15 +224,18 @@ class UnitEvents:
     shown: UtilityEventOut | None = None
 
 
-def unit_events(session: Session, now: datetime, plan_rows: list[PlanRow]) -> dict[str, UnitEvents]:
+def unit_events(
+    session: Session, now: datetime, plan_rows: list[PlanRow], house: state.HouseState | None = None,
+) -> dict[str, UnitEvents]:
     """Per unit: its open utility events and those over within ``RECENT`` (2 h); the card
-    shows the running one, else the next announced one, else the one that ended last."""
+    shows the running one, else the next announced one, else the one that ended last. Its
+    pre-cooling label needs the house state (``prep_labels``: none without it)."""
     rows = session.execute(
         select(UtilityEvent)
         .where(or_(UtilityEvent.status.in_(("announced", "running")), UtilityEvent.ended_at >= now - RECENT))
         .order_by(UtilityEvent.start_at.asc().nulls_last(), UtilityEvent.id)
     ).scalars().all()
-    preps = prep_labels(rows, plan_rows, now)
+    preps = prep_labels(session, rows, plan_rows, house, now)
     out: dict[str, UnitEvents] = defaultdict(UnitEvents)
     by_unit: dict[str, list[UtilityEvent]] = defaultdict(list)
     for row in rows:
@@ -429,7 +432,7 @@ def get_status(_: Role = ReaderDep, session: Session = SessionDep) -> HouseStatu
     plan_rows = safe(session, "controller.current_plan", lambda: controller.current_plan(session, now), [])
     targets = {row.target.unit_key: row.target for row in plan_rows}
     today = safe(session, "metrics.unit_today", lambda: metrics.unit_today(session, now, tz), {})
-    unit_evs = safe(session, "utility events", lambda: unit_events(session, now, plan_rows), {})
+    unit_evs = safe(session, "utility events", lambda: unit_events(session, now, plan_rows, hs), {})
     units = [
         unit_live(us, targets.get(us.unit_key), today.get(us.unit_key, {}), now, tz, unit_evs.get(us.unit_key))
         for us in unit_statuses

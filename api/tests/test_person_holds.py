@@ -9,9 +9,10 @@ from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 
 from climate.control import controller
-from climate.sources.base import HoldInfo
+from climate.sources.base import HoldInfo, UnitSnapshot, WriteResult
 from climate.state import MANUAL_KIND, RESUME_KIND, load_house_state
 from climate.store.app_settings import put_setting
 from climate.store.orm import Alert, ControlAction, LiveUnit, UtilityEvent
@@ -19,6 +20,7 @@ from tests.test_controller_safety import (
     DAY_SETS,
     NIGHT,
     SetsSource,
+    circuit_open,
     our_hold,
     put_homekit_snapshot,
     snapshots_with_sets,
@@ -302,11 +304,12 @@ async def test_resume_schedule_backs_off_and_back_to_automatic_cancels_it(db):
     assert src.holds == []
 
     owner_resume(db, "automatic", NOW + timedelta(minutes=10))
-    t = NOW + timedelta(minutes=40)
+    t = NOW + timedelta(minutes=12)  # well inside 30 min of the Resume schedule: steers at once
     at(db, t)
     unit = load_house_state(db, t).units["up"]
     assert unit.resume_backoff_until is None
-    assert unit.last_change_at == NOW + timedelta(minutes=1)  # "automatic" never counts as a change
+    # "automatic" never counts as a change, nor does the owner's Resume schedule it cancelled
+    assert unit.last_change_at is None
     await controller.tick(src, t)
     assert len(src.holds) == 1
 
@@ -559,3 +562,355 @@ async def test_sensor_sets_are_written_under_our_hold_or_smart_away(db, case):
     src = SetsSource()
     await controller.tick(src, NIGHT)
     assert src.set_writes == [("up", {"home": ["up.girls_room"]})]
+
+
+# ---------------------------------------------------------------------------------------
+# a snapshot older than the latest write (the tick ran before the poll)
+# ---------------------------------------------------------------------------------------
+
+
+def queue_owner(db, action: str, ts: datetime, request: dict, unit: str = "up", channel: str = "simulator") -> int:
+    """What the control router's _queue_action inserts (ts = when the owner tapped)."""
+    row = ControlAction(ts=ts, unit_key=unit, actor="owner", mode="act", channel=channel, action=action,
+                        status="queued", rule="manual", reason="Owner", request={"unit_key": unit, **request})
+    db.add(row)
+    db.commit()
+    return row.id
+
+
+def fresh(db, t: datetime, snapshot_at: datetime, **snap) -> None:
+    """Every unit polled at ``snapshot_at``; sensors fresh for a tick at ``t``."""
+    for u in ("main", "up", "bed"):
+        put_snapshot(db, u, snapshot_at, **(snap if u == "up" else {}))
+    refresh_sensors(db, t)
+
+
+@pytest.mark.parametrize("kind", ["automatic", "resume_schedule"])
+async def test_an_owner_resume_read_against_an_older_snapshot_is_not_a_new_persons_hold(db, monkeypatch, kind):
+    """The owner cancels a person's hold; the next tick runs before the next poll, so the
+    snapshot still shows that hold. It is not logged again as a new person's hold, and its
+    disappearance on the next poll is not "someone pressed Resume"."""
+    setup_house(db, act_units=["up"])
+    hold = person(start=NOW - timedelta(minutes=30), end=INDEFINITE_END, hold_type="indefinite")
+    at(db, NOW, heat=70.0, cool=74.0, hold=hold)
+    src = FakeSource()
+    await controller.tick(src, NOW)
+    (det,) = skipped(db, MANUAL_KIND)
+
+    tap = NOW + timedelta(seconds=90)
+    queue_owner(db, "resume_program", tap, {"kind": kind})
+    done = tap + timedelta(seconds=10)
+    monkeypatch.setattr(controller, "utcnow", lambda: done)
+    await controller.execute_queued(src, tap + timedelta(seconds=8))
+    assert src.forced == [True]
+
+    t = NOW + timedelta(minutes=3)  # the tick: live_units is still the poll from before the tap
+    fresh(db, t, NOW - timedelta(minutes=1), heat=70.0, cool=74.0, hold=hold)
+    await controller.tick(src, t)
+    assert [r.id for r in skipped(db, MANUAL_KIND)] == [det.id]
+    assert load_house_state(db, t).units["up"].person_hold is None
+    # Back to automatic steers again at once (the source's own fresh read finds no hold now);
+    # Resume schedule starts its back-off
+    assert len(src.holds) == (1 if kind == "automatic" else 0)
+
+    t = NOW + timedelta(minutes=6)  # the next poll: the person's hold is gone (ours runs, after Back to automatic)
+    shown: dict = {}
+    if src.holds:
+        h = src.holds[0]
+        shown = {"heat": h.heat_f, "cool": h.cool_f, "hold": HoldInfo(
+            heat_f=h.heat_f, cool_f=h.cool_f, start=NOW + timedelta(minutes=3), end=NOW + timedelta(minutes=123),
+            hold_type="holdHours")}
+    fresh(db, t, NOW + timedelta(minutes=5), **shown)
+    await controller.tick(src, t)
+    unit = load_house_state(db, t).units["up"]
+    assert [r.id for r in skipped(db, MANUAL_KIND)] == [det.id] and skipped(db, RESUME_KIND) == []
+    if kind == "automatic":
+        assert unit.resume_backoff_until is None and unit.snapshot.hold.set_by_us and len(src.holds) == 1
+    else:
+        assert unit.resume_seen_at == done and src.holds == []  # the back-off counts from completion
+
+
+async def test_back_to_automatic_after_an_owner_hold_steers_at_once(db, monkeypatch):
+    """The owner's hold from the app, then Back to automatic a few minutes later: the
+    cancelled owner hold no longer counts toward the one-change-per-30-min limit."""
+    setup_house(db, act_units=["up"])
+    src = FakeSource()
+    queue_owner(db, "set_hold", NOW - timedelta(minutes=6), {"heat_f": 70.0, "cool_f": 74.0, "hours": 2})
+    monkeypatch.setattr(controller, "utcnow", lambda: NOW - timedelta(minutes=6))
+    await controller.execute_queued(src, NOW - timedelta(minutes=6))
+    assert [(h.by_owner, h.heat_f) for h in src.holds] == [(True, 70.0)]  # the source skips its person check
+    app = HoldInfo(heat_f=70.0, cool_f=74.0, start=NOW - timedelta(minutes=6), end=NOW + timedelta(minutes=114),
+                   hold_type="holdHours")
+    fresh(db, NOW - timedelta(minutes=3), NOW - timedelta(minutes=4), heat=70.0, cool=74.0, hold=app)
+    assert load_house_state(db, NOW - timedelta(minutes=3)).units["up"].person_hold.by == "app"
+
+    queue_owner(db, "resume_program", NOW - timedelta(minutes=2), {"kind": "automatic"})
+    monkeypatch.setattr(controller, "utcnow", lambda: NOW - timedelta(minutes=2))
+    await controller.execute_queued(src, NOW - timedelta(minutes=2))
+    fresh(db, NOW, NOW - timedelta(seconds=10))  # the hold is gone
+    assert load_house_state(db, NOW).units["up"].last_change_at is None
+    await controller.tick(src, NOW)
+    assert [(h.unit_key, h.by_owner) for h in src.holds[1:]] == [("up", False)]
+
+
+async def test_resume_schedule_with_no_wait_steers_at_once_too(db):
+    setup_house(db, act_units=["up"])
+    control = load_house_state(db, NOW).control
+    control.resume_backoff_hours = 0
+    put_setting(db, "control", control)
+    db.commit()
+    hold = person(start=NOW - timedelta(minutes=30), end=INDEFINITE_END, hold_type="indefinite")
+    at(db, NOW, heat=70.0, cool=74.0, hold=hold)
+    src = FakeSource()
+    await controller.tick(src, NOW)
+    owner_resume(db, "resume_schedule", NOW + timedelta(minutes=1))
+    t = NOW + timedelta(minutes=4)
+    at(db, t)
+    assert load_house_state(db, t).units["up"].last_change_at is None
+    await controller.tick(src, t)
+    assert len(src.holds) == 1
+
+
+# ---------------------------------------------------------------------------------------
+# the source refuses a controller write over a hold the snapshot cannot show yet
+# ---------------------------------------------------------------------------------------
+
+
+class RefusingSource(SetsSource):
+    """A cloud source that, on its own fresh read, finds ``running`` on top of ``refuse_unit``
+    and refuses the controller's writes there the way the ecobee adapter does."""
+
+    def __init__(self, running: HoldInfo, refuse_unit: str = "up", event: str | None = None) -> None:
+        super().__init__()
+        self.running = running
+        self.refuse_unit = refuse_unit
+        self.event = event
+
+    def _refusal(self, unit_key: str, request: dict) -> WriteResult | None:
+        if unit_key != self.refuse_unit:
+            return None
+        extra = {"refused": True, "event": self.event} if self.event else {"refused": True, "not_ours": True}
+        return WriteResult(ok=False, channel="ecobee", request={**request, **extra},
+                           before={"hold": self.running.model_dump(mode="json")},
+                           error="the running hold was not set by the controller; not written")
+
+    async def set_hold(self, req):
+        refused = None if req.by_owner else self._refusal(req.unit_key, req.model_dump(mode="json"))
+        if refused is not None:
+            self.holds.append(req)
+            return refused
+        return await super().set_hold(req)
+
+    async def update_sensor_sets(self, unit_key, sets, reason):
+        refused = self._refusal(unit_key, {"unit_key": unit_key, "sets": sets})
+        if refused is not None:
+            self.set_writes.append((unit_key, sets))
+            return refused
+        return await super().update_sensor_sets(unit_key, sets, reason)
+
+
+async def test_a_hold_refused_over_a_new_persons_hold_logs_that_hold_once(db):
+    """Someone set a hold after the poll the tick decided from: the source refuses the
+    controller's hold, the row becomes that person's hold, and the old snapshot does not read
+    as "someone pressed Resume" (no back-off), nor make the controller try again."""
+    setup_house(db, act_units=["up"])
+    start = NOW - timedelta(seconds=30)
+    theirs = person(start=start, end=NOW + timedelta(hours=2), hold_type="holdHours")
+    src = RefusingSource(theirs)
+    await controller.tick(src, NOW)
+    (row,) = actions(db, unit_key="up")
+    assert (row.action, row.status, row.rule) == ("set_hold", "skipped", "hold_off")
+    assert row.request["kind"] == MANUAL_KIND and row.request["refused"] is True and row.request["by"] == "thermostat"
+    assert row.request["start"] == start.isoformat() and row.request["until"] == (NOW + timedelta(hours=2)).isoformat()
+    assert row.reason.startswith("Someone set a hold on the upstairs thermostat since its last reading")
+
+    t = NOW + timedelta(minutes=3)  # the next tick still has the poll from before that hold
+    refresh_sensors(db, t)
+    unit = load_house_state(db, t).units["up"]
+    assert unit.person_hold.detection_id == row.id and unit.person_hold.until == NOW + timedelta(hours=2)
+    await controller.tick(src, t)
+    assert len(src.holds) == 1 and skipped(db, RESUME_KIND) == [] and unit.resume_backoff_until is None
+
+    t = NOW + timedelta(minutes=6)  # the poll shows it: the same hold, not a second one
+    at(db, t, heat=70.0, cool=74.0, hold=theirs)
+    await controller.tick(src, t)
+    assert [r.id for r in skipped(db, MANUAL_KIND)] == [row.id] and len(src.holds) == 1
+
+
+async def test_a_sensor_set_refused_over_a_new_persons_hold_logs_that_hold(db):
+    setup_house(db, NIGHT, act_units=["up"])
+    snapshots_with_sets(db, NIGHT, DAY_SETS)
+    put_snapshot(db, "up", NIGHT - timedelta(minutes=1), heat=68.0, cool=77.0, sensor_sets={"home": DAY_SETS["up"]})
+    db.commit()
+    theirs = person(start=NIGHT - timedelta(seconds=20), end=INDEFINITE_END, hold_type="indefinite")
+    src = RefusingSource(theirs)
+    await controller.tick(src, NIGHT)
+    (row,) = actions(db, unit_key="up", action="update_program")
+    assert row.status == "skipped" and row.request["kind"] == MANUAL_KIND and row.request["until"] is None
+    assert load_house_state(db, NIGHT + timedelta(minutes=1)).units["up"].person_hold.detection_id == row.id
+
+
+async def test_a_hold_refused_over_the_owners_app_hold_is_the_owners(db, monkeypatch):
+    setup_house(db, act_units=["up"])
+    src = RefusingSource(HoldInfo(heat_f=70.0, cool_f=74.0, start=NOW - timedelta(minutes=40),
+                                  end=NOW + timedelta(minutes=80), hold_type="holdHours"))
+    queue_owner(db, "set_hold", NOW - timedelta(minutes=40), {"heat_f": 70.0, "cool_f": 74.0, "hours": 2},
+                channel="ecobee")
+    monkeypatch.setattr(controller, "utcnow", lambda: NOW - timedelta(minutes=40))
+    await controller.execute_queued(src, NOW - timedelta(minutes=40))
+    assert actions(db, actor="owner")[0].status == "verified"
+    await controller.tick(src, NOW)  # decided from a poll that shows no hold upstairs
+    (row,) = actions(db, unit_key="up", actor="controller")
+    assert row.request["by"] == "app" and row.request["refused"] is True
+
+
+async def test_a_hold_refused_for_a_running_event_is_not_a_persons_hold(db):
+    setup_house(db, act_units=["up"])
+    src = RefusingSource(HoldInfo(heat_f=68.0, cool_f=79.0, hold_type="demandResponse"), event="demandResponse")
+    await controller.tick(src, NOW)
+    (row,) = actions(db, unit_key="up")
+    assert (row.status, row.rule) == ("skipped", "comfort") and row.request.get("kind") != MANUAL_KIND
+    assert row.reason == ("Not written: a utility demand-response event is running on the upstairs thermostat; the "
+                          "controller stands aside while it runs.")
+    assert load_house_state(db, NOW).units["up"].person_hold is None
+
+
+async def test_a_write_refused_over_our_own_hold_is_not_a_persons_hold(db):
+    """The source has no record of a hold climate.state calls ours (it refuses it as not
+    the controller's): no person's hold is made of it; the write fails and is not retried at once."""
+    setup_house(db, act_units=["up"])
+    our_hold(db, "up", NOW - timedelta(minutes=100), 67.0, 76.0)
+    ours = HoldInfo(heat_f=67.0, cool_f=76.0, start=NOW - timedelta(minutes=100), end=NOW + timedelta(minutes=20),
+                    hold_type="holdHours")
+    at(db, NOW, heat=67.0, cool=76.0, hold=ours)
+    src = RefusingSource(ours)
+    await controller.tick(src, NOW)
+    row = actions(db, unit_key="up", actor="controller")[-1]
+    assert row.status == "failed" and "no record of the controller's own hold" in row.reason
+    assert skipped(db, MANUAL_KIND) == [] and load_house_state(db, NOW).units["up"].person_hold is None
+    t = NOW + timedelta(minutes=3)
+    at(db, t, heat=67.0, cool=76.0, hold=ours)
+    await controller.tick(src, t)
+    assert len([h for h in src.holds if h.unit_key == "up"]) == 1
+
+
+async def test_our_homekit_hold_seen_on_the_cloud_is_left_to_end_on_its_own(db):
+    """The controller's HomeKit comfort-setting hold, once the cloud is back: the cloud source
+    has no record of it and would refuse to cancel or replace it, so the controller writes
+    nothing (no resume, no hold, no sensor set) and it never reads as a person's hold."""
+    setup_house(db, NIGHT, act_units=["up"])
+    snapshots_with_sets(db, NIGHT, DAY_SETS)
+    until = NIGHT + timedelta(minutes=70)
+    db.add(ControlAction(ts=NIGHT - timedelta(minutes=50), completed_at=NIGHT - timedelta(minutes=49), unit_key="up",
+                         actor="controller", mode="act", channel="homekit", action="set_hold", status="verified",
+                         rule="sleep", reason="through HomeKit",
+                         request={"kind": "climate_hold", "climate": "sleep", "until": until.isoformat(),
+                                  "unit_key": "up"}))
+    hold = HoldInfo(kind="climate", climate_ref="sleep", start=NIGHT - timedelta(minutes=50), end=until,
+                    hold_type="dateTime")
+    put_snapshot(db, "up", NIGHT - timedelta(minutes=1), heat=66.0, cool=80.0, hold=hold,
+                 sensor_sets={"home": DAY_SETS["up"]})
+    db.commit()
+    state = load_house_state(db, NIGHT)
+    assert state.units["up"].snapshot.hold.set_by_us is True
+    src = RefusingSource(hold)
+    src.refuse_resume = True
+    await controller.tick(src, NIGHT)
+    assert [h for h in src.holds if h.unit_key == "up"] == [] and src.resumes == []
+    assert [u for u, _ in src.set_writes if u == "up"] == []
+    assert skipped(db, MANUAL_KIND) == [] and load_house_state(db, NIGHT).units["up"].person_hold is None
+    plan = {r.target.unit_key: r for r in controller.current_plan(db, NIGHT)}["up"]
+    assert not plan.would_write
+
+
+# ---------------------------------------------------------------------------------------
+# HomeKit: hand changes belong to their HomeKit run; rows from the previous release
+# ---------------------------------------------------------------------------------------
+
+
+def put_homekit_since(db, ts: datetime, since: datetime | None, unit: str = "up", hold: HoldInfo | None = None,
+                      heat: float = 67.0, cool: float = 78.0) -> None:
+    settings = {"homekit_since": since.isoformat()} if since is not None else {}
+    snap = UnitSnapshot(unit_key=unit, ts=ts, source="homekit", hvac_mode="cool", heat_sp_f=heat, cool_sp_f=cool,
+                        zone_temp_f=76.0, zone_humidity=45.0, hold=hold, settings=settings)
+    data = snap.model_dump(mode="json")
+    db.execute(insert(LiveUnit).values(unit_key=unit, ts=ts, source="homekit", snapshot=data)
+               .on_conflict_do_update(index_elements=[LiveUnit.unit_key],
+                                      set_={"ts": ts, "source": "homekit", "snapshot": data}))
+    db.commit()
+
+
+async def test_a_hand_change_from_an_earlier_outage_does_not_come_back(db):
+    setup_house(db, act_units=["up"])
+    old = homekit_hand_change(db, NOW - timedelta(days=2))
+    later = NOW + timedelta(days=1)
+    # a later HomeKit run (it took over at `later`): Monday's hand change is not this run's
+    put_homekit_since(db, later + timedelta(minutes=5), since=later)
+    assert load_house_state(db, later + timedelta(minutes=6)).units["up"].person_hold is None
+    # one seen in this run counts
+    row = homekit_hand_change(db, later + timedelta(minutes=2))
+    assert load_house_state(db, later + timedelta(minutes=6)).units["up"].person_hold.detection_id == row.id
+    # unstamped snapshots keep the old reading: the newest hand change stands
+    put_homekit_since(db, later + timedelta(minutes=5), since=None)
+    assert load_house_state(db, later + timedelta(minutes=6)).units["up"].person_hold.detection_id == row.id
+    assert old.id != row.id
+
+
+async def test_a_persons_hold_seen_on_the_cloud_survives_an_older_hand_change_in_a_new_outage(db):
+    """Skipping an earlier run's hand change falls through to the hold the cloud saw since."""
+    setup_house(db, act_units=["up"])
+    homekit_hand_change(db, NOW - timedelta(hours=3))
+    hold = person(start=NOW - timedelta(minutes=30), end=INDEFINITE_END, hold_type="indefinite")
+    at(db, NOW, heat=70.0, cool=74.0, hold=hold)
+    await controller.tick(FakeSource(), NOW)
+    det = skipped(db, MANUAL_KIND)[-1]
+    later = NOW + timedelta(hours=1)
+    put_homekit_since(db, later + timedelta(minutes=5), since=later, hold=hold, heat=70.0, cool=74.0)
+    assert load_house_state(db, later + timedelta(minutes=6)).units["up"].person_hold.detection_id == det.id
+
+
+def legacy_detection(db, ts: datetime, unit: str = "up") -> ControlAction:
+    """A person-hold row as the previous release logged it (no start, until or by)."""
+    row = ControlAction(ts=ts, completed_at=ts, unit_key=unit, actor="controller", mode="act", channel="none",
+                        action="set_hold", status="skipped", rule="hold_off", reason="legacy detection",
+                        request={"kind": MANUAL_KIND, "heat_f": 70.0, "cool_f": 74.0, "climate_ref": None,
+                                 "hold_type": "indefinite"})
+    db.add(row)
+    db.commit()
+    return row
+
+
+async def test_a_previous_release_row_is_logged_again_in_the_current_format(db):
+    setup_house(db, act_units=["up"])
+    legacy = legacy_detection(db, NOW - timedelta(hours=2))
+    hold = person(start=NOW - timedelta(hours=2), end=INDEFINITE_END, hold_type="indefinite")
+    at(db, NOW, heat=70.0, cool=74.0, hold=hold)
+    src = FakeSource()
+    await controller.tick(src, NOW)
+    rows = skipped(db, MANUAL_KIND)
+    assert [r.id for r in rows][0] == legacy.id and len(rows) == 2
+    assert rows[1].request["until"] is None and rows[1].request["start"] == hold.start.isoformat()
+    assert src.holds == []
+    t = NOW + timedelta(minutes=3)
+    at(db, t, heat=70.0, cool=74.0, hold=hold)
+    await controller.tick(src, t)
+    assert len(skipped(db, MANUAL_KIND)) == 2  # once
+
+
+async def test_a_previous_release_row_is_carried_under_homekit_while_its_hold_shows(db):
+    """The cloud goes down before any tick logged the hold in the current format: HomeKit
+    carries the old row while its snapshot still shows that hold, and no HomeKit hold is queued."""
+    setup_house(db, act_units=["up"])
+    circuit_open(db)
+    legacy = legacy_detection(db, NOW - timedelta(hours=2))
+    hold = person(start=NOW - timedelta(hours=2), end=INDEFINITE_END, hold_type="indefinite")
+    t = NOW + timedelta(minutes=20)
+    put_homekit_since(db, t - timedelta(minutes=1), since=NOW, hold=hold, heat=70.0, cool=74.0)  # rule 2 copies it
+    refresh_sensors(db, t)
+    ph = load_house_state(db, t).units["up"].person_hold
+    assert ph.detection_id == legacy.id and ph.until is None and ph.since == hold.start
+    await controller.tick(FakeSource(kind="ecobee"), t)
+    assert [r for r in actions(db, unit_key="up", channel="homekit") if r.status == "queued"] == []
+    # HomeKit no longer shows that hold: the old row says nothing more
+    put_homekit_since(db, t + timedelta(minutes=2), since=NOW)
+    assert load_house_state(db, t + timedelta(minutes=3)).units["up"].person_hold is None

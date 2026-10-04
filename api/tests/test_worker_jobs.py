@@ -416,3 +416,38 @@ async def test_tick_step_runs_the_real_sweep_after_a_good_tick(db, monkeypatch):
     db.expire_all()
     assert w.last_tick_at is not None
     assert db.execute(select(UtilityEvent.status)).scalar_one() == "ended"
+
+
+async def test_controller_writes_and_the_hand_back_share_one_lock(db, monkeypatch):
+    """The tick (+ utility step), queued owner actions, the settings check and the hand-back
+    job all take Worker.control_lock: none of them starts while another holds it."""
+    from climate.control import controller
+    from climate.utility import skips
+
+    calls: list[str] = []
+
+    def record(name: str, result):
+        async def fn(*args, **kwargs):
+            calls.append(name)
+            return result
+        return fn
+
+    class Settings(FakeSim):
+        async def ensure_settings(self):
+            return []
+
+    monkeypatch.setattr(controller, "tick", record("tick", []))
+    monkeypatch.setattr(skips, "run", record("skips", []))
+    monkeypatch.setattr(controller, "execute_queued", record("execute", []))
+    monkeypatch.setattr(controller, "keep_settings", record("settings", controller.SettingsCheck("act", [], True)))
+    monkeypatch.setattr(controller, "hand_back", record("handback", []), raising=False)
+    w = wmod.Worker()
+    w.source, w.source_kind = wmod.LockedSource(Settings()), "simulator"
+    await w.control_lock.acquire()
+    tasks = [asyncio.create_task(c) for c in (w.tick_step(), w.execute_step(), w.settings_step(),
+                                              w.hand_back(datetime(2026, 10, 4, 12, tzinfo=UTC)))]
+    await asyncio.sleep(0.1)
+    assert calls == []  # every one of them waits for the lock
+    w.control_lock.release()
+    await asyncio.gather(*tasks)
+    assert sorted(calls) == ["execute", "handback", "settings", "skips", "tick"]

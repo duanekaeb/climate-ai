@@ -215,6 +215,25 @@ def _secret(db) -> str | None:
     return get_secret(db, REFRESH_SECRET)
 
 
+def _running_event(etype: str, **overrides: Any) -> dict[str, Any]:
+    """A running ecobee event of ``etype`` (14:00-17:00 thermostat time, absolute setpoints)."""
+    ev: dict[str, Any] = {"type": etype, "name": etype, "running": True, "startDate": "2026-10-04",
+                          "startTime": "14:00:00", "endDate": "2026-10-04", "endTime": "17:00:00",
+                          "heatHoldTemp": 640, "coolHoldTemp": 800, "isTemperatureAbsolute": True,
+                          "isOptional": True, "linkRef": "", "holdClimateRef": ""}
+    ev.update(overrides)
+    return ev
+
+
+def _no_hand_set_hold(fake: FakeEcobee, ident: str) -> dict[str, Any]:
+    """Take the fixture's running hand-set hold off a thermostat (the Hallway runs one, which
+    a controller write must never replace); returns it so a test can put it back."""
+    t = fake.tstats[ident]
+    held = next(e for e in t["events"] if e["type"] == "hold" and e["running"])
+    t["events"] = [e for e in t["events"] if e is not held]
+    return held
+
+
 # --- summary + mapping ---------------------------------------------------------------
 
 
@@ -370,7 +389,7 @@ async def test_smart_away_snapshot_is_distinguishable_and_not_ours(cloud, fake, 
 async def test_set_hold_readback_mismatch_is_not_ok(cloud, fake):
     await cloud.poll_revisions()
     fake.hold_heat_override = 680
-    result = await cloud.set_hold(HoldRequest(unit_key="main", heat_f=69.0, cool_f=75.0, hours=1, reason="x"))
+    result = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=69.0, cool_f=75.0, hours=1, reason="x"))
     assert result.ok is False
     assert "does not match" in result.error
     assert result.readback["hold"]["heat_f"] == 68.0
@@ -403,7 +422,13 @@ async def test_renewal_that_never_landed_is_not_verified(cloud, fake, db, monkey
     assert "older hold" in renew.error and "ConnectError" in renew.error
     assert renew.readback["hold"]["heat_f"] == 68.0  # same setpoints, but the old end time
     db.rollback()
-    assert get_raw(db, HOLDS_KEY)["up"] == record  # the record of our hold is not moved
+    stored = dict(get_raw(db, HOLDS_KEY)["up"])
+    attempt = stored.pop("attempt")
+    assert stored == record  # the record of our verified hold is not moved
+    # the unverified renewal is noted on its own; the older hold does not end in its window
+    assert datetime.fromisoformat(attempt["end_from"]) > datetime.fromisoformat(record["end"])
+    (snap,) = await cloud.fetch_snapshots(["up"])
+    assert snap.hold.set_by_us is True  # still the verified older hold of ours
 
 
 async def test_renewal_that_lands_is_verified(cloud, fake, db):
@@ -421,8 +446,8 @@ async def test_renewal_that_lands_is_verified(cloud, fake, db):
 
 async def test_set_hold_rejected_before_sending(cloud, fake):
     await cloud.poll_revisions()
-    # Hallway heatCoolMinDelta is 4.0°F
-    tight = await cloud.set_hold(HoldRequest(unit_key="main", heat_f=72.0, cool_f=75.5, hours=1, reason="x"))
+    # Toy Room heatCoolMinDelta is 5.0°F
+    tight = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=72.0, cool_f=76.5, hours=1, reason="x"))
     assert tight.ok is False and "heatCoolMinDelta" in tight.error
     bad_hours = await cloud.set_hold(HoldRequest.model_construct(unit_key="main", heat_f=68.0, cool_f=75.0, hours=3,
                                                                  reason="x"))
@@ -430,6 +455,132 @@ async def test_set_hold_rejected_before_sending(cloud, fake):
     unmapped = await cloud.set_hold(HoldRequest(unit_key="nope", heat_f=68.0, cool_f=75.0, hours=1, reason="x"))
     assert unmapped.ok is False
     assert fake.posts == []
+
+
+async def test_controller_set_hold_never_replaces_a_persons_hold(cloud, fake, db):
+    """Finding 9: the Hallway runs a hold someone set by hand. A controller write (decided on
+    a snapshot from before it) is refused before anything is sent, in a shape the controller
+    reads as a person's hold; a Quick Save is refused the same way."""
+    await cloud.poll_revisions()
+    result = await cloud.set_hold(HoldRequest(unit_key="main", heat_f=68.0, cool_f=76.0, hours=2,
+                                              reason="linked floors"))
+    assert result.ok is False and fake.posts == [] and result.readback is None
+    assert result.request["refused"] is True and result.request["not_ours"] is True
+    assert "not set by the controller" in result.error and "not written" in result.error
+    assert result.before["hold"]["set_by_us"] is False and result.before["hold"]["hold_type"] == "holdHours"
+
+    fake.tstats[UP]["events"] = [_running_event("quickSave", isTemperatureAbsolute=False,
+                                                isTemperatureRelative=True, coolRelativeTemp=40)]
+    quick = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="renew"))
+    assert quick.ok is False and quick.request["not_ours"] is True and "Quick Save" in quick.error
+    assert quick.before["hold"]["hold_type"] == "quickSave" and fake.posts == []
+    db.rollback()
+    assert get_raw(db, HOLDS_KEY) in (None, {})  # nothing recorded for a write that never went out
+
+
+async def test_set_hold_decides_on_a_fresh_read_not_the_last_poll(cloud, fake):
+    """Finding 9: the poll fetched the Hallway with no hold; someone sets one at the wall; the
+    controller's write right after must see it (a fresh GET, not the poll's detail)."""
+    await cloud.poll_revisions()
+    held = _no_hand_set_hold(fake, MAIN)
+    (snap,) = await cloud.fetch_snapshots(["main"])
+    assert snap.hold is None
+    fake.tstats[MAIN]["events"].insert(0, held)  # 2:00:30 at the wall, before any poll
+    fake._bump(fake.tstats[MAIN])
+    fake.calls.clear()
+    result = await cloud.set_hold(HoldRequest(unit_key="main", heat_f=68.0, cool_f=76.0, hours=2, reason="tick"))
+    assert result.ok is False and result.request["not_ours"] is True and fake.posts == []
+    assert [(m, path) for m, path, _ in fake.calls] == [("GET", "/1/thermostat")]
+    # and the sensor-set write of the same tick is refused the same way
+    sets = await cloud.update_sensor_sets("main", {"sleep": ["main.hallway_tstat", "main.school_room"]}, "tick")
+    assert sets.ok is False and sets.request["refused"] is True and sets.request["not_ours"] is True
+    assert sets.before["hold"]["set_by_us"] is False and fake.posts == []
+    # a write that would change nothing is still a no-op
+    same = await cloud.update_sensor_sets("main", {"sleep": ["main.hallway_tstat"]}, "tick")
+    assert same.ok is True and same.request["noop"] is True and fake.posts == []
+
+
+@pytest.mark.parametrize("etype", ["vacation", "demandResponse", "today"])
+async def test_no_write_over_a_protected_or_unknown_event(cloud, fake, etype):
+    """Vacation, a utility event or an unknown type on top: refused for the controller AND the
+    owner, holds and sensor sets alike, with the event type in the request."""
+    await cloud.poll_revisions()
+    fake.tstats[MAIN]["events"] = [_running_event(etype)]
+    for by_owner in (False, True):
+        result = await cloud.set_hold(HoldRequest(unit_key="main", heat_f=68.0, cool_f=76.0, hours=2,
+                                                  reason="x", by_owner=by_owner))
+        assert result.ok is False and result.request["refused"] is True and result.request["event"] == etype
+        assert result.error == f"a running {etype} event is in effect; not written"
+        assert "not_ours" not in result.request
+    sets = await cloud.update_sensor_sets("main", {"sleep": ["main.hallway_tstat", "main.school_room"]}, "x")
+    assert sets.ok is False and sets.request["event"] == etype
+    assert fake.posts == []
+
+
+async def test_controller_takes_smart_away_back_and_renews_its_own_hold(cloud, fake):
+    """Smart Away on top and the controller's own hold never refuse."""
+    await cloud.poll_revisions()
+    fake.tstats[UP]["events"] = [_running_event("autoAway", holdClimateRef="away")]
+    over_away = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="x"))
+    assert over_away.ok is True, over_away.error
+    assert over_away.before["hold"]["hold_type"] == "autoAway"
+    _shift_clock(fake.tstats[UP], 110)
+    renew = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="renew"))
+    assert renew.ok is True, renew.error
+    assert renew.before["hold"]["set_by_us"] is True and len(fake.posts) == 2
+
+
+async def test_owner_hold_is_written_over_a_persons_hold_and_is_never_ours(cloud, fake, db):
+    """The owner IS the person: their hold goes over the hand-set one. Once written it is the
+    owner's (a person's hold), so the controller can neither replace it nor cancel it."""
+    await cloud.poll_revisions()
+    owner = await cloud.set_hold(HoldRequest(unit_key="main", heat_f=69.0, cool_f=75.0, hours=2,
+                                             reason="Owner hold", by_owner=True))
+    assert owner.ok is True, owner.error
+    assert owner.before["hold"]["set_by_us"] is False and owner.readback["hold"]["set_by_us"] is False
+    db.rollback()
+    assert get_raw(db, HOLDS_KEY)["main"]["by_owner"] is True
+    (snap,) = await cloud.fetch_snapshots(["main"])
+    assert snap.hold.heat_f == 69.0 and snap.hold.set_by_us is False
+    n = len(fake.posts)
+    ctrl = await cloud.set_hold(HoldRequest(unit_key="main", heat_f=68.0, cool_f=76.0, hours=2, reason="tick"))
+    assert ctrl.ok is False and ctrl.request["not_ours"] is True
+    resume = await cloud.resume_program("main", "controller resume")
+    assert resume.ok is False and resume.error == "the running hold was not set by the controller; not cancelled"
+    assert len(fake.posts) == n
+    # the owner's own Back to automatic still cancels it
+    back = await cloud.resume_program("main", "Owner: back to automatic", force=True)
+    assert back.ok is True, back.error
+
+
+async def test_our_write_that_landed_without_a_read_back_is_still_ours(cloud, fake, db, monkeypatch):
+    """A controller write whose read-back GETs failed may have landed. If it did, it is ours:
+    the next snapshot says so and the controller's next write over it is not refused."""
+    await cloud.poll_revisions()
+    real_get = cloud._get_one
+    calls = {"n": 0}
+
+    async def flaky(ident, includes):
+        calls["n"] += 1
+        if calls["n"] > 1:  # the GET before the write works; both read-backs time out
+            raise EcobeeApiError("ecobee thermostat request failed (ReadTimeout)", transport=True)
+        return await real_get(ident, includes)
+
+    monkeypatch.setattr(cloud, "_get_one", flaky)
+    result = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="x"))
+    monkeypatch.setattr(cloud, "_get_one", real_get)
+    assert result.ok is False and result.readback is None and calls["n"] == 3
+    assert result.error.startswith("setHold sent; read-back failed") and result.request["sent"] is True
+    assert len(fake.posts) == 1  # it landed at ecobee
+    db.rollback()
+    record = get_raw(db, HOLDS_KEY)["up"]
+    assert set(record) == {"attempt"} and record["attempt"]["heat_f"] == 68.0
+    (snap,) = await cloud.fetch_snapshots(["up"])
+    assert snap.hold.set_by_us is True and snap.hold.heat_f == 68.0
+    retry = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=76.5, hours=2, reason="x"))
+    assert retry.ok is True, retry.error
+    db.rollback()
+    assert "attempt" not in get_raw(db, HOLDS_KEY)["up"]  # a verified write replaces the note
 
 
 async def test_resume_program(cloud, fake):
@@ -470,13 +621,42 @@ async def test_resume_program_cancels_our_own_hold_without_force(cloud, fake, db
     assert "up" not in get_raw(db, HOLDS_KEY)  # the record of our hold is cleared
 
 
-@pytest.mark.parametrize("etype", ["vacation", "demandResponse", "autoAway", "autoHome", "quickSave", "today"])
+@pytest.mark.parametrize("etype", ["vacation", "demandResponse", "today"])
 async def test_resume_program_never_cancels_an_event_even_when_forced(cloud, fake, etype):
+    """Vacation, a utility event and a type this app does not know: never, forced or not."""
     await cloud.poll_revisions()
     ev = dict(fake.tstats[MAIN]["events"][0], type=etype, running=True)
     fake.tstats[MAIN]["events"] = [ev]
     result = await cloud.resume_program("main", "owner resume", force=True)
     assert result.ok is False and etype in result.error and fake.posts == []
+
+
+@pytest.mark.parametrize("etype", ["quickSave", "autoAway", "autoHome"])
+async def test_owner_forced_resume_cancels_a_quick_save_or_smart_away(cloud, fake, etype):
+    """Findings 3 / 10: the app shows a Quick Save as a person's hold and offers Back to
+    automatic / Resume schedule (a forced resume); during a resume back-off it offers Back to
+    automatic over Smart Away. Both must work: ecobee's resumeProgram removes the top event.
+    The controller's own (unforced) resume still never touches them."""
+    await cloud.poll_revisions()
+    fake.tstats[UP]["events"] = [_running_event(etype)]
+    unforced = await cloud.resume_program("up", "controller resume")
+    assert unforced.ok is False and etype in unforced.error and fake.posts == []
+
+    result = await cloud.resume_program("up", "Owner: back to automatic", force=True)
+    assert result.ok is True, result.error
+    assert fake.posts[-1]["functions"] == [{"type": "resumeProgram", "params": {"resumeAll": False}}]
+    assert result.before["hold"]["hold_type"] == etype and result.readback["hold"] is None
+    assert result.request["sent"] is True and fake.tstats[UP]["events"] == []
+
+
+async def test_owner_forced_resume_fails_when_the_quick_save_stays(cloud, fake):
+    """The read-back must see the Quick Save gone: one still on top is not a success."""
+    await cloud.poll_revisions()
+    fake.tstats[UP]["events"] = [_running_event("quickSave", endDate="2035-01-01", endTime="00:00:00")]
+    fake._apply = lambda t, body: None  # ecobee accepts the POST but the Quick Save keeps running
+    result = await cloud.resume_program("up", "Owner: back to automatic", force=True)
+    assert result.ok is False and "quickSave event is still running" in result.error
+    assert len(fake.posts) == 1 and result.readback["hold"]["hold_type"] == "quickSave"
 
 
 async def test_resume_program_never_cancels_a_vacation(cloud, fake):
@@ -544,6 +724,7 @@ async def test_ensure_settings_failed_readback_keeps_before_and_reports(cloud, f
 
 async def test_update_sensor_sets_read_modify_write(cloud, fake):
     await cloud.poll_revisions()
+    _no_hand_set_hold(fake, MAIN)
     result = await cloud.update_sensor_sets("main", {"sleep": ["main.hallway_tstat", "main.school_room"]}, "night set")
     assert result.ok is True, result.error
     (post,) = fake.posts
@@ -565,6 +746,7 @@ async def test_update_sensor_sets_read_modify_write(cloud, fake):
 
 async def test_update_sensor_sets_aborts_when_revision_moves(cloud, fake):
     await cloud.poll_revisions()
+    _no_hand_set_hold(fake, MAIN)
     fake.bump_rev_on_summary = True
     result = await cloud.update_sensor_sets("main", {"home": ["main.living_room"]}, "x")
     assert result.ok is False and "revision moved" in result.error

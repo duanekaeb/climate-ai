@@ -563,16 +563,21 @@ def _apply_event_prep(ctx: _Ctx, targets: dict[str, UnitTarget]) -> None:
     an announced utility event, so the house starts the event cooler (warmer) while the event
     itself is applied to the normal setpoint.
 
-    For the unit's announced events with a start and no skip requested or done (earliest
-    first), the first whose window contains now: ``end_by = e.start_at -
+    Only for the unit's NEXT event (``next_utility_event``: the earliest announced one that has
+    not started, a pending skip included), never a later one: a hold sized for a later event
+    would still run when the earlier one starts. ``end_by = e.start_at -
     precondition_end_gap_min``; inside the window
     ``[end_by - precondition_hours h - 15 min, end_by)`` the target becomes rule 'event_prep',
     ``desired='hold'``, ``hold_end_by=end_by``, with cool_f lowered (heat_f raised) by
     ``precondition_degrees_f``. The controller sizes the hold so it ends by ``end_by`` (it
-    lapses on its own, never relied on to be resumed). No prep when a one-hour hold no longer
-    fits before ``end_by``, unless our prep hold is already running (it is then left to lapse,
-    instead of being replaced by a normal hold that would run into the event). A unit whose
-    thermostat is off, or whose direction cannot be told (``_prep_direction``), is left as is."""
+    lapses on its own, never relied on to be resumed). No prep when that event has a skip
+    requested (it may still run if the opt-out fails, and no later event is prepped for in
+    the meantime), when a one-hour hold no longer fits before ``end_by``, unless our prep hold
+    is already running (it is then left to lapse, instead of being replaced by a normal hold
+    that would run into the event). A unit whose thermostat is off, or whose direction cannot
+    be told (``_prep_direction``), is left as is. A prep hold of ours that would still run
+    when the next event starts (the event was announced or moved earlier) is the controller's
+    to pull back (``controller._evaluate``)."""
     st = ctx.state
     cfg = st.utility
     if not cfg.precondition:
@@ -580,40 +585,43 @@ def _apply_event_prep(ctx: _Ctx, targets: dict[str, UnitTarget]) -> None:
     for unit_key, target in list(targets.items()):
         if target.rule == "hold_off":
             continue
-        for ev in _prep_events(st, unit_key):
-            end_by = ev.start_at - timedelta(minutes=cfg.precondition_end_gap_min)  # type: ignore[operator]
-            start = end_by - timedelta(hours=cfg.precondition_hours) - PREP_LEAD
-            if not start <= st.now < end_by:
-                continue
-            if end_by - st.now < PREP_MIN_HOLD and not _prep_hold_running(st, unit_key, start, end_by):
-                break
-            direction = _prep_direction(st, unit_key, ev)
-            if direction is None:
-                break
-            deg = cfg.precondition_degrees_f
-            heat, cool = target.heat_f, target.cool_f
-            if direction == "cool":
-                cool -= deg
-            else:
-                heat += deg
-            verb = "Pre-cooling" if direction == "cool" else "Pre-heating"
-            reason = (f"{verb} {deg:g}°F before the utility event at {_clock(ev.start_at, st.tz)}; this hold ends by "  # type: ignore[arg-type]
-                      f"{_clock(end_by, st.tz)}, before the event starts.")
-            targets[unit_key] = target.model_copy(update={
-                "heat_f": heat, "cool_f": cool, "rule": "event_prep", "reason": reason, "desired": "hold",
-                "hold_end_by": end_by,
-            })
-            break
+        ev = next_utility_event(st, unit_key)
+        if ev is None or ev.skip == "requested":
+            continue
+        end_by = ev.start_at - timedelta(minutes=cfg.precondition_end_gap_min)  # type: ignore[operator]
+        start = end_by - timedelta(hours=cfg.precondition_hours) - PREP_LEAD
+        if not start <= st.now < end_by:
+            continue
+        if end_by - st.now < PREP_MIN_HOLD and not _prep_hold_running(st, unit_key, start, end_by):
+            continue
+        direction = _prep_direction(st, unit_key, ev)
+        if direction is None:
+            continue
+        deg = cfg.precondition_degrees_f
+        heat, cool = target.heat_f, target.cool_f
+        if direction == "cool":
+            cool -= deg
+        else:
+            heat += deg
+        verb = "Pre-cooling" if direction == "cool" else "Pre-heating"
+        reason = (f"{verb} {deg:g}°F before the utility event at {_clock(ev.start_at, st.tz)}; this hold ends by "  # type: ignore[arg-type]
+                  f"{_clock(end_by, st.tz)}, before the event starts.")
+        targets[unit_key] = target.model_copy(update={
+            "heat_f": heat, "cool_f": cool, "rule": "event_prep", "reason": reason, "desired": "hold",
+            "hold_end_by": end_by,
+        })
 
 
-def _prep_events(state: HouseState, unit_key: str) -> list[UtilityEventState]:
-    """The unit's announced events that pre-conditioning may run before, earliest start first."""
+def next_utility_event(state: HouseState, unit_key: str) -> UtilityEventState | None:
+    """The unit's earliest announced utility event that has not started yet (start after now),
+    unless it was opted out of. One with a skip requested counts: the opt-out can still fail
+    or be refused, and the event then runs."""
     evs = [
         e for e in state.utility_events
         if e.unit_key == unit_key and e.status == "announced" and e.start_at is not None
-        and e.skip not in ("requested", "done")
+        and e.start_at > state.now and e.skip != "done"
     ]
-    return sorted(evs, key=lambda e: e.start_at)  # type: ignore[arg-type, return-value]
+    return min(evs, key=lambda e: e.start_at, default=None)  # type: ignore[arg-type, return-value]
 
 
 def _prep_hold_running(state: HouseState, unit_key: str, start: datetime, end_by: datetime) -> bool:

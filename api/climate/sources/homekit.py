@@ -32,13 +32,21 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from climate.house import ROOM_BY_KEY, SENSORS, normalize_name
-from climate.sources.base import HoldInfo, HvacMode, SensorReading, UnitSnapshot, WriteResult
+from climate.sources.base import (
+    KNOWN_HOLD_TYPES,
+    PROTECTED_EVENTS,
+    HoldInfo,
+    HvacMode,
+    SensorReading,
+    UnitSnapshot,
+    WriteResult,
+)
 
 log = logging.getLogger("climate.homekit")
 
@@ -57,6 +65,10 @@ MODE_CLIMATES: dict[int, str] = {code: name for name, code in CLIMATE_CODES.item
 MODE_TEMPERATURE_HOLD = 3
 HVAC_TARGETS: dict[int, str] = {0: "off", 1: "heat", 2: "cool", 3: "auto"}  # HEATING_COOLING_TARGET
 OUR_HOLD_MATCH_S = 120  # TIMESTAMP within this of our hold's end = our hold is the one running
+# UnitSnapshot.settings key of every HomeKit snapshot: when HomeKit took over the unit's live
+# snapshot (ISO UTC). climate.state ignores a HomeKit hand-change row older than it: such a row
+# belongs to an earlier outage, and the cloud has reported the real hold state since.
+HOMEKIT_SINCE_KEY = "homekit_since"
 
 _BASE_UUID = "-0000-1000-8000-0026BB765291"
 
@@ -186,6 +198,11 @@ class HomekitAuthError(HomekitError):
 
 class HomekitWriteError(HomekitError):
     """A put returned a non-zero status, or a write precondition failed."""
+
+
+class HomekitWriteRejected(HomekitWriteError):
+    """The thermostat answered a put with a non-zero status: that write did not land (unlike a
+    put whose answer was lost, which may have)."""
 
 
 class HomekitWriteForbidden(HomekitWriteError):
@@ -480,11 +497,19 @@ _HEAT_EQUIPMENT = {True: "heatPump", False: "auxHeat1"}  # by settings['hasHeatP
 
 def _hold_still_shown(prev: HoldInfo, mode: int | None, heat: float | None, cool: float | None,
                       ts: datetime) -> bool:
-    """Does the thermostat still show ``prev`` (a hold from the last live snapshot)?"""
+    """Does the thermostat still show ``prev`` (a hold from the last live snapshot)?
+
+    HomeKit cannot see ecobee events, so a vacation or utility event with a known end is kept
+    until that end whatever the mode shows, and so is an unrecognised ecobee event (outside
+    ``KNOWN_HOLD_TYPES``: its setpoints may look like a comfort setting, or be relative), also
+    without an end (then until the cloud is back): the controller stays hands-off while it
+    runs, and its setpoints are never read as a person's change."""
     if prev.end is not None and prev.end <= ts:
         return False
-    if prev.hold_type in ("vacation", "demandResponse") and prev.end is not None:
+    if prev.hold_type in PROTECTED_EVENTS and prev.end is not None:
         return True  # scheduled events with a known end: kept until that end
+    if prev.hold_type is not None and prev.hold_type not in KNOWN_HOLD_TYPES:
+        return True  # an unrecognised ecobee event: kept until its end, or until the cloud is back
     if mode is None:
         return False
     if prev.kind == "climate" or prev.climate_ref:
@@ -506,6 +531,7 @@ def snapshot_from_values(
     *,
     previous: UnitSnapshot | None = None,
     our_hold: tuple[str, datetime] | None = None,
+    continuing: bool | None = None,
 ) -> UnitSnapshot:
     """A UnitSnapshot (source 'homekit') from one HomeKit poll, for when the cloud is down.
 
@@ -518,6 +544,12 @@ def snapshot_from_values(
     ``program_*`` setpoints (the schedule may have moved on), and ``hvac_mode`` when HomeKit
     does not expose its target mode.
 
+    ``settings['homekit_since']`` (``HOMEKIT_SINCE_KEY``) records when HomeKit took over the
+    unit's live snapshot, ISO UTC: carried from ``previous`` when this snapshot replaces
+    HomeKit's own (``continuing``; default: ``previous.source == 'homekit'``), else ``ts`` (this
+    snapshot starts a HomeKit run). A replaced HomeKit snapshot without it (unreadable, or
+    written by an older release) leaves it out: when that run started is unknown.
+
     Hold, first rule that applies (TIMESTAMP is ecobee's "next scheduled change": a hold's end,
     or the next schedule transition when no hold runs):
     1. ``our_hold`` = (climate, until) of our last verified HomeKit climate hold: still before
@@ -525,7 +557,8 @@ def snapshot_from_values(
        of ``until`` -> that climate hold, ``set_by_us``.
     2. ``previous.hold`` the thermostat still shows (not ended; climate hold while CURRENT_MODE
        is that climate; temperature hold while CURRENT_MODE is 3 and the thresholds still match;
-       a vacation / demand response until its end) -> carried as it was.
+       a vacation / demand response until its end; an unrecognised ecobee event until its end,
+       or for the whole HomeKit run when it has none) -> carried as it was.
     3. CURRENT_MODE 3 -> a temperature hold at the current thresholds, ending at TIMESTAMP when
        that is in the future; not ours (the cloud channel's own holds are caught by rule 2).
     4. otherwise no hold: HomeKit cannot tell a hand-set climate hold from the schedule.
@@ -574,6 +607,14 @@ def snapshot_from_values(
         hold = HoldInfo(kind="temperature", heat_f=heat_sp, cool_f=cool_sp, end=future_end,
                         hold_type="dateTime" if future_end is not None else None, set_by_us=False)
 
+    if continuing is None:
+        continuing = previous is not None and previous.source == "homekit"
+    settings = {k: v for k, v in prev_settings.items()
+                if k not in ("program_heat_f", "program_cool_f", HOMEKIT_SINCE_KEY)}
+    since = prev_settings.get(HOMEKIT_SINCE_KEY) if continuing else ts.astimezone(UTC).isoformat()
+    if isinstance(since, str):
+        settings[HOMEKIT_SINCE_KEY] = since
+
     return UnitSnapshot(
         unit_key=unit_key,
         ts=ts,
@@ -591,7 +632,7 @@ def snapshot_from_values(
         zone_humidity=_num(tstat.get("RELATIVE_HUMIDITY_CURRENT"), 0, 100),
         sensors=readings_from_values(values, aid_map, ts),
         sensor_sets=dict(previous.sensor_sets) if previous is not None else {},
-        settings={k: v for k, v in prev_settings.items() if k not in ("program_heat_f", "program_cool_f")},
+        settings=settings,
         connected=True,
         events=[],  # never carried or invented: HomeKit cannot see ecobee events
         utility=None,
@@ -1372,7 +1413,8 @@ class HomekitBridge:
         raise HomekitWriteError(f"this thermostat does not expose {key}")
 
     async def _put(self, ent: _Paired, rows: list[tuple[int, int, Any]]) -> None:
-        """put_characteristics with the write guard; any entry with status != 0 fails."""
+        """put_characteristics with the write guard; any entry with status != 0 fails
+        (``HomekitWriteRejected``). A put that raised may still have landed: its answer is lost."""
         assert ent.parsed is not None
         for aid, iid, _ in rows:
             ctype = ent.parsed.types.get((aid, iid))
@@ -1387,7 +1429,7 @@ class HomekitBridge:
             detail = ", ".join(
                 f"{k[0]}.{k[1]}: {v.get('status')} {v.get('description', '')}".strip() for k, v in failed.items()
             )
-            raise HomekitWriteError(f"the thermostat rejected the write ({detail})")
+            raise HomekitWriteRejected(f"the thermostat rejected the write ({detail})")
 
     async def _get(self, ent: _Paired, keys: list[tuple[int, int]]) -> dict[tuple[int, int], Any]:
         try:
@@ -1403,7 +1445,13 @@ class HomekitBridge:
 
     async def set_climate_hold(self, alias: str, climate: ClimateName, until: datetime, tz: str) -> WriteResult:
         """Timed climate hold: GET TIMESTAMP (learn the suffix), PUT TIMESTAMP alone, then a
-        SEPARATE PUT of SET_HOLD_SCHEDULE, then read back TIMESTAMP and CURRENT_MODE."""
+        SEPARATE PUT of SET_HOLD_SCHEDULE, then read back TIMESTAMP and CURRENT_MODE.
+
+        A failure once the SET_HOLD_SCHEDULE put is on its way (its answer lost, or the
+        read-back failing), unless the thermostat rejected that put, returns ok=False WITH a
+        read-back object (``sent`` True): the hold may be on the thermostat, so the homekit
+        service counts it as ours (maybe landed) instead of reading it as a person's change.
+        A failure before that returns no read-back: nothing that changes the mode went out."""
         if climate not in CLIMATE_CODES:
             raise ValueError(f"climate must be one of {sorted(CLIMATE_CODES)}")
         if until.tzinfo is None:
@@ -1413,6 +1461,7 @@ class HomekitBridge:
         ent = self._entry(alias)
         request: dict[str, object] = {"kind": "climate_hold", "climate": climate, "until": until.isoformat()}
         before: dict[str, object] = {}
+        sent = False  # the SET_HOLD_SCHEDULE put went out: from here on the hold may have landed
         async with ent.lock:
             try:
                 if ent.parsed is None:
@@ -1429,12 +1478,19 @@ class HomekitBridge:
                 request["timestamp"] = value
                 request["set_hold_schedule"] = code
                 await self._put(ent, [(ts_k[0], ts_k[1], value)])  # end time first, alone
+                sent = True
                 await self._put(ent, [(hold_k[0], hold_k[1], code)])  # then the hold, separately
                 back = await self._get(ent, [ts_k, mode_k])
             except HomekitWriteForbidden:
                 raise
             except HomekitError as exc:
-                return WriteResult(ok=False, channel="homekit", before=before, request=request, error=str(exc))
+                if not sent or isinstance(exc, HomekitWriteRejected):
+                    return WriteResult(ok=False, channel="homekit", before=before, request=request, error=str(exc))
+                return WriteResult(
+                    ok=False, channel="homekit", before=before, request=request,
+                    readback={"sent": True, "expected_timestamp": request["timestamp"], "expected_mode": code},
+                    error=f"{exc}; the hold was sent and may be on the thermostat",
+                )
         readback: dict[str, object] = {
             "timestamp": back.get(ts_k),
             "current_mode": back.get(mode_k),
@@ -1456,10 +1512,13 @@ class HomekitBridge:
 
     async def clear_hold(self, alias: str) -> WriteResult:
         """Resume the schedule: PUT CLEAR_HOLD true, then read back TIMESTAMP and CURRENT_MODE.
-        ok means the thermostat accepted the command and the read-back succeeded."""
+        ok means the thermostat accepted the command and the read-back succeeded. As in
+        ``set_climate_hold``, a failure once the put is on its way (not rejected) keeps a
+        read-back object (``sent`` True): the schedule may already be back."""
         ent = self._entry(alias)
         request: dict[str, object] = {"kind": "clear_hold"}
         before: dict[str, object] = {}
+        sent = False
         async with ent.lock:
             try:
                 if ent.parsed is None:
@@ -1469,12 +1528,17 @@ class HomekitBridge:
                 mode_k = self._iid(ent, "VENDOR_ECOBEE_CURRENT_MODE")
                 cur = await self._get(ent, [ts_k, mode_k])
                 before = {"timestamp": cur.get(ts_k), "current_mode": cur.get(mode_k)}
+                sent = True
                 await self._put(ent, [(clear_k[0], clear_k[1], True)])
                 back = await self._get(ent, [ts_k, mode_k])
             except HomekitWriteForbidden:
                 raise
             except HomekitError as exc:
-                return WriteResult(ok=False, channel="homekit", before=before, request=request, error=str(exc))
+                if not sent or isinstance(exc, HomekitWriteRejected):
+                    return WriteResult(ok=False, channel="homekit", before=before, request=request, error=str(exc))
+                return WriteResult(ok=False, channel="homekit", before=before, request=request,
+                                   readback={"sent": True},
+                                   error=f"{exc}; the resume was sent and may have reached the thermostat")
         readback: dict[str, object] = {"timestamp": back.get(ts_k), "current_mode": back.get(mode_k)}
         ok = ts_k in back and mode_k in back
         return WriteResult(ok=ok, channel="homekit", before=before, request=request, readback=readback,

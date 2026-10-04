@@ -28,7 +28,8 @@ tuples live in ``climate.sources.base``):
 - A plain ``hold`` event (someone or something set a hold) carries how it was set, inferred
   because ecobee does not echo the request's holdType: ``holdHours``, ``nextTransition``,
   ``indefinite`` or ``dateTime`` (``PLAIN_HOLD_TYPES``). Only these can be ``set_by_us``
-  (they match the last hold the controller wrote, ``app_settings['ecobee_holds']``).
+  (they match the last hold the controller wrote, ``app_settings['ecobee_holds']``, or its
+  newer write that landed although its read-back failed; never the owner's hold from the app).
 
 Event details (``HoldInfo`` for a running event, ``ThermostatEvent`` from ``parse_events``):
 ``name``; ``isTemperatureAbsolute`` + ``heatHoldTemp`` / ``coolHoldTemp`` (absolute setpoints,
@@ -623,14 +624,38 @@ def next_transition_local(program: dict[str, Any], after_local: datetime) -> dat
     return None
 
 
-def hold_matches_ours(hold: HoldInfo, ours: dict[str, Any] | None, tol_f: float = 0.1) -> bool:
-    """True when ``hold`` is the temperature hold the controller last wrote (and read back)."""
-    if not ours or hold.kind != "temperature" or hold.heat_f is None or hold.cool_f is None:
+def _same_setpoints(hold: HoldInfo, rec: dict[str, Any], tol_f: float) -> bool:
+    try:
+        heat, cool = float(rec["heat_f"]), float(rec["cool_f"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if hold.heat_f is None or hold.cool_f is None:
+        return False
+    return abs(hold.heat_f - heat) <= tol_f and abs(hold.cool_f - cool) <= tol_f
+
+
+def _matches_attempt(hold: HoldInfo, attempt: Any, tol_f: float) -> bool:
+    """``hold`` is the controller's write whose read-back failed but which landed: same
+    setpoints, ending inside the window that write would end in (``end_from``..``end_to``)."""
+    if not isinstance(attempt, dict) or hold.end is None or not _same_setpoints(hold, attempt, tol_f):
         return False
     try:
-        if abs(hold.heat_f - float(ours["heat_f"])) > tol_f or abs(hold.cool_f - float(ours["cool_f"])) > tol_f:
-            return False
+        lo = datetime.fromisoformat(str(attempt["end_from"]))
+        hi = datetime.fromisoformat(str(attempt["end_to"]))
     except (KeyError, TypeError, ValueError):
+        return False
+    return lo <= hold.end <= hi
+
+
+def hold_matches_ours(hold: HoldInfo, ours: dict[str, Any] | None, tol_f: float = 0.1) -> bool:
+    """True when ``hold`` is the temperature hold the controller last wrote (and read back),
+    or its newer write whose read-back failed but which landed (``ours['attempt']``). A hold
+    the owner wrote from the app (``ours['by_owner']``) is the owner's, never ours."""
+    if not ours or hold.kind != "temperature" or hold.heat_f is None or hold.cool_f is None:
+        return False
+    if _matches_attempt(hold, ours.get("attempt"), tol_f):
+        return True
+    if ours.get("by_owner") or not _same_setpoints(hold, ours, tol_f):
         return False
     our_end = ours.get("end")
     if our_end and hold.end is not None:
@@ -641,21 +666,31 @@ def hold_matches_ours(hold: HoldInfo, ours: dict[str, Any] | None, tol_f: float 
 
 
 def parse_hold(
-    event: dict[str, Any], offset: timedelta | None, program: dict[str, Any] | None, ours: dict[str, Any] | None
+    event: dict[str, Any], offset: timedelta | None, program: dict[str, Any] | None, ours: dict[str, Any] | None,
+    tz: tzinfo | None = None,
 ) -> HoldInfo:
-    """A running override event -> HoldInfo (start/end converted to UTC with the thermostat's
-    current offset). ``hold_type`` for a 'hold' event is inferred, because ecobee does not echo
-    the holdType: ends in 2035+ -> indefinite; matches our last write -> holdHours; ends on the
-    next program transition after it started -> nextTransition; a whole number of hours ->
-    holdHours; otherwise dateTime. Any other running event reports its ecobee type verbatim
-    (vacation / autoAway / autoHome / quickSave / demandResponse, or an unknown one), is never
-    ``set_by_us``, and carries the event details (name, relative offsets, isOptional, linkRef);
-    its absolute setpoints are filled only when the event is absolute."""
+    """A running override event -> HoldInfo. ``hold_type`` for a 'hold' event is inferred,
+    because ecobee does not echo the holdType: ends in 2035+ -> indefinite; matches our last
+    write -> holdHours; ends on the next program transition after it started -> nextTransition;
+    a whole number of hours -> holdHours; otherwise dateTime. Any other running event reports
+    its ecobee type verbatim (vacation / autoAway / autoHome / quickSave / demandResponse, or an
+    unknown one), is never ``set_by_us``, and carries the event details (name, relative offsets,
+    isOptional, linkRef); its absolute setpoints are filled only when the event is absolute.
+
+    Times go to UTC with the thermostat's current ``offset``, except an EVENT's when ``tz`` (the
+    thermostat's location.timeZone) is given: those convert through the zone, exactly as
+    ``parse_events`` does, so a vacation that spans a DST change ends at the same instant in
+    ``snapshot.hold`` and ``snapshot.events``. A plain hold always uses the offset (it lasts
+    hours, and ``set_by_us`` compares its end with the end our read-back recorded)."""
     off = offset or timedelta(0)
-    start = local_to_utc_offset(event.get("startDate"), event.get("startTime"), off)
-    end = local_to_utc_offset(event.get("endDate"), event.get("endTime"), off)
-    ref = str(event.get("holdClimateRef") or "") or None
     etype = str(event.get("type") or "hold")
+    if etype == "hold":
+        start = local_to_utc_offset(event.get("startDate"), event.get("startTime"), off)
+        end = local_to_utc_offset(event.get("endDate"), event.get("endTime"), off)
+    else:
+        start = _event_time(event.get("startDate"), event.get("startTime"), off, tz)
+        end = _event_time(event.get("endDate"), event.get("endTime"), off, tz)
+    ref = str(event.get("holdClimateRef") or "") or None
     d = _event_detail(event)
     hold = HoldInfo(kind="climate" if ref else "temperature", heat_f=d.heat_f, cool_f=d.cool_f,
                     climate_ref=ref, start=start, end=end, hold_type=etype, set_by_us=False)

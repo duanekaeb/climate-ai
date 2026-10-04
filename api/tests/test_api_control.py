@@ -6,7 +6,7 @@ mapping (control.changes is monkeypatched)."""
 from __future__ import annotations
 
 import copy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -143,6 +143,28 @@ def test_mode_switch(owner):
     assert owner.post("/api/control/mode", json={"mode": "auto"}).status_code == 422
 
 
+def test_put_settings_never_changes_the_mode(owner):
+    """Only POST /control/mode (and the worker's hand-back) changes the mode: a form loaded
+    before a hand-back switched the controller off saves its stale copy without switching it
+    back on, and its own change still lands."""
+    assert owner.post("/api/control/mode", json={"mode": "act"}).status_code == 200
+    stale = _settings(owner)["control"]  # the Guardrails page, loaded in Act
+    with session_scope() as s:  # the hand-back's first step, in the worker
+        current = get_setting(s, "control", ControlSettings)
+        put_setting(s, "control", current.model_copy(update={"mode": "off"}), updated_by="owner")
+    stale["hold_hours"] = 1
+    r = owner.put("/api/control/settings", json={"control": stale})
+    assert r.status_code == 200, r.text
+    assert r.json()["control"]["mode"] == "off" and r.json()["control"]["hold_hours"] == 1
+    with session_scope() as s:
+        stored = get_setting(s, "control", ControlSettings)
+    assert stored.mode == "off" and stored.hold_hours == 1
+
+    # the other way round: a stale 'off' does not switch off a controller set to Suggest since
+    assert owner.post("/api/control/mode", json={"mode": "suggest"}).status_code == 200
+    assert owner.put("/api/control/settings", json={"control": stale}).json()["control"]["mode"] == "suggest"
+
+
 def test_plan_wraps_controller(owner, monkeypatch):
     target = UnitTarget(unit_key="up", heat_f=68, cool_f=77, rule="comfort", reason="Toy Room occupied")
     row = PlanRow(target=target, guard=GuardResult(ok=True, heat_f=68, cool_f=77), current_heat_f=68,
@@ -250,6 +272,35 @@ def test_resume_schedule_and_back_to_automatic(owner, agent):
     with session_scope() as s:
         kinds = [r.request["kind"] for r in s.execute(select(ControlAction).order_by(ControlAction.id)).scalars()]
     assert kinds == ["resume_schedule", "resume_schedule", "resume_schedule", "automatic"]
+
+
+def test_resumes_go_over_homekit_while_the_cloud_is_down(owner):
+    """While the ecobee cloud circuit is open and HomeKit has taken over, the owner's resumes are
+    queued for the homekit service (channel 'homekit', the owner's kind kept), so a person's
+    hold seen during the outage can still be ended; an owner hold stays on the cloud."""
+    def circuit(until):
+        with session_scope() as s:
+            put_setting(s, "source", SourceSettings(kind="ecobee", homekit_enabled=True, cloud_circuit_open_until=until))
+
+    circuit(utcnow() + timedelta(minutes=15))
+    auto = owner.post("/api/control/automatic", json={"unit_key": "up"}).json()
+    assert (auto["channel"], auto["action"], auto["status"], auto["request"]["kind"]) == (
+        "homekit", "resume_program", "queued", "automatic")
+    resume = owner.post("/api/control/resume", json={"unit_key": "up"}).json()
+    assert (resume["channel"], resume["request"]["kind"]) == ("homekit", "resume_schedule")
+    hold = owner.post("/api/control/hold", json={"unit_key": "up", "heat_f": 68, "cool_f": 76}).json()
+    assert hold["channel"] == "ecobee"
+
+    circuit(utcnow() - timedelta(minutes=1))  # the circuit has closed: back on the cloud
+    assert owner.post("/api/control/automatic", json={"unit_key": "up"}).json()["channel"] == "ecobee"
+    with session_scope() as s:  # HomeKit off: nothing can carry it but the cloud
+        put_setting(s, "source", SourceSettings(kind="ecobee", homekit_enabled=False,
+                                                cloud_circuit_open_until=utcnow() + timedelta(minutes=15)))
+    assert owner.post("/api/control/automatic", json={"unit_key": "up"}).json()["channel"] == "ecobee"
+    with session_scope() as s:  # never while simulating
+        put_setting(s, "source", SourceSettings(kind="simulator", homekit_enabled=True,
+                                                cloud_circuit_open_until=utcnow() + timedelta(minutes=15)))
+    assert owner.post("/api/control/automatic", json={"unit_key": "up"}).json()["channel"] == "simulator"
 
 
 def test_presence(owner):

@@ -313,17 +313,159 @@ async def test_opt_out_unmapped_unit(cloud, fake):
 
 
 async def test_set_hold_under_a_running_event_is_not_verified(cloud, fake):
-    """A hold written while an unknown event runs on top does not read back as this write."""
+    """An unknown event already on top: nothing is written. One that starts between the read
+    and the write stays above the new hold, which then does not read back as this write."""
     fake.tstats[UP]["events"] = [plain_hold(type="today", name="today")]
+    refused = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="x"))
+    assert refused.ok is False and refused.request["event"] == "today" and fake.posts == []
+
+    fake.tstats[UP]["events"] = []
     real_apply = fake._apply
 
-    def keep_event_on_top(t, body):
+    def event_starts_on_top(t, body):
         real_apply(t, body)
-        t["events"].sort(key=lambda e: e["type"] == "hold")  # the event stays above the new hold
+        t["events"].insert(0, plain_hold(type="today", name="today"))  # it stays above the new hold
 
-    fake._apply = keep_event_on_top
+    fake._apply = event_starts_on_top
     result = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="x"))
     assert result.ok is False and "a running today event overrides the hold" in result.error
+
+
+# --- opt-out: which event, and the read-back ---------------------------------------------
+
+
+async def test_opt_out_refuses_a_different_event_on_top(cloud, fake):
+    """Finding 4: the skip was asked for event L1 (the snapshot it was decided on still showed
+    it), but at the thermostat L1 is over and L2 runs. Nothing is sent: an opt-out is recorded
+    and reported to the utility, so it must be of the event the owner skipped."""
+    fake.tstats[UP]["events"] = [dr(linkRef="L2", name="Peak Saver Extended", startTime="14:30:00")]
+    result = await cloud.opt_out_event("up", "Skipped from the app", link_ref="L1", name="Peak Saver",
+                                       start=datetime(2026, 10, 4, 19, 0, tzinfo=UTC))
+    assert result.ok is False and fake.posts == [] and result.readback is None
+    assert result.request["refused"] is True and result.request["other_event"] is True
+    assert result.request["mandatory"] is False  # never settles the skip as "mandatory"
+    assert result.error == "a different utility event is on top; nothing sent"
+    assert result.request["link_ref"] == "L2"
+    # a mandatory different event is still "a different event", not a mandatory refusal
+    fake.tstats[UP]["events"] = [dr(linkRef="L2", isOptional=False)]
+    other = await cloud.opt_out_event("up", "x", link_ref="L1")
+    assert other.request["other_event"] is True and other.request["mandatory"] is False
+    # an event with a linkRef never matches one asked for without (and the other way round)
+    fake.tstats[UP]["events"] = [dr(linkRef="")]
+    no_ref = await cloud.opt_out_event("up", "x", link_ref="dr-7731")
+    assert no_ref.request.get("other_event") is True and fake.posts == []
+    # the event asked for: sent
+    fake.tstats[UP]["events"] = [dr(linkRef="L1")]
+    same = await cloud.opt_out_event("up", "x", link_ref="L1", name="whatever", start=None)
+    assert same.ok is True, same.error
+    assert len(fake.posts) == 1
+
+
+async def test_opt_out_identity_without_a_link_ref_is_name_and_start(cloud, fake):
+    """No linkRef: the name and the start (UTC, to the minute) identify the event, converted
+    through the thermostat's zone exactly like the snapshot that listed it. Here the event
+    started at 12:30 AM CDT and it is now 2:30 AM CST (the night the clocks went back): the
+    current offset alone would put its start an hour late and refuse the right event."""
+    t = fake.tstats[UP]
+    t["thermostatTime"], t["utcTime"] = "2026-11-01 02:30:00", "2026-11-01 08:30:00"
+    t["events"] = [dr(linkRef="", name="Night Saver", startDate="2026-11-01", startTime="00:30:00",
+                      endDate="2026-11-01", endTime="04:00:00")]
+    (listed,) = P.parse_events(t["events"], timedelta(hours=-6), now=datetime(2026, 11, 1, 8, 30, tzinfo=UTC),
+                               tz=ZoneInfo("America/Chicago"))
+    assert listed.start == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)  # what the snapshot (and the row) say
+    late = await cloud.opt_out_event("up", "x", name="Night Saver", start=listed.start + timedelta(minutes=60))
+    assert late.ok is False and late.request["other_event"] is True
+    renamed = await cloud.opt_out_event("up", "x", name="Night Saver Plus", start=listed.start)
+    assert renamed.ok is False and renamed.request["other_event"] is True
+    assert fake.posts == []
+    fake.calls.clear()
+    same = await cloud.opt_out_event("up", "x", name="Night Saver", start=listed.start + timedelta(seconds=40))
+    assert same.ok is True, same.error
+    assert fake.calls[0][2]["selection"]["includeLocation"] is True  # the fresh read carries the zone
+
+
+async def test_opt_out_without_an_identity_still_takes_the_top_event(cloud, fake):
+    fake.tstats[UP]["events"] = [dr(linkRef="L9")]
+    result = await cloud.opt_out_event("up", "rule")
+    assert result.ok is True and "other_event" not in result.request
+
+
+async def test_opt_out_read_back_retries_a_failed_get(cloud, fake, monkeypatch):
+    """Finding 14: the POST landed and the first read-back GET timed out. The second read-back
+    decides (it used to abort with a bare transport error)."""
+    fake.tstats[UP]["events"] = [dr()]
+    real_get = cloud._get_one
+    calls = {"n": 0}
+
+    async def first_read_back_drops(ident, includes):
+        calls["n"] += 1
+        if calls["n"] == 2:  # 1 = the fresh GET before the POST, 2 = the first read-back
+            raise EcobeeApiError("ecobee thermostat request failed (ReadTimeout)", transport=True)
+        return await real_get(ident, includes)
+
+    monkeypatch.setattr(cloud, "_get_one", first_read_back_drops)
+    result = await cloud.opt_out_event("up", "Skipped from the app", link_ref="dr-7731")
+    assert result.ok is True, result.error
+    assert calls["n"] == 3 and len(fake.posts) == 1 and result.request["sent"] is True
+    assert result.readback["event_running"] is False
+
+
+async def test_opt_out_both_read_backs_failing_says_it_was_sent(cloud, fake, monkeypatch):
+    fake.tstats[UP]["events"] = [dr()]
+    real_get = cloud._get_one
+    calls = {"n": 0}
+
+    async def read_backs_drop(ident, includes):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise EcobeeApiError("ecobee thermostat request failed (ReadTimeout)", transport=True)
+        return await real_get(ident, includes)
+
+    monkeypatch.setattr(cloud, "_get_one", read_backs_drop)
+    result = await cloud.opt_out_event("up", "Skipped from the app")
+    assert result.ok is False and result.readback is None and calls["n"] == 3
+    assert result.error.startswith("resumeProgram sent; read-back failed") and "ReadTimeout" in result.error
+    assert result.request["sent"] is True and "refused" not in result.request
+
+
+async def test_opt_out_read_back_checks_this_event_not_any(cloud, fake):
+    """Finding 14: two utility events run at once. Opting out of the top one is a success even
+    though the other one still runs."""
+    fake.tstats[UP]["events"] = [dr(), dr(name="Other program", linkRef="dr-2")]
+    result = await cloud.opt_out_event("up", "Skipped from the app", link_ref="dr-7731")
+    assert result.ok is True, result.error
+    assert result.readback["event_running"] is False and result.readback["demand_response_running"] is True
+    assert [e["linkRef"] for e in fake.tstats[UP]["events"]] == ["dr-2"]
+
+
+# --- event times through the thermostat's zone (finding 15) ------------------------------
+
+
+def test_event_hold_times_convert_through_the_zone_plain_holds_do_not():
+    chicago = ZoneInfo("America/Chicago")
+    trip = dr(type="vacation", name="Trip", linkRef="", startDate="2026-10-25", startTime="08:00:00",
+              endDate="2026-11-05", endTime="09:00:00")
+    # polled on Oct 30 (CDT, -5 h); the trip ends after the change back to CST (-6 h)
+    assert P.parse_hold(trip, OFF, {}, None).end == datetime(2026, 11, 5, 14, 0, tzinfo=UTC)  # offset only
+    hold = P.parse_hold(trip, OFF, {}, None, tz=chicago)
+    assert hold.end == datetime(2026, 11, 5, 15, 0, tzinfo=UTC)  # 9:00 AM CST
+    assert hold.start == datetime(2026, 10, 25, 13, 0, tzinfo=UTC)
+    (listed,) = P.parse_events([trip], OFF, now=datetime(2026, 10, 30, tzinfo=UTC), tz=chicago)
+    assert (hold.start, hold.end) == (listed.start, listed.end)
+    # a plain hold keeps the current offset, zone or not (its end is what set_by_us compares)
+    held = plain_hold(endDate="2026-11-02", endTime="15:00:00")
+    assert P.parse_hold(held, OFF, {}, None, tz=chicago).end == P.parse_hold(held, OFF, {}, None).end
+
+
+async def test_snapshot_vacation_across_dst_ends_when_its_listed_event_ends(cloud, fake):
+    t = fake.tstats[UP]
+    t["thermostatTime"], t["utcTime"] = "2026-10-30 14:32:10", "2026-10-30 19:32:10"  # CDT
+    t["events"] = [dr(type="vacation", name="Trip", linkRef="", startDate="2026-10-25", startTime="08:00:00",
+                      endDate="2026-11-05", endTime="09:00:00")]
+    (snap,) = await cloud.fetch_snapshots(["up"])
+    (ev,) = snap.events
+    assert ev.end == datetime(2026, 11, 5, 15, 0, tzinfo=UTC)
+    assert snap.hold.hold_type == "vacation" and (snap.hold.start, snap.hold.end) == (ev.start, ev.end)
 
 
 # --- Smart Away / Follow Me ------------------------------------------------------------

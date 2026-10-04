@@ -5,13 +5,13 @@ agent's tools."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.orm import Session, aliased
 
 from climate.control.policy import (
     HouseState,
@@ -285,14 +285,27 @@ def _offset(raw: Any, part: str) -> float | None:
 
 def _units(session: Session, now: datetime, control: ControlSettings) -> dict[str, UnitStatus]:
     live = {row.unit_key: row for row in session.execute(select(LiveUnit)).scalars()}
-    # The owner's "Back to automatic" is not a change of setpoints: it never delays the
-    # controller's next write.
+    # The owner's "Back to automatic" (and "Resume schedule" while no wait follows a Resume) is
+    # not a change of setpoints: it never delays the controller's next write, and neither does
+    # anything the owner did on that unit before it (their hold or Resume schedule, which it
+    # cancelled). The controller's own writes always count; an owner hold not followed by one
+    # counts too (until the snapshot shows it, the limit is what stops a write decided from the
+    # old snapshot).
+    at_once = (OWNER_AUTOMATIC, OWNER_RESUME_SCHEDULE) if control.resume_backoff_hours <= 0 else (OWNER_AUTOMATIC,)
+    auto = aliased(ControlAction)
+    cleared = (
+        select(auto.id)
+        .where(auto.unit_key == ControlAction.unit_key, auto.actor == "owner", auto.action == "resume_program",
+               auto.status == "verified", auto.request["kind"].astext.in_(at_once), auto.ts >= ControlAction.ts)
+        .exists()
+    )
     last_change = dict(
         session.execute(
             select(ControlAction.unit_key, func.max(ControlAction.ts))
             .where(ControlAction.status.in_(CHANGE_STATUSES), ControlAction.actor.in_(("controller", "owner")),
                    ControlAction.action.in_(HOLD_ACTIONS),
-                   func.coalesce(ControlAction.request["kind"].astext, "") != OWNER_AUTOMATIC)
+                   func.coalesce(ControlAction.request["kind"].astext, "") != OWNER_AUTOMATIC,
+                   or_(ControlAction.actor == "controller", ~cleared))
             .group_by(ControlAction.unit_key)
         ).all()
     )
@@ -437,16 +450,26 @@ def cancelled_write(
     seen = latest_detection(session, unit_key)
     if seen is not None and (seen.ts, seen.id) > (write.ts, write.id):
         return None
-    if write.status == "verified" and write.completed_at is not None:
-        seen_from = write.completed_at + VERIFIED_GRACE
-    else:
-        seen_from = write.ts + SENT_GRACE
-    if snap.ts <= seen_from:
+    if snapshot_predates(snap, write):
         return None
     end = write_end(write, control.hold_hours)
     if end is None or now >= end or snap.ts >= end - END_SLACK:
         return None
     return write
+
+
+def snapshot_predates(snap: UnitSnapshot | None, write: ControlAction) -> bool:
+    """The snapshot was fetched before ``write`` settled, so it cannot show what the write did:
+    not newer than a verified write's completion + 2 min (the read-back proved it landed; the
+    grace covers clock skew), or than any other write's queue time + 5 min (in flight, failed,
+    or crashed). No snapshot predates everything."""
+    if snap is None:
+        return True
+    if write.status == "verified" and write.completed_at is not None:
+        settled = write.completed_at + VERIFIED_GRACE
+    else:
+        settled = write.ts + SENT_GRACE
+    return snap.ts <= settled
 
 
 def resume_detection(session: Session, unit_key: str, after: datetime) -> ControlAction | None:
@@ -563,8 +586,11 @@ def same_signature(a: dict[str, Any] | None, b: dict[str, Any]) -> bool:
 
 def manual_detection(session: Session, unit_key: str, hold: HoldInfo, after: datetime | None) -> ControlAction | None:
     """The controller's detection row for this person's hold, logged after the last write to
-    the unit (rows with ``refused`` are resumes the source refused because the hold was not
-    ours). The homekit service's rows describe what HomeKit saw, not an ecobee hold: never."""
+    the unit (rows with ``refused`` are writes the source refused because the hold was not
+    ours). The homekit service's rows describe what HomeKit saw, not an ecobee hold: never.
+    Neither is a row in the previous release's format (no ``until``): it cannot tell when its
+    hold ends or whether it was resumed, so the first cloud sighting logs the hold again in
+    the current format (``_carried_person_hold`` and ``vanished_person_hold`` can then read it)."""
     q = (
         select(ControlAction)
         .where(
@@ -579,7 +605,8 @@ def manual_detection(session: Session, unit_key: str, hold: HoldInfo, after: dat
     if after is not None:
         q = q.where(ControlAction.ts > after)
     sig = hold_signature(hold)
-    rows = [r for r in session.execute(q).scalars() if same_signature(r.request, sig)]
+    rows = [r for r in session.execute(q).scalars()
+            if isinstance(r.request, dict) and "until" in r.request and same_signature(r.request, sig)]
     return rows[-1] if rows else None
 
 
@@ -628,13 +655,31 @@ def person_hold(
     clock is over even while the snapshot still shows it. ecobee's own events are never a
     person's hold.
 
+    A snapshot fetched before the latest write to the unit settled (``snapshot_predates``:
+    e.g. the tick runs before the poll after Back to automatic, Resume schedule or an owner's
+    hold) cannot start a NEW person's hold seen at the thermostat: that write may have just
+    replaced it. It is None until a newer snapshot decides; the hold is not marked ours either.
+    The rate limit (and the source's own check of what runs before it writes) keeps the
+    controller off it meanwhile. The other way round, when the source refused a controller
+    write because of a person's hold (a detection row with ``refused``, from the source's own
+    fresh read) and this snapshot is not newer than that refusal, the refusal's row is the
+    person's hold (``_carried_person_hold``): the old snapshot cannot show it yet.
+
     A snapshot from HomeKit shows no ecobee holds and never starts or ends one: the newest
-    detection row since the last write stands. That is the homekit service's row for a change
-    it saw by hand (until None, while the snapshot source stays 'homekit'), or the controller's
-    row for a person's hold seen on the cloud before, while it has not ended or been resumed."""
+    detection row since the last write stands (``_carried_person_hold``). That is the homekit
+    service's row for a change it saw by hand during this HomeKit run (until None, while the
+    snapshot source stays 'homekit'), or the controller's row for a person's hold seen on the
+    cloud before, while it has not ended or been resumed."""
     latest = latest_write(session, unit_key)
     if snap.source == "homekit":
-        return _carried_person_hold(session, unit_key, latest, now)
+        return _carried_person_hold(session, unit_key, latest, now, snap)
+    if _refused_after(session, unit_key, snap, latest):
+        # the source refused a write because of a person's hold this snapshot is too old to show
+        carried = _carried_person_hold(session, unit_key, latest, now)
+        if carried is not None:
+            if snap.hold is not None:
+                snap.hold.set_by_us = False
+            return carried
     hold = snap.hold
     if hold is None:
         return None
@@ -654,6 +699,8 @@ def person_hold(
             return None
         by = "app" if owner == "app" else "thermostat"
     hold.set_by_us = False
+    if seen is None and by == "thermostat" and latest is not None and snapshot_predates(snap, latest):
+        return None  # a snapshot from before that write settled: the next one decides
     until = person_until(hold)
     if until is not None and until <= now:
         return None  # it ended on its own; the next snapshot drops it
@@ -667,20 +714,73 @@ def person_hold(
     )
 
 
-def _carried_person_hold(
-    session: Session, unit_key: str, latest: ControlAction | None, now: datetime,
-) -> PersonHold | None:
+def _refused_after(session: Session, unit_key: str, snap: UnitSnapshot, latest: ControlAction | None) -> bool:
+    """The newest detection row is a write the source refused over a person's hold (after the
+    last write), and the snapshot was fetched before that refusal."""
     det = latest_detection(session, unit_key)
-    if det is None or (latest is not None and (latest.ts, latest.id) >= (det.ts, det.id)):
-        return None
-    req = det.request if isinstance(det.request, dict) else {}
-    until = None
-    if req.get("source") != HOMEKIT_SOURCE:
-        if "until" not in req or resume_logged_for(session, det) is not None:
-            return None  # an old-format row, or that hold was resumed
-        until = _parse_dt(req.get("until"))
+    if det is None or not isinstance(det.request, dict) or not det.request.get("refused"):
+        return False
+    if det.request.get("source") == HOMEKIT_SOURCE:
+        return False
+    if latest is not None and (latest.ts, latest.id) >= (det.ts, det.id):
+        return False
+    return snap.ts <= (det.completed_at or det.ts)
+
+
+def _carried_person_hold(
+    session: Session, unit_key: str, latest: ControlAction | None, now: datetime, snap: UnitSnapshot | None = None,
+) -> PersonHold | None:
+    """The person's hold a detection row stands for while the snapshot cannot show it (a
+    HomeKit snapshot, or a cloud one older than a refused write): the newest detection row
+    logged after the last write, read as follows.
+
+    - The homekit service's row (a change seen by hand): a person's hold until the cloud
+      returns, but only for the HomeKit run it was seen in. A row older than the snapshot's
+      ``settings['homekit_since']`` (when HomeKit took over this unit's live snapshot) belongs
+      to an earlier outage: the cloud has reported since, so it is skipped (the next newer
+      detection decides). Without that key every HomeKit row counts.
+    - The controller's row (a hold seen on the cloud): while it has not ended (``until``) or
+      been resumed. A row in the previous release's format (no ``until``) is carried only
+      while the snapshot still shows that very hold (HomeKit copies the cloud's hold while
+      the thermostat shows it), with the snapshot's end: under HomeKit an unknown end must not
+      hand a running person's hold to the controller."""
+    since = _homekit_since(snap)
+    q = (
+        select(ControlAction)
+        .where(
+            ControlAction.unit_key == unit_key,
+            ControlAction.status == "skipped",
+            ControlAction.request["kind"].astext == MANUAL_KIND,
+        )
+        .order_by(ControlAction.ts.desc(), ControlAction.id.desc())
+        .limit(20)
+    )
+    for det in session.execute(q).scalars():
+        if latest is not None and (latest.ts, latest.id) >= (det.ts, det.id):
+            return None  # a write since then supersedes every older row
+        req = det.request if isinstance(det.request, dict) else {}
+        if req.get("source") == HOMEKIT_SOURCE:
+            if since is not None and det.ts < since:
+                continue  # an earlier outage's hand change: the cloud has reported since
+            return _person_from(det, req, until=None)
+        if resume_logged_for(session, det) is not None:
+            return None  # that hold was resumed
+        if "until" in req:
+            until = _parse_dt(req.get("until"))
+        else:
+            shown = snap.hold if snap is not None else None
+            if shown is None or shown.set_by_us or not same_signature(req, hold_signature(shown)):
+                return None  # an old-format row whose hold the thermostat no longer shows
+            until = person_until(shown)
+            req = {**req, "start": shown.start.isoformat() if shown.start is not None else req.get("start"),
+                   "hold_type": shown.hold_type}
         if until is not None and until <= now:
             return None
+        return _person_from(det, req, until=until)
+    return None
+
+
+def _person_from(det: ControlAction, req: dict[str, Any], until: datetime | None) -> PersonHold:
     return PersonHold(
         since=_parse_dt(req.get("start")) or det.ts, first_seen=det.ts,
         by="app" if req.get("by") == "app" else "thermostat",
@@ -691,19 +791,31 @@ def _carried_person_hold(
     )
 
 
+def _homekit_since(snap: UnitSnapshot | None) -> datetime | None:
+    """When HomeKit took over this unit's live snapshot (the homekit service stamps it in the
+    snapshot's settings, ISO UTC); None when not stamped."""
+    raw = snap.settings.get("homekit_since") if snap is not None else None
+    since = _parse_dt(raw)
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    return since
+
+
 def vanished_person_hold(session: Session, unit_key: str, snap: UnitSnapshot, now: datetime) -> ControlAction | None:
     """The detection row of a person's hold that a cloud snapshot no longer shows and that did
     not end on its own: someone pressed Resume (at the thermostat or in the ecobee app). None
     when nothing vanished, when it vanished at or after its ``until`` (± 5 min: it ended on
-    its own, bug 5), when a write since explains it, or for HomeKit's own rows (that kind of
-    person hold just ends when the cloud returns)."""
+    its own, bug 5), when a write since explains it, for a snapshot not newer than the row
+    (it cannot show the hold gone), or for HomeKit's own rows (that kind of person hold just
+    ends when the cloud returns)."""
     if snap.source == "homekit":
         return None
     if snap.hold is not None and snap.hold.hold_type not in AUTO_EVENTS:
         return None
     det = latest_detection(session, unit_key)
-    if det is None:
-        return None
+    if det is None or snap.ts <= det.ts:
+        return None  # nothing logged, or a snapshot from before it was logged (e.g. a write the source
+        # refused over a hold set since this snapshot): only a newer one can show it gone
     req = det.request if isinstance(det.request, dict) else {}
     if req.get("source") == HOMEKIT_SOURCE or "until" not in req:
         return None  # HomeKit's row, or an old-format row that cannot tell

@@ -6,11 +6,13 @@ save pairing encrypted -> paired; unpair_requested -> remove pairing); for each 
 populate accessories, map aids to sensors (by name), subscribe 'ev' characteristics, poll
 every 60 s in batches of <= 49, push readings via collector.ingest.ingest_live_readings;
 while a unit's live_units snapshot is more than 10 minutes old (ecobee cloud down) write a
-HomeKit-derived snapshot there instead (never over a newer one) and, while the cloud circuit
-is open, log a change someone made at the thermostat that HomeKit can see (a person's hold:
-the controller stands aside); execute queued control_actions with channel 'homekit' (fail
-'sent' rows a crashed run left behind, and controller rows queued before such a change);
-heartbeat 'homekit' every loop.
+HomeKit-derived snapshot there instead (never over a newer one; stamped with when this
+HomeKit run started, ``settings['homekit_since']``) and, while the cloud circuit is open, log
+a change someone made at the thermostat that HomeKit can see (a person's hold: the controller
+stands aside); execute queued control_actions with channel 'homekit' (read a thermostat fresh
+right before claiming a controller row for it; fail 'sent' rows a crashed run left behind, and
+controller rows queued before such a change; the owner's Back to automatic / Resume schedule
+run as CLEAR_HOLD, never blocked by a hand change); heartbeat 'homekit' every loop.
 
 Runs only while ``SourceSettings.homekit_enabled`` (otherwise it re-checks every 60 s). One
 device's failure never stops the loop. Pairing keys live only in ``secrets``
@@ -81,15 +83,19 @@ SECRET_PREFIX = "homekit_pairing:"
 SERVICE = "homekit"
 SENT_MAX_AGE = timedelta(minutes=15)  # a 'sent' row older than this was left by a crashed run
 CLOUD_STALE_AFTER = timedelta(minutes=10)  # live snapshot older than this: HomeKit writes its own
-# Queued kinds (control_actions.request.kind) that resume the schedule; 'resume_program' is
-# the controller's name for it (older rows), 'clear_hold' the documented one.
-CLEAR_HOLD_KINDS = ("clear_hold", "resume_program")
+# Queued kinds (control_actions.request.kind) that resume the schedule (CLEAR_HOLD):
+# 'resume_program' is the controller's name for it (older rows), 'clear_hold' the documented
+# one; 'automatic' (Back to automatic) and 'resume_schedule' (Resume schedule) are the owner's,
+# queued here while the cloud is down. The row keeps its kind: climate.state reads what
+# follows a verified owner resume (steer again at once, or the resume back-off) from it.
+CLEAR_HOLD_KINDS = ("clear_hold", "resume_program", "automatic", "resume_schedule")
 # A person's change seen over HomeKit is logged as a control_actions row by this actor, with
 # request.kind MANUAL_KIND (state.py turns it into the unit's person hold) and this source.
 HAND_ACTOR = "homekit_service"
 HAND_SOURCE = "homekit"
 HAND_HOLD_TYPE = "homekit_manual"
 NOT_SENT_MSG = "Not sent: someone changed the thermostat by hand"
+OWNER_MODES = ("suggest", "act")  # control.mode values in which the owner's own actions run
 HOLD_ACTIONS = ("set_hold", "resume_program")  # thermostat writes (as in climate.state)
 LANDED = ("verified", "sent")  # a write that reached (or is reaching) the thermostat
 # Our HomeKit hold counts as running until this long before its end (the thermostat's clock
@@ -365,7 +371,10 @@ class ActionJob:
 def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) -> list[ActionJob]:
     """Claim channel='homekit' rows in status 'queued' (-> 'sent'); expire stale ones, and
     fail any row not queued by the owner when someone changed the thermostat by hand after it
-    was queued (``hand_change_after``): the controller decided it before it knew."""
+    was queued (``hand_change_after``): the controller decided it before it knew. The owner's
+    own rows (Back to automatic / Resume schedule while the cloud is down) are the person's
+    decision and are never blocked by a hand change; like every owner action they fail while
+    the controller is off (``controller.execute_queued`` does the same on the cloud channel)."""
     rows = (
         session.execute(
             select(ControlAction)
@@ -377,10 +386,16 @@ def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) ->
         .all()
     )
     jobs: list[ActionJob] = []
+    mode = _control_mode(session) if any(r.actor == "owner" for r in rows) else None
     for r in rows:
         if r.ts is not None and now - r.ts > max_age:
             r.status = "failed"
             r.error = f"expired: not executed within {int(max_age.total_seconds() // 60)} minutes of being queued"
+            r.completed_at = now
+        elif r.actor == "owner" and mode not in OWNER_MODES:
+            r.status = "failed"
+            r.error = ("Not sent: the controller is off." if mode == "off"
+                       else "Not sent: the controller's mode could not be read.")
             r.completed_at = now
         elif r.actor != "owner" and (hand := hand_change_after(session, r)) is not None:
             r.status = "failed"
@@ -392,6 +407,16 @@ def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) ->
             jobs.append(ActionJob(r.id, r.unit_key, r.action, dict(r.request or {})))
         events.publish(session, "action", r.id)
     return jobs
+
+
+def units_awaiting_controller_writes(session: Session) -> list[str]:
+    """Units with a channel='homekit' row queued by the controller (not the owner): the ones
+    to read fresh before claiming, so a change someone made since the last poll blocks it."""
+    return sorted(session.execute(
+        select(ControlAction.unit_key).where(
+            ControlAction.channel == "homekit", ControlAction.status == "queued", ControlAction.actor != "owner",
+        ).distinct()
+    ).scalars())
 
 
 def _latest_hand_change(unit_key: str) -> Select[tuple[ControlAction]]:
@@ -509,8 +534,11 @@ def _write_snapshot(
             previous = None
     previous_source = row.source if row is not None else None
     tz = get_setting(session, "location", LocationSettings).tz
+    # continuing: replacing HomeKit's own snapshot keeps its settings['homekit_since'] (an
+    # unreadable one leaves it out); replacing the cloud's starts a new HomeKit run at ``now``
     snap = snapshot_from_values(unit_key, values, aid_map, now, tz, previous=previous,
-                                our_hold=_our_climate_hold(session, unit_key, now))
+                                our_hold=_our_climate_hold(session, unit_key, now),
+                                continuing=previous_source == "homekit")
     stmt = insert(LiveUnit).values(unit_key=unit_key, ts=now, source="homekit", revision=None,
                                    snapshot=snap.model_dump(mode="json"))
     ex = stmt.excluded
@@ -578,6 +606,14 @@ def _hold_hours(session: Session) -> float:
         return float(ControlSettings().hold_hours)
 
 
+def _control_mode(session: Session) -> str | None:
+    """control.mode ('off' | 'suggest' | 'act'); None when the setting cannot be read."""
+    try:
+        return get_setting(session, "control", ControlSettings).mode
+    except ValidationError:
+        return None
+
+
 def _number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
@@ -588,9 +624,13 @@ def _our_recent_holds(
     """What our own writes may have put on the thermostat: (the climate of our verified
     HomeKit climate hold still running, climates of newer HomeKit holds that may have landed,
     setpoints of our temperature holds still running). Reads the unit's hold writes and
-    resumes (any channel, any actor of ours) from the newest back to the newest verified one,
-    which replaced everything older. A failed row counts as maybe-landed only when it was
-    read back (the write went out); rows failed before sending never reached the thermostat."""
+    resumes (any channel, any actor of ours, the owner's included) from the newest back to the
+    newest verified one, which replaced everything older. A failed row counts as maybe-landed
+    only when it carries a read-back object (the write went out: the bridges keep one when
+    the answer or the read-back was lost after sending); rows failed before sending never
+    reached the thermostat. A resume newer than our verified climate hold that may have landed
+    (sent, or failed after going out) may have put the schedule back: that hold is then only
+    a maybe, never the climate the thermostat must show."""
     # (readback is JSONB: a write that never went out stores JSON null, not SQL NULL)
     went_out = or_(ControlAction.status.in_(LANDED),
                    (ControlAction.status == "failed") & (func.jsonb_typeof(ControlAction.readback) == "object"))
@@ -605,12 +645,18 @@ def _our_recent_holds(
     climate: str | None = None
     maybe: set[str] = set()
     temps: list[tuple[float | None, float | None]] = []
+    resumed = False  # a newer resume that may have landed: the schedule may be back
     for r in rows:
         req = r.request if isinstance(r.request, dict) else {}
-        if r.action == "set_hold" and req.get("kind") == "climate_hold" and req.get("climate") in CLIMATE_CODES:
+        if r.action == "resume_program" and r.status != "verified":
+            resumed = True
+        elif r.action == "set_hold" and req.get("kind") == "climate_hold" and req.get("climate") in CLIMATE_CODES:
             until = _parse_until(req.get("until"))
             if until is not None and r.status == "verified" and until - OUR_END_SLACK > now:
-                climate = str(req["climate"])
+                if resumed:
+                    maybe.add(str(req["climate"]))  # still running only if that resume did not land
+                else:
+                    climate = str(req["climate"])
             elif until is not None and until > now and r.status != "verified":
                 maybe.add(str(req["climate"]))
         elif r.action == "set_hold":
@@ -1179,6 +1225,7 @@ class HomekitService:
         # No job of this process is in flight here (jobs run inside this call), so any old
         # 'sent' row was left by an earlier run.
         await self._db(expire_stuck_actions, self.clock(), self.sent_max_age)
+        await self._read_before_claim()
         jobs = await self._db(claim_queued_actions, self.clock(), self.action_max_age)
         if not jobs:
             return
@@ -1193,6 +1240,27 @@ class HomekitService:
             await self._db(finish_action, job.id, result, self.clock())
             log.info("homekit: action %s (%s on %s) -> %s%s", job.id, job.request.get("kind"), job.unit_key,
                      "verified" if result.ok else "failed", "" if result.ok else f": {result.error}")
+
+    async def _read_before_claim(self) -> None:
+        """Poll now (``poll_due``: the fallback snapshot and ``record_hand_change``) every
+        thermostat that has a controller row waiting, so that a change someone made since the
+        last poll (up to ``poll_s`` ago) is logged before the row is claimed, and
+        ``claim_queued_actions`` then fails the row instead of writing over that person's
+        change. The owner's rows are never blocked, so they need no read. A failure here leaves
+        the claim to what was already logged (the last poll)."""
+        try:
+            units = await self._db(units_awaiting_controller_writes)
+            due = False
+            for unit_key in units:
+                alias = self._alias_for_unit(unit_key)
+                st = self._states.get(alias) if alias is not None else None
+                if st is not None:
+                    st.next_poll = None
+                    due = True
+            if due:
+                await self.poll_due()
+        except Exception as exc:  # noqa: BLE001 - the claim still checks what was logged
+            log.warning("homekit: fresh read before the controller's writes failed: %s", _short(exc))
 
     async def _execute(self, job: ActionJob, tz: str, limits: HardLimits) -> WriteResult:
         def fail(msg: str) -> WriteResult:

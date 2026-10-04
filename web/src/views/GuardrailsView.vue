@@ -19,6 +19,7 @@ import ProposeChangeForm from '@/components/control/ProposeChangeForm.vue'
 import ScheduleForm from '@/components/control/ScheduleForm.vue'
 import SleepWindowsForm from '@/components/control/SleepWindowsForm.vue'
 import UtilityEventsForm from '@/components/control/UtilityEventsForm.vue'
+import { anyDraftDirty } from '@/components/control/draft'
 import { unitKeys } from '@/components/control/units'
 import { useAuth } from '@/stores/auth'
 import { useControl } from '@/stores/control'
@@ -74,9 +75,24 @@ onMounted(() => {
       void control.loadPlan()
     }
     if (e.type === 'status' && tab.value === 'controller') void control.loadPlan()
+    // The worker publishes 'status' when a hand-back switches the controller off, and other
+    // devices' saves publish it too: keep the mode and the forms current, unless the owner is
+    // in the middle of an edit (the server keeps the stored mode on a save either way).
+    if (e.type === 'status') refreshSettingsSoon()
   })
 })
-onBeforeUnmount(() => unsubscribe?.())
+// 'status' events come in bursts (a tick, a poll): one settings read per burst.
+let refreshTimer: number | undefined
+function refreshSettingsSoon() {
+  window.clearTimeout(refreshTimer)
+  refreshTimer = window.setTimeout(() => {
+    if (!anyDraftDirty()) void control.refreshSettings()
+  }, 500)
+}
+onBeforeUnmount(() => {
+  unsubscribe?.()
+  window.clearTimeout(refreshTimer)
+})
 </script>
 
 <template>

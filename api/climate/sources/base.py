@@ -12,7 +12,7 @@ columns on ``units`` / ``sensors`` (and auto-map by name when unmapped).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -46,6 +46,9 @@ KNOWN_HOLD_TYPES = (*PLAIN_HOLD_TYPES, *AUTO_EVENTS, *PERSON_EVENTS, *PROTECTED_
 # Any other running ecobee event type ('sensor', 'switchOccupancy', 'today', or one ecobee adds
 # later) arrives verbatim in hold_type: the controller treats the unit as hands-off and alerts.
 
+# A source's refusal to cancel a hold it did not write (``resume_program`` without ``force``).
+NOT_OURS_ERROR = "the running hold was not set by the controller; not cancelled"
+
 
 class HoldInfo(BaseModel):
     """What overrides the thermostat's schedule right now (the top running ecobee event)."""
@@ -67,6 +70,26 @@ class HoldInfo(BaseModel):
     link_ref: str | None = None  # ecobee's id linking an event and its alerts (stable per event)
 
 
+def write_refusal(hold: HoldInfo | None, *, by_owner: bool) -> tuple[dict[str, object], str] | None:
+    """Why a hold or sensor-set write must not go out over ``hold`` (the running top override,
+    read fresh just before the write): (extra ``request`` fields, error), or None when it may.
+
+    Nothing running, Smart Away / Home and the controller's own plain hold never refuse. A
+    plain hold the controller did not write, or a Quick Save, is a person's: refused for the
+    controller (``not_ours``), allowed for the owner (``by_owner``: the owner is the person).
+    Vacation, demand response and unknown events are refused for everyone (``event``)."""
+    if hold is None or hold.hold_type in AUTO_EVENTS:
+        return None
+    etype = hold.hold_type or "unknown"
+    if etype in PLAIN_HOLD_TYPES or etype in PERSON_EVENTS:
+        if by_owner or (hold.set_by_us and etype in PLAIN_HOLD_TYPES):
+            return None
+        what = "Quick Save" if etype in PERSON_EVENTS else "hold"
+        error = f"the running {what} was not set by the controller; not written"
+        return {"refused": True, "not_ours": True}, error
+    return {"refused": True, "event": etype}, f"a running {etype} event is in effect; not written"
+
+
 class ThermostatEvent(BaseModel):
     """A demand-response or vacation event on a thermostat, running or scheduled ahead
     (ecobee lists announced utility events before they start). Times are UTC."""
@@ -86,6 +109,17 @@ class ThermostatEvent(BaseModel):
     is_heat_off: bool = False
     duty_cycle_pct: int | None = None  # % of scheduled runtime allowed (100 = no change)
     link_ref: str | None = None
+
+
+def event_identity(link_ref: str | None, name: str | None, start: datetime | None) -> str:
+    """Which utility event this is, the way ``climate.utility.events.event_key`` tells events
+    apart: ecobee's linkRef when it has one, else the name and the start (UTC, to the minute).
+    Two events are the same only when their identities are equal, so an event with a linkRef
+    never matches one without."""
+    if link_ref:
+        return f"link:{link_ref}"
+    when = start.astimezone(UTC).strftime("%Y-%m-%dT%H:%MZ") if start is not None else ""
+    return f"{name or ''}:{when}"
 
 
 class UtilityInfo(BaseModel):
@@ -156,6 +190,9 @@ class HoldRequest(BaseModel):
     cool_f: float
     hours: int = Field(ge=1, le=2)  # ecobee holdType=holdHours, 1-2 h, renewed while healthy
     reason: str
+    # True only for the owner's own hold from this app (the owner IS the person, so the source
+    # skips the person check; see ``ThermostatSource.set_hold``). Every controller write is False.
+    by_owner: bool = False
 
 
 class WriteResult(BaseModel):
@@ -196,22 +233,50 @@ class ThermostatSource(Protocol):
         ...
 
     async def set_hold(self, req: HoldRequest) -> WriteResult:
-        """Write a holdHours temperature hold, then read it back (the library swallows errors)."""
+        """Write a holdHours temperature hold, then read it back (the library swallows errors).
+
+        Decided on a fresh read of what runs on top (never a cached one), and refused before
+        anything is sent (ok=False, ``readback`` None, ``before['hold']`` = that hold as
+        HoldInfo JSON):
+        - a controller write (``req.by_owner`` False) over a plain hold the controller did not
+          write, or a Quick Save: someone set it since the snapshot the controller decided on,
+          and a person's hold always wins. ``request['refused']`` and ``request['not_ours']``
+          True; the error says the hold "was not set by the controller".
+        - any write over a running vacation, demand-response or unknown event: ``request
+          ['refused']`` True, ``request['event']`` = its type, error "a running <type> event is
+          in effect; not written".
+        Smart Away / Home (``AUTO_EVENTS``) and the controller's own hold never refuse. The
+        owner's hold (``by_owner``) skips the person check, and is not "ours" afterwards: a
+        later controller write over it is refused like any person's hold."""
         ...
 
     async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
         """Cancel the running plain hold and return to the schedule. Unless ``force`` (an
         owner's explicit resume), refuse when the running hold is not one the controller
-        wrote, so a hand-set hold is never erased by the controller. Never cancels an event
-        (vacation, demand response, ...): that is ``opt_out_event``'s job."""
+        wrote, so a hand-set hold is never erased by the controller. ``force`` (the owner only)
+        also cancels a Quick Save (``PERSON_EVENTS``) and Smart Away / Home (``AUTO_EVENTS``).
+        Never cancels vacation, demand response or an unknown event, forced or not: opting out
+        of a utility event is ``opt_out_event``'s job. ok only when the read-back shows no
+        plain hold, and not the person or auto event it cancelled, on top."""
         ...
 
-    async def opt_out_event(self, unit_key: str, reason: str) -> WriteResult:
+    async def opt_out_event(self, unit_key: str, reason: str, *, link_ref: str | None = None,
+                            name: str | None = None, start: datetime | None = None) -> WriteResult:
         """Opt out of the RUNNING demand-response event (the owner's "Skip this event" or the
         owner's skip rule): ecobee's documented cancel, ``resumeProgram`` with the event on
-        top, which ecobee records and reports to the utility. Refuses (ok=False) when the top
-        running event is not demandResponse or is mandatory (``isOptional`` false); reads
-        back that the event no longer runs. ``request['refused']`` is True on a refusal."""
+        top, which ecobee records and reports to the utility. Decided on a fresh read.
+
+        Refuses before anything is sent (ok=False, ``request['refused']`` True) when the top
+        running event is not demandResponse or is mandatory (``isOptional`` false;
+        ``request['mandatory']`` True), and, when an identity is given (``link_ref`` / ``name``
+        + ``start``, the event the skip was asked for), when the top running event is a
+        different one (``request['other_event']`` True, ``mandatory`` False, error "a different
+        utility event is on top; nothing sent"). Identity is ``event_identity``: the linkRef
+        when either side has one, else the name and the start to the minute.
+
+        Then reads back that THIS event no longer runs (another utility event still running
+        does not fail it). Once the POST went out ``request['sent']`` is True; when no read-back
+        GET succeeds the error says "resumeProgram sent; read-back failed"."""
         ...
 
     async def health(self) -> SourceHealth:

@@ -37,16 +37,18 @@ from climate.api.schemas import PlanRow
 from climate.control.guardrails import PROTECTED_EVENTS, STALE_AFTER, GuardResult, check, person_hold_sentence
 from climate.control.handback import capture_original, hand_back
 from climate.control.policy import (
+    PREP_END_SLACK,
     HouseState,
     PersonHold,
     UnitStatus,
     UnitTarget,
     UtilityEventState,
     _in_sleep_window,
+    next_utility_event,
     plan,
 )
 from climate.events import publish
-from climate.house import ROOMS, SENSOR_BY_KEY, UNIT_KEYS
+from climate.house import ROOMS, SENSOR_BY_KEY, UNIT_KEYS, UNITS
 from climate.notify import raise_alert, resolve_alert
 from climate.occupancy.room_state import persist_room_states
 from climate.sources.base import (
@@ -63,7 +65,11 @@ from climate.state import (
     AUTO_EVENTS,
     HOLD_ACTIONS,
     MANUAL_KIND,
+    WINDOW_SLACK,
+    hold_matches,
     hold_signature,
+    in_write_window,
+    is_indefinite,
     latest_write,
     load_house_state,
     pending_resume,
@@ -109,6 +115,9 @@ class _Eval:
     guard: GuardResult
     note: str
     hours: int = 2  # holdHours for a set_hold / renew (an event_prep hold ends by its hold_end_by)
+    # A resume that may not wait (pulling our pre-conditioning hold back before a utility event):
+    # past the rate limit and the wait after a failed write.
+    urgent: bool = False
 
 
 @dataclass
@@ -121,7 +130,12 @@ class _Write:
     reason: str
     force: bool = False  # resume_program only: an owner's explicit resume
     sets: dict[str, list[str]] | None = None  # update_program only
-    refused_reason: str | None = None  # resume_program: logged when the source refuses
+    # Logged when the source refuses the write because a person's hold runs on the unit.
+    refused_reason: str | None = None
+    owner: bool = False  # the owner's own action (execute_queued), never a controller write
+    # The running hold climate.state called the controller's when this write was decided: a
+    # refusal over that very hold is not a person's hold (the source just has no record of it).
+    ours: HoldInfo | None = None
 
 
 @dataclass
@@ -148,7 +162,8 @@ def current_plan(session: Session, now: datetime | None = None) -> list[PlanRow]
     rows: list[PlanRow] = []
     for target in plan(state):
         unit = _unit(state, target.unit_key)
-        ev = _evaluate(state, unit, target, now, mode, _hold_end(session, unit, state.control), homekit)
+        ev = _evaluate(state, unit, target, now, mode, _hold_end(session, unit, state.control), homekit,
+                       ours_rule=_ours_rule(session, unit))
         snap = unit.snapshot
         rows.append(
             PlanRow(
@@ -176,7 +191,13 @@ async def tick(source: ThermostatSource | None, now: datetime | None = None) -> 
     is enabled, writes become QUEUED 'homekit' climate holds for the homekit service. After
     a failed write (either channel) the unit is not retried for min_minutes_between_changes.
     In 'act' mode the Home comfort setting's sensor set is also kept on the current block's
-    set when the source can write it (``update_sensor_sets``; the simulator cannot)."""
+    set when the source can write it (``update_sensor_sets``; the simulator cannot).
+
+    The writes go out after the decisions are committed, one at a time; the mode is read
+    again right before each, and once it is no longer 'act' (switched off, or a hand-back
+    started) the remaining 'sent' rows fail with "Not sent: ..." instead of reaching a
+    thermostat. (The worker also runs the tick and the hand-back under one lock, so a
+    hand-back waits for a tick's writes to finish.)"""
     now = now or utcnow()
     created: list[int] = []
     writes: list[_Write] = []
@@ -225,6 +246,8 @@ async def tick(source: ThermostatSource | None, now: datetime | None = None) -> 
                     log.exception("sensor set check failed for unit %s", unit_key)
 
     for w in writes:
+        if _not_sent_in_mode(w, allowed=("act",)):
+            continue
         await _perform(source, w)
     return created
 
@@ -243,7 +266,9 @@ async def execute_queued(source: ThermostatSource | None, now: datetime | None =
     fails as expired instead of reaching a thermostat late. An owner resume ("Back to
     automatic", request kind 'automatic', or "Resume schedule", kind 'resume_schedule')
     cancels any plain hold (``force``); what follows (steer again at once, or the resume
-    back-off) is read from the kind by ``climate.state``. Returns the ids handled."""
+    back-off) is read from the kind by ``climate.state``. The mode is read again right before
+    each write: a row prepared before the controller was switched off fails instead of being
+    sent. Returns the ids handled."""
     if source is None:
         return []
     now = now or utcnow()
@@ -285,6 +310,8 @@ async def execute_queued(source: ThermostatSource | None, now: datetime | None =
                 handled.append(row.id)
                 publish(s, "action", row.id)
     for w in writes:
+        if _not_sent_in_mode(w, allowed=("suggest", "act")):
+            continue
         await _perform(source, w)
     return handled
 
@@ -296,7 +323,7 @@ async def execute_queued(source: ThermostatSource | None, now: datetime | None =
 
 def _evaluate(
     state: HouseState, unit: UnitStatus, target: UnitTarget, now: datetime, mode: str,
-    ours_until: datetime | None, homekit: bool = False,
+    ours_until: datetime | None, homekit: bool = False, ours_rule: str | None = None,
 ) -> _Eval:
     """What this unit needs right now: nothing, a new hold, a renewal or a resume.
 
@@ -306,7 +333,20 @@ def _evaluate(
     plan wants the schedule's setpoints a timed hold takes the unit back instead (the source
     would refuse to resume over it). A target with ``hold_end_by`` (event_prep) gets the
     largest of {hold_hours, 1} hours that ends by then, renewals included; when none fits,
-    nothing is written."""
+    nothing is written.
+
+    Our own hold (``ours_until`` = when it ends; ``ours_rule`` = the rule of the controller
+    write it came from):
+    - already past its end by the clock (the snapshot lags): nothing this tick. The next
+      snapshot shows the thermostat back on its schedule; stepping from the lapsed hold's
+      setpoints would write a fresh full-length hold from stale values (e.g. still below
+      normal and running into a utility event).
+    - the controller's HomeKit comfort-setting hold, seen on the cloud: nothing; it ends on its
+      own. The cloud source has no record of it and would refuse to change or cancel it as a
+      hold the controller did not write (which would read as a person's hold).
+    - a pre-conditioning hold (rule 'event_prep') that would still run when the unit's next
+      utility event starts (the event was announced or moved earlier): resumed now, past the
+      rate limit (``urgent``), so the event applies to the normal setpoint. Never a new hold."""
     control = state.control
     events = _unit_events(state, unit.unit_key)
     guard = check(target, unit, control.limits, now, mode=mode, act_units=control.act_units, events=events,
@@ -325,6 +365,24 @@ def _evaluate(
     ours = hold is not None and hold.set_by_us
     auto_event = hold is not None and hold.hold_type in AUTO_EVENTS
     close = _too_close_note(target)
+
+    if ours:
+        ends = hold.end if hold.end is not None else ours_until  # type: ignore[union-attr]
+        if ends is not None and ends <= now:
+            return _Eval("none", guard, f"Our hold ended at {_clock(ends, state.tz)}; waiting for the thermostat's next "
+                                        "report before changing anything.", hours)
+        if hold.kind == "climate" and not homekit and snap.source != "homekit":  # type: ignore[union-attr]
+            until = f" at {_clock(ends, state.tz)}" if ends is not None else ""
+            return _Eval("none", guard, f"Our HomeKit hold ({(hold.climate_ref or 'comfort setting').capitalize()}) "  # type: ignore[union-attr]
+                                        f"ends on its own{until}; the ecobee cloud does not let the controller change it.",
+                         hours)
+        pull = _prep_pull_back(state, unit, ends, ours_rule, now)
+        if pull is not None:
+            urgent = check(target, unit, control.limits, now, mode=mode, act_units=control.act_units, events=events,
+                           homekit_data_ok=homekit, tz=state.tz, enforce_rate_limit=False)
+            if not urgent.ok:
+                return _Eval("none", urgent, urgent.blocked_reason or "Blocked.", hours)
+            return _Eval("resume", urgent, pull, hours, urgent=True)
 
     if target.desired == "program" and not auto_event:
         if not ours:
@@ -361,6 +419,24 @@ def _evaluate(
         return _Eval("set_hold", guard, f"ecobee's {hold.hold_type} event is running; a timed hold takes it back.",  # type: ignore[union-attr]
                      hours)
     return _Eval("set_hold", guard, "", hours)
+
+
+def _prep_pull_back(
+    state: HouseState, unit: UnitStatus, ends: datetime | None, ours_rule: str | None, now: datetime,
+) -> str | None:
+    """Our pre-conditioning hold (rule 'event_prep', ends at ``ends``) would still run when the
+    unit's next utility event starts (later than that event's start minus
+    precondition_end_gap_min, + 5 min): the note for pulling it back now; else None."""
+    if ours_rule != "event_prep" or ends is None:
+        return None
+    ev = next_utility_event(state, unit.unit_key)
+    if ev is None or ev.start_at is None:
+        return None
+    end_by = ev.start_at - timedelta(minutes=state.utility.precondition_end_gap_min)
+    if ends <= end_by + PREP_END_SLACK:
+        return None
+    return (f"Our pre-conditioning hold runs until {_clock(ends, state.tz)}, past the start of the utility event at "
+            f"{_clock(ev.start_at, state.tz)}; it is released now, so the event applies to the normal setpoint.")
 
 
 def fit_hours(now: datetime, end_by: datetime, hold_hours: int) -> int | None:
@@ -413,7 +489,8 @@ def _tick_unit(
     eff_mode = "act" if mode == "act" and target.unit_key in control.act_units else "suggest"
     if eff_mode == "act" and source_kind is None and not homekit:
         eff_mode = "suggest"  # nothing to write through: show what would happen instead
-    ev = _evaluate(state, unit, target, now, eff_mode, _hold_end(s, unit, control), homekit)
+    ev = _evaluate(state, unit, target, now, eff_mode, _hold_end(s, unit, control), homekit,
+                   ours_rule=_ours_rule(s, unit))
     if ev.kind == "none":
         return ids, None
 
@@ -435,8 +512,9 @@ def _tick_unit(
         ids.append(row.id)
         return ids, None
 
-    # no retry for a while after a failed write, whichever channel it went through
-    if _recent_failure(s, target.unit_key, now, control.limits.min_minutes_between_changes):
+    # no retry for a while after a failed write, whichever channel it went through (except
+    # pulling our pre-conditioning hold back before a utility event)
+    if not ev.urgent and _recent_failure(s, target.unit_key, now, control.limits.min_minutes_between_changes):
         return ids, None
     if homekit:
         row_id = _queue_homekit(s, state, unit, target, ev, now, before)
@@ -451,15 +529,19 @@ def _tick_unit(
                   rule=target.rule, reason=reason, before=before, request=request, now=now)
     ids.append(row.id)
     hold = None
-    refused = None
+    name = unit.name.lower()
     if action == "set_hold":
         hold = HoldRequest(unit_key=target.unit_key, heat_f=ev.guard.heat_f, cool_f=ev.guard.cool_f,
                            hours=ev.hours, reason=reason[:500])
+        refused = (f"Someone set a hold on the {name} thermostat since its last reading, so the controller's hold "
+                   "was not written; the controller waits until that hold ends.")
     else:
-        refused = (f"The {unit.name.lower()} thermostat's hold was not written by the controller, so it was left "
-                   "alone; the controller waits until it ends.")
+        refused = (f"The {name} thermostat's hold was not written by the controller, so it was left alone; the "
+                   "controller waits until it ends.")
+    snap = unit.snapshot
+    ours = snap.hold.model_copy() if snap is not None and snap.hold is not None and snap.hold.set_by_us else None
     return ids, _Write(row.id, target.unit_key, action, str(source_kind), hold, reason,  # type: ignore[arg-type]
-                       refused_reason=refused)
+                       refused_reason=refused, ours=ours)
 
 
 def _prepare_owner_action(state: HouseState, row: ControlAction, now: datetime, channel: str | None) -> _Write | None:
@@ -473,7 +555,7 @@ def _prepare_owner_action(state: HouseState, row: ControlAction, now: datetime, 
         row.status = "sent"
         # The owner's explicit resume ("Back to automatic" or "Resume schedule": request.kind)
         # may cancel any plain hold, including one someone set by hand.
-        return _Write(row.id, row.unit_key, "resume_program", str(channel), None, row.reason, force=True)
+        return _Write(row.id, row.unit_key, "resume_program", str(channel), None, row.reason, force=True, owner=True)
     if row.action != "set_hold":
         return _fail(row, now, f"The worker does not execute {row.action!r} actions.")
 
@@ -498,13 +580,44 @@ def _prepare_owner_action(state: HouseState, row: ControlAction, now: datetime, 
         written["guard"] = guard.violations
     row.request = written
     row.status = "sent"
+    # by_owner: the owner IS the person, so the source does not refuse it over a person's hold
     hold = HoldRequest(unit_key=row.unit_key, heat_f=guard.heat_f, cool_f=guard.cool_f, hours=hours,
-                       reason=row.reason[:500])
-    return _Write(row.id, row.unit_key, "set_hold", str(channel), hold, row.reason)
+                       reason=row.reason[:500], by_owner=True)
+    return _Write(row.id, row.unit_key, "set_hold", str(channel), hold, row.reason, owner=True)
+
+
+def _not_sent_in_mode(w: _Write, allowed: tuple[str, ...]) -> bool:
+    """Read control.mode just before ``w`` goes out. When it is no longer one of ``allowed``
+    (the controller was switched off or to suggest, e.g. by a hand-back, after the write was
+    decided), fail the 'sent' row ("Not sent: ...") and return True: the write is dropped.
+    An unreadable mode drops it too. Never raises."""
+    try:
+        with session_scope() as s:
+            mode = _control_settings(s).mode
+            if mode in allowed:
+                return False
+            row = s.get(ControlAction, w.action_id)
+            if row is not None and row.status == "sent":
+                why = "switched off" if mode == "off" else f"switched to {mode}"
+                _fail(row, utcnow(), f"Not sent: the controller was {why}.")
+                publish(s, "action", row.id)
+        log.info("write to %s dropped: the controller is %s now", w.unit_key, mode)
+        return True
+    except Exception:
+        log.exception("could not read the controller mode before writing to %s; not sent", w.unit_key)
+        return True
 
 
 async def _perform(source: ThermostatSource | None, w: _Write) -> None:
-    """Call the source, then record verified/failed with the read-back. Never raises."""
+    """Call the source, then record the outcome with the read-back. Never raises.
+
+    verified / failed from the source's answer, except a refusal (nothing was written,
+    ``_refusal``): over a person's hold, the row becomes that hold's detection ('skipped',
+    ``_mark_refused``: from now on that hold wins); over a running event, 'skipped' with the
+    reason (no detection: an event is not a person); over the controller's own hold that the
+    source has no record of, 'failed' (no detection; the usual wait after a failed write
+    keeps the controller from asking again at once). The owner's own writes are never read
+    as a person's hold: refused, they fail with the source's error."""
     try:
         if source is None:
             raise RuntimeError("no thermostat source is running")
@@ -526,8 +639,13 @@ async def _perform(source: ThermostatSource | None, w: _Write) -> None:
             row = s.get(ControlAction, w.action_id)
             if row is None:
                 return
-            if w.kind == "resume_program" and not w.force and _refused(result):
-                _mark_refused(row, result, w)
+            refusal = _refusal(result, w)
+            if refusal == "person":
+                _mark_refused(row, result, w, by=_refused_by(s, w, result))
+                publish(s, "action", row.id)
+                return
+            if refusal in ("event", "own"):
+                _mark_not_written(row, result, w, refusal)
                 publish(s, "action", row.id)
                 return
             row.status = "verified" if result.ok else "failed"
@@ -565,6 +683,17 @@ def _hold_end(session: Session, unit: UnitStatus, control: ControlSettings) -> d
     hours = (write.request or {}).get("hours", control.hold_hours)
     hours = hours if _number(hours) else control.hold_hours
     return (write.completed_at or write.ts) + timedelta(hours=float(hours))
+
+
+def _ours_rule(session: Session, unit: UnitStatus) -> str | None:
+    """The rule of the controller's write our running hold came from (its latest hold write,
+    e.g. 'event_prep'); None when the running hold is not ours."""
+    snap = unit.snapshot
+    hold = snap.hold if snap is not None else None
+    if hold is None or not hold.set_by_us:
+        return None
+    write = latest_write(session, unit.unit_key, "controller")
+    return write.rule if write is not None and write.action == "set_hold" else None
 
 
 def _log_hold_changes(s: Session, state: HouseState, unit: UnitStatus, now: datetime, mode: str) -> list[int]:
@@ -734,8 +863,9 @@ def _sensor_set_write(s: Session, state: HouseState, unit_key: str, now: datetim
     program write per unit per 30 minutes; never on stale, HomeKit-only or disconnected data,
     or outside ``act_units``. Only while the running hold is none, ours or Smart Away / Home
     (bug 6): never during a person's hold, the back-off after a Resume, a vacation, utility
-    (by the snapshot or by the event's clock window) or unrecognised event. The unit's
-    original ecobee settings are captured first (hand-back restores them)."""
+    (by the snapshot or by the event's clock window) or unrecognised event, nor while our
+    HomeKit comfort-setting hold runs (the cloud source has no record of it and would refuse).
+    The unit's original ecobee settings are captured first (hand-back restores them)."""
     control = state.control
     unit = state.units.get(unit_key)
     snap = unit.snapshot if unit is not None else None
@@ -748,6 +878,8 @@ def _sensor_set_write(s: Session, state: HouseState, unit_key: str, now: datetim
     hold = snap.hold
     if hold is not None and not hold.set_by_us and hold.hold_type not in AUTO_EVENTS:
         return None  # a person's hold or an ecobee event: hands off
+    if hold is not None and hold.set_by_us and hold.kind == "climate":
+        return None  # our HomeKit comfort-setting hold: the cloud source has no record of it; it ends on its own
     if _stands_aside(unit, _unit_events(state, unit_key), now):
         return None
     current = snap.sensor_sets.get("home")
@@ -777,7 +909,10 @@ def _sensor_set_write(s: Session, state: HouseState, unit_key: str, now: datetim
     row = _insert(s, state, unit_key, mode="act", channel=channel, action="update_program", status="sent",
                   rule="sensor_set", reason=reason, before={"sensor_sets": dict(snap.sensor_sets)},
                   request={"kind": "sensor_sets", "unit_key": unit_key, "block": block, "sets": sets}, now=now)
-    return _Write(row.id, unit_key, "update_program", channel, None, reason, sets=sets)
+    refused = (f"Someone set a hold on the {name} thermostat since its last reading, so the Home sensor set was "
+               "not changed; the controller waits until that hold ends.")
+    return _Write(row.id, unit_key, "update_program", channel, None, reason, sets=sets, refused_reason=refused,
+                  ours=hold.model_copy() if hold is not None and hold.set_by_us else None)
 
 
 def _truthy(v: object) -> bool:
@@ -928,7 +1063,7 @@ def _reason(ev: _Eval, target: UnitTarget) -> str:
     if ev.kind == "renew":
         extra.append("Renewing our hold, which ends soon.")
     elif ev.kind == "resume":
-        extra.append("Resuming the thermostat's schedule, which already matches.")
+        extra.append(ev.note if ev.urgent else "Resuming the thermostat's schedule, which already matches.")
     elif ev.kind == "set_hold" and ev.note:
         extra.append(ev.note)
     if ev.guard.violations:
@@ -985,12 +1120,69 @@ def _parse_hold(raw: object) -> HoldInfo | None:
         return None
 
 
-def _mark_refused(row: ControlAction, result: WriteResult, w: _Write) -> None:
-    """The source would not cancel the running hold (not ours): nothing was written. Log it
-    as 'skipped' with the hold's signature: ``climate.state`` then treats that hold as a
-    person's hold (the controller waits until it ends)."""
+Refusal = Literal["person", "own", "event", "other"]
+
+
+def _refusal(result: WriteResult, w: _Write) -> Refusal | None:
+    """Why the source refused a controller write without writing anything, or None (not
+    refused: written, failed, or an owner's action).
+
+    A non-forced resume: the source's refusal to cancel a hold it did not write (``_refused``).
+    A set_hold or sensor-set write: ``request['refused']`` (decided on the source's fresh read
+    of what runs on top): ``event`` set = a vacation / utility / unknown event runs ('event');
+    ``not_ours`` = a plain hold or Quick Save the controller did not write. Either kind over a
+    hold that is the very hold climate.state called ours when the write was decided
+    (``_Write.ours``) is 'own': the source has no record of it (e.g. the controller's HomeKit
+    comfort-setting hold), and it is not a person's. Otherwise 'person'."""
+    if result.ok or w.owner or w.force:
+        return None
+    req = result.request if isinstance(result.request, dict) else {}
+    if w.kind == "resume_program":
+        if not _refused(result):
+            return None
+    elif not req.get("refused"):
+        return None
+    elif req.get("event"):
+        return "event"
+    elif not req.get("not_ours"):
+        return "other"
+    hold = _parse_hold((result.before or {}).get("hold"))
+    if hold is not None and w.ours is not None and _same_hold(hold, w.ours):
+        return "own"
+    return "person"
+
+
+def _same_hold(a: HoldInfo, b: HoldInfo) -> bool:
+    """Two readings of one hold: same kind, setpoints (or comfort setting), and ends within 10
+    minutes of each other (when both say)."""
+    if a.kind != b.kind or is_indefinite(a) != is_indefinite(b):
+        return False
+    if a.kind == "climate":
+        if (a.climate_ref or "").lower() != (b.climate_ref or "").lower():
+            return False
+    elif any(x is None or y is None or abs(x - y) > 0.1 for x, y in ((a.heat_f, b.heat_f), (a.cool_f, b.cool_f))):
+        return False
+    return a.end is None or b.end is None or abs(a.end - b.end) <= WINDOW_SLACK
+
+
+def _refused_by(s: Session, w: _Write, result: WriteResult) -> str:
+    """Who set the hold a controller write was refused over: 'app' when it is the owner's latest
+    hold from this app's hold form (setpoints and window), else 'thermostat'."""
+    hold = _parse_hold((result.before or {}).get("hold"))
+    owner = latest_write(s, w.unit_key, "owner")
+    if hold is not None and owner is not None and owner.action == "set_hold" and hold_matches(hold, owner.request) \
+            and in_write_window(hold, owner, _control_settings(s).hold_hours):
+        return "app"
+    return "thermostat"
+
+
+def _mark_refused(row: ControlAction, result: WriteResult, w: _Write, by: str = "thermostat") -> None:
+    """The source would not write over (or cancel) the running hold: a person's. Nothing was
+    written. Log it as 'skipped' with the hold's signature (start, end, until, ``by``):
+    ``climate.state`` then treats that hold as a person's hold, logged once (the controller
+    waits until it ends)."""
     hold = _parse_hold((result.before or {}).get("hold")) or _parse_hold((row.before or {}).get("hold"))
-    request: dict[str, Any] = hold_signature(hold) if hold is not None else {"kind": MANUAL_KIND}
+    request: dict[str, Any] = hold_signature(hold, by=by) if hold is not None else {"kind": MANUAL_KIND}
     request.update(refused=True, attempted=row.request)
     row.status = "skipped"
     row.rule = "hold_off"
@@ -1001,6 +1193,31 @@ def _mark_refused(row: ControlAction, result: WriteResult, w: _Write) -> None:
     if result.before:
         row.before = {**(row.before or {}), "source": dict(result.before)}
     row.error = result.error
+    row.completed_at = utcnow()
+
+
+def _mark_not_written(row: ControlAction, result: WriteResult, w: _Write, refusal: Refusal) -> None:
+    """The source refused the write and it is not a person's hold: a running event ('skipped':
+    the controller stands aside while it runs, and the next snapshot shows it), or the
+    controller's own hold that the source has no record of ('failed': it ends on its own; the
+    wait after a failed write stops the controller asking again every tick). No detection."""
+    name = next((u.name.lower() for u in UNITS if u.key == w.unit_key), w.unit_key)
+    if refusal == "event":
+        etype = str((result.request or {}).get("event") or "unknown")
+        what = (f"a {PROTECTED_EVENTS[etype]} event" if etype in PROTECTED_EVENTS
+                else f"an unrecognised ecobee event ({etype})")
+        row.status = "skipped"
+        row.reason = f"Not written: {what} is running on the {name} thermostat; the controller stands aside while it runs."
+    else:
+        what = "change the Home sensor set under it" if w.kind == "update_program" else "change or cancel it"
+        row.status = "failed"
+        row.reason = (f"Not written: the thermostat source has no record of the controller's own hold on the {name} "
+                      f"thermostat, so it would not {what}; that hold ends on its own.")
+    row.readback = dict(result.readback) if result.readback is not None else None
+    row.readback_ok = None
+    if result.before:
+        row.before = {**(row.before or {}), "source": dict(result.before)}
+    row.error = result.error or "Refused by the thermostat source."
     row.completed_at = utcnow()
 
 

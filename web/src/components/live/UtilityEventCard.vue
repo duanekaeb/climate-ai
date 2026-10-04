@@ -1,8 +1,11 @@
 <script setup lang="ts">
 // One utility energy-saving event (demand response) on Live: its name, status, window in house
-// time, what it changes, which thermostats it reaches, any pre-cooling for it, and the owner's
-// "Skip this event". A skip is an honest opt-out that ecobee records and the utility sees; it
-// is only requested here, and the worker sends it once the event runs on that thermostat.
+// time, what it changes, which thermostats it reaches, any pre-cooling for it (the API words it
+// as a fact only while the controller is doing it; in Suggest mode or on a suggest-only unit it
+// says it would, and that nothing is written), and the owner's "Skip this event". A skip is an
+// honest opt-out that ecobee records and the utility sees; it is only requested here, and the
+// worker sends it once the event runs on that thermostat. Undo works until the worker starts
+// sending it; after that the API answers 409 and its message is shown.
 import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { ControllerInfo, UtilityEventOut } from '@/api/types'
@@ -115,7 +118,7 @@ async function unskip() {
       <p class="mt-0.5 text-muted">
         <template v-if="mode === 'off'">The controller is off, so it waits until you switch to Suggest or Act.</template>
         <template v-else-if="group.status === 'announced'">It is sent when the event starts.</template>
-        <template v-else>Sending it now.</template>
+        <template v-else>It is sent at the controller's next check; Undo works until it goes out.</template>
       </p>
       <button v-if="isOwner" type="button" class="btn mt-2 !py-1.5" :disabled="busy !== null" @click="unskip">
         {{ busy === 'unskip' ? 'Undoing…' : 'Undo' }}

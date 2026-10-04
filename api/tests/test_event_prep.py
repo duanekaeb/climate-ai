@@ -194,3 +194,113 @@ async def test_homekit_fallback_queues_a_prep_hold_only_until_the_end_by(db):
     until = datetime.fromisoformat(row.request["until"])
     assert until == NOW + timedelta(hours=1) and until <= NOW + timedelta(minutes=80)
     assert row.rule == "event_prep"
+
+
+# ---------------------------------------------------------------------------------------
+# two events on one unit, an event moved earlier, our hold lapsing as the window closes
+# ---------------------------------------------------------------------------------------
+
+
+def test_prep_is_only_for_the_next_event_never_a_later_one():
+    """Event A at 2:08 PM (its window closed at 1:58 PM), event B at 3:48 PM: at 2:00 PM the
+    target is the normal one, not a pre-cool for B that would still run when A starts."""
+    a = event(at(14, 8), event_key="link:a", end_at=at(15, 8))
+    b = event(at(15, 48), id=8, event_key="link:b")
+    up = by_unit(plan(prep_state(at(14), [b, a])))["up"]
+    assert up.rule != "event_prep" and up.cool_f == 77.0 and up.hold_end_by is None
+    # inside A's own window it is A's prep, ending before A
+    up = by_unit(plan(prep_state(at(12, 30), [b, a])))["up"]
+    assert up.rule == "event_prep" and up.hold_end_by == at(13, 58)
+
+
+@pytest.mark.parametrize(("skip", "prepped"), [("requested", False), ("done", True)])
+def test_a_pending_skip_on_the_next_event_still_counts(skip, prepped):
+    """A skip still pending on the next event (the opt-out may fail) means no prep for a later
+    one either; an event already opted out of is no longer the next."""
+    a = event(at(14, 30), event_key="link:a", end_at=at(15), skip=skip)
+    b = event(at(15, 50), id=8, event_key="link:b")
+    up = by_unit(plan(prep_state(at(14), [a, b])))["up"]
+    assert (up.rule == "event_prep") is prepped
+    if prepped:
+        assert up.hold_end_by == at(15, 40)
+
+
+async def test_our_prep_hold_is_pulled_back_when_an_earlier_event_appears(db):
+    """Our 2 h pre-cool hold for a 4:20 PM event runs to 4:00 PM; at 2:12 PM ecobee lists the
+    event for 2:25 PM instead. Within the 30-min limit, the controller resumes the schedule
+    (never a new hold) before the event starts."""
+    setup_house(db, act_units=["up"])
+    put_setting(db, "utility_events", PREP)
+    put_snapshot(db, "up", NOW - timedelta(minutes=1), heat=68.0, cool=77.0)
+    db.add(UtilityEvent(unit_key="up", event_key="link:old", name="Peak saver", status="announced",
+                        start_at=NOW + timedelta(hours=2, minutes=20), end_at=NOW + timedelta(hours=4),
+                        first_seen_at=NOW - timedelta(hours=5), last_seen_at=NOW, is_relative=True, cool_offset_f=2.0,
+                        is_optional=True, detail={}))
+    db.commit()
+    src = FakeSource()
+    await controller.tick(src, NOW)
+    (prep,) = src.holds
+    assert (prep.cool_f, prep.hours) == (75.0, 2)
+
+    db.execute(UtilityEvent.__table__.update().values(status="cancelled", ended_at=NOW))
+    db.add(UtilityEvent(unit_key="up", event_key="link:new", name="Peak saver", status="announced",
+                        start_at=NOW + timedelta(minutes=25), end_at=NOW + timedelta(hours=2, minutes=25),
+                        first_seen_at=NOW + timedelta(minutes=11), last_seen_at=NOW + timedelta(minutes=11),
+                        is_relative=True, cool_offset_f=2.0, is_optional=True, detail={}))
+    db.commit()
+    t = NOW + timedelta(minutes=12)
+    ours = HoldInfo(heat_f=68.0, cool_f=75.0, start=NOW, end=NOW + timedelta(hours=2), hold_type="holdHours")
+    put_snapshot(db, "up", t - timedelta(minutes=1), heat=68.0, cool=75.0, hold=ours)
+    for u in ("main", "bed"):
+        put_snapshot(db, u, t - timedelta(minutes=1))
+    refresh_sensors(db, t)
+    await controller.tick(src, t)
+    assert src.resumes == ["up"] and src.forced == [False] and len(src.holds) == 1
+    row = actions(db, unit_key="up", action="resume_program")[0]
+    assert row.status == "verified"
+    assert row.reason.endswith("Our pre-conditioning hold runs until 4:00 PM, past the start of the utility event at "
+                               "2:25 PM; it is released now, so the event applies to the normal setpoint.")
+
+
+def test_a_running_prep_hold_is_released_when_an_earlier_event_is_announced():
+    """Our pre-cool hold for a 4:00 PM event runs 1:50-3:50 PM; at 2:00 PM an event is
+    announced for 2:10 PM: the controller releases it (it was sized for the later event)."""
+    from climate.store.app_settings import ControlSettings
+
+    ours = HoldInfo(heat_f=68.0, cool_f=75.0, start=at(13, 50), end=at(15, 50), hold_type="holdHours", set_by_us=True)
+    later = event(at(16), event_key="link:later")
+    sooner = event(at(14, 10), id=8, event_key="link:sooner", end_at=at(15, 10))
+    state = prep_state(at(14), [sooner, later], up_hold=ours, control=ControlSettings(mode="act"))
+    state.units["up"].last_change_at = at(13, 50)  # 10 min ago: inside the rate limit
+    up = by_unit(plan(state))["up"]
+    assert up.rule != "event_prep"
+    ev = controller._evaluate(state, state.units["up"], up, at(14), "act", at(15, 50), ours_rule="event_prep")
+    assert ev.kind == "resume" and ev.urgent and "past the start of the utility event at 2:10 PM" in ev.note
+    # a hold of ours that is not a pre-conditioning one is left to the normal rules (and the limit)
+    ev = controller._evaluate(state, state.units["up"], up, at(14), "act", at(15, 50), ours_rule="comfort")
+    assert ev.kind == "none" and not ev.urgent and "at most one change per 30 min" in ev.guard.blocked_reason
+
+
+async def test_our_hold_past_its_end_waits_for_the_next_snapshot(db):
+    """Pre-cooling 3°F with the default 2°F step: the snapshot taken just before our prep hold
+    lapsed still shows it. The controller writes nothing (no step back from the stale 74°F,
+    which would be a 2 h hold still below normal running into the event)."""
+    setup_house(db, act_units=["up"])
+    put_setting(db, "utility_events", UtilityEventSettings(precondition=True, precondition_degrees_f=3.0))
+    start = NOW + timedelta(hours=2)  # 4:00 PM; end_by 3:50 PM
+    db.add(UtilityEvent(unit_key="up", event_key="link:x", name="Peak saver", status="announced", start_at=start,
+                        end_at=start + timedelta(hours=3), first_seen_at=NOW - timedelta(hours=5), last_seen_at=NOW,
+                        is_relative=True, cool_offset_f=2.0, is_optional=True, detail={}))
+    db.commit()
+    t = NOW + timedelta(hours=1, minutes=51)
+    prep = HoldInfo(heat_f=68.0, cool_f=74.0, start=NOW - timedelta(minutes=10), end=t - timedelta(minutes=1),
+                    hold_type="holdHours", set_by_us=True)
+    put_snapshot(db, "up", t - timedelta(minutes=2), heat=68.0, cool=74.0, hold=prep)
+    for u in ("main", "bed"):
+        put_snapshot(db, u, t - timedelta(minutes=2))
+    refresh_sensors(db, t)
+    src = FakeSource()
+    await controller.tick(src, t)
+    assert [h for h in src.holds if h.unit_key == "up"] == [] and src.resumes == []
+    plan_row = {r.target.unit_key: r for r in controller.current_plan(db, t)}["up"]
+    assert not plan_row.would_write

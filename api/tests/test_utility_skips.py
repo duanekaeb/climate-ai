@@ -1,5 +1,7 @@
-"""climate.utility.skips with a fake source: owner skips, skip rules, refusals, retries and
-the waits (controller off, cloud circuit open)."""
+"""climate.utility.skips with a fake source: owner skips, skip rules, refusals, retries, the
+waits (controller off, cloud circuit open: only once the event is due, resolved when the cause
+clears), the event's identity on the call, refusals that are not attempts (another event on
+top, nothing running), and opt-outs that landed without a confirming read-back."""
 
 from __future__ import annotations
 
@@ -66,9 +68,12 @@ class FakeSource:
         self.kind = kind
         self.results = list(results)
         self.calls: list[tuple[str, str]] = []
+        self.identities: list[dict] = []  # the event each call named
 
-    async def opt_out_event(self, unit_key: str, reason: str) -> WriteResult:
+    async def opt_out_event(self, unit_key: str, reason: str, *, link_ref: str | None = None,
+                            name: str | None = None, start: datetime | None = None) -> WriteResult:
         self.calls.append((unit_key, reason))
+        self.identities.append({"link_ref": link_ref, "name": name, "start": start})
         r = self.results.pop(0) if self.results else ok()
         if isinstance(r, Exception):
             raise r
@@ -87,6 +92,31 @@ def failed(error: str = "HTTP 500 from ecobee") -> WriteResult:
 def mandatory() -> WriteResult:
     return WriteResult(ok=False, channel="ecobee", request={"refused": True, "mandatory": True},
                        error="the utility event 'Peak Saver' is mandatory: ecobee does not allow opting out of it")
+
+
+def other_event() -> WriteResult:
+    """The fresh read shows a different utility event on top (the snapshot was older)."""
+    return WriteResult(ok=False, channel="ecobee", before={"demand_response_running": True},
+                       request={"refused": True, "mandatory": False, "other_event": True, "link_ref": "L2"},
+                       error="a different utility event is on top; nothing sent")
+
+
+def nothing_running() -> WriteResult:
+    return WriteResult(ok=False, channel="ecobee", before={"demand_response_running": False},
+                       request={"refused": True, "mandatory": False},
+                       error="no utility event to opt out of (nothing is running); nothing sent")
+
+
+def unconfirmed() -> WriteResult:
+    """The resumeProgram went out, but no read-back GET answered."""
+    return WriteResult(ok=False, channel="ecobee", before={"demand_response_running": True},
+                       request={"function": {"type": "resumeProgram"}, "sent": True},
+                       error="resumeProgram sent; read-back failed (ecobee thermostat request failed (ReadTimeout))")
+
+
+def gone_snapshot(at: datetime, unit: str = "up") -> UnitSnapshot:
+    """The next poll: the event is no longer listed, nothing on top."""
+    return live_snapshot(unit, hold_type=None).model_copy(update={"events": [], "ts": at})
 
 
 def event(db, event_id: int) -> UtilityEvent:
@@ -140,9 +170,9 @@ async def test_the_sent_row_is_committed_before_the_call(db):
     seen: list[str] = []
 
     class Peek(FakeSource):
-        async def opt_out_event(self, unit_key, reason):
+        async def opt_out_event(self, unit_key, reason, **kw):
             seen.extend(a.status for a in actions(db))
-            return await super().opt_out_event(unit_key, reason)
+            return await super().opt_out_event(unit_key, reason, **kw)
 
     await skips.run(Peek(), NOW)
     assert seen == ["sent"]
@@ -246,7 +276,7 @@ async def test_owner_unskip_during_a_failed_call_is_kept(db):
     eid = setup_event(db)
 
     class Unskip(FakeSource):
-        async def opt_out_event(self, unit_key, reason):
+        async def opt_out_event(self, unit_key, reason, **kw):
             row = event(db, eid)
             row.skip, row.skip_by, row.skip_reason = None, None, None
             db.commit()
@@ -254,6 +284,190 @@ async def test_owner_unskip_during_a_failed_call_is_kept(db):
 
     await skips.run(Unskip(), NOW)
     assert event(db, eid).skip is None
+
+
+def open_alerts(db, phase: str) -> int:
+    db.expire_all()
+    return len(db.execute(select(Alert.id).where(Alert.dedupe_key == events.alert_key(KEY, phase),
+                                                 Alert.resolved_at.is_(None))).all())
+
+
+def circuit(db, until: datetime | None) -> None:
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True, cloud_circuit_open_until=until))
+    db.commit()
+
+
+async def test_waits_say_nothing_before_the_event_is_due(db):
+    """A skip requested ahead of the event: the controller being off or a cloud outage is not
+    worth an alert yet (nothing could be sent anyway). Once its start has passed it is."""
+    eid = setup_event(db, running=False, mode="off", live=live_snapshot(running=False, hold_type=None))
+    circuit(db, START + timedelta(hours=1))
+    await skips.run(FakeSource(), START - timedelta(hours=2))
+    assert alert(db, "skip_waiting_off") is None and alert(db, "skip_waiting_cloud") is None
+    put_setting(db, "control", ControlSettings(mode="act"))
+    db.commit()
+    await skips.run(FakeSource(), START - timedelta(hours=1))
+    assert alert(db, "skip_waiting_cloud") is None and event(db, eid).skip == "requested"
+    await skips.run(FakeSource(), START + timedelta(minutes=1))  # the snapshot still says announced
+    assert open_alerts(db, "skip_waiting_cloud") == 1
+
+
+async def test_a_wait_is_resolved_when_its_cause_clears_and_raised_again_when_it_returns(db):
+    eid = setup_event(db, live=live_snapshot(hold_type=None))  # running, not on top yet: nothing to send
+    src = FakeSource()
+    circuit(db, NOW + timedelta(minutes=15))
+    await skips.run(src, NOW)
+    assert open_alerts(db, "skip_waiting_cloud") == 1
+    circuit(db, None)  # the cloud is back; the skip still waits for the event to be on top
+    await skips.run(src, NOW + timedelta(minutes=3))
+    assert open_alerts(db, "skip_waiting_cloud") == 0 and n_alerts(db, "skip_waiting_cloud") == 1
+    circuit(db, NOW + timedelta(minutes=21))  # down again: said again
+    await skips.run(src, NOW + timedelta(minutes=6))
+    assert open_alerts(db, "skip_waiting_cloud") == 1 and n_alerts(db, "skip_waiting_cloud") == 2
+    circuit(db, None)
+
+    put_setting(db, "control", ControlSettings(mode="off"))
+    db.commit()
+    await skips.run(src, NOW + timedelta(minutes=9))
+    assert open_alerts(db, "skip_waiting_off") == 1 and open_alerts(db, "skip_waiting_cloud") == 0
+    put_setting(db, "control", ControlSettings(mode="act"))
+    db.commit()
+    await skips.run(src, NOW + timedelta(minutes=12))
+    assert open_alerts(db, "skip_waiting_off") == 0
+    assert src.calls == [] and event(db, eid).skip == "requested"
+
+
+async def test_nothing_is_sent_once_the_event_is_over_by_the_clock(db):
+    eid = setup_event(db)  # the snapshot still shows it on top (it lags)
+    src = FakeSource()
+    assert await skips.run(src, END + timedelta(minutes=1)) == [] and src.calls == []
+    assert event(db, eid).skip == "requested"
+
+
+# --- the event's identity, refusals that are no attempt, opt-outs that landed -----------------
+
+
+async def test_the_call_names_the_event(db):
+    setup_event(db)
+    src = FakeSource()
+    await skips.run(src, NOW)
+    assert src.identities == [{"link_ref": "L1", "name": "Peak Saver", "start": START}]
+
+
+async def test_a_source_without_the_identity_is_called_once_without_it(db):
+    eid = setup_event(db)
+
+    class Old(FakeSource):
+        async def opt_out_event(self, unit_key, reason):  # the contract before the identity
+            self.calls.append((unit_key, reason))
+            return ok()
+
+    src = Old()
+    await skips.run(src, NOW)
+    assert len(src.calls) == 1 and event(db, eid).skip == "done"
+
+
+async def test_another_event_on_top_is_not_an_attempt(db):
+    """The snapshot showed L1 on top; on the thermostat L2 is on top by now. The source refuses
+    and sends nothing: no failed attempt, however often it happens; the skip waits for the next
+    snapshot. When that shows L1 gone with no opt-out of it sent, it simply ended."""
+    eid = setup_event(db)
+    tries = skips.MAX_ATTEMPTS + 1
+    src = FakeSource(*(other_event() for _ in range(tries)))
+    for i in range(tries):
+        await skips.run(src, NOW + timedelta(minutes=3 * i))
+    row = event(db, eid)
+    assert len(src.calls) == tries and {a.status for a in actions(db)} == {"failed"}
+    assert (row.skip, row.status, row.detail["skip_attempts"]) == ("requested", "running", 0)
+    assert alert(db, "skip_failed") is None and alert(db, "skipped") is None
+    later = NOW + timedelta(minutes=13)
+    events.ingest(db, [gone_snapshot(later)], later)
+    db.commit()
+    assert (event(db, eid).status, event(db, eid).skip) == ("ended", "requested")
+
+
+async def test_an_unconfirmed_opt_out_is_settled_when_the_event_vanishes(db):
+    """resumeProgram went out but no read-back answered; the next poll no longer lists the
+    event: it landed. The row is 'opted_out' with the skip 'done' and the "Skipped" alert, not
+    'ended' with the skip stuck 'requested'."""
+    eid = setup_event(db)
+    await skips.run(FakeSource(unconfirmed()), NOW)
+    row = event(db, eid)
+    (act,) = actions(db)
+    assert (row.skip, row.status, row.detail["skip_attempts"], act.status) == ("requested", "running", 1, "failed")
+    later = NOW + timedelta(minutes=3)
+    events.ingest(db, [gone_snapshot(later)], later)
+    db.commit()
+    row = event(db, eid)
+    assert (row.status, row.skip, row.skip_action_id, row.skip_done_at) == ("opted_out", "done", act.id, later)
+    assert alert(db, "skipped") is not None and alert(db, "ended") is None
+    assert "the opt-out landed" in actions(db)[0].error
+
+
+async def test_ticks_before_the_poll_do_not_count_against_a_landed_opt_out(db):
+    """The ticks run before the poll catches up: each fresh read finds nothing running (our
+    opt-out landed). No attempt is counted, so no false "failed 3 times"; the poll settles it."""
+    eid = setup_event(db)
+    src = FakeSource(unconfirmed(), nothing_running(), nothing_running(), nothing_running())
+    for i in range(4):
+        await skips.run(src, NOW + timedelta(minutes=3 * i))
+    row = event(db, eid)
+    assert (row.skip, row.detail["skip_attempts"]) == ("requested", 1) and alert(db, "skip_failed") is None
+    later = NOW + timedelta(minutes=10)
+    events.ingest(db, [gone_snapshot(later)], later)
+    db.commit()
+    row = event(db, eid)
+    assert (row.status, row.skip, row.skip_action_id) == ("opted_out", "done", actions(db)[0].id)
+
+
+async def test_an_event_closed_during_the_call_is_settled_by_its_result(db):
+    """The poll runs while the opt-out is in flight and no longer lists the event: ingest closes
+    the row as 'ended' (nothing confirmed yet); the unconfirmed result then settles it 'done'."""
+    eid = setup_event(db)
+    later = NOW + timedelta(minutes=1)
+
+    class PollMidCall(FakeSource):
+        async def opt_out_event(self, unit_key, reason, **kw):
+            events.ingest(db, [gone_snapshot(later)], later)
+            db.commit()
+            assert event(db, eid).status == "ended"
+            return unconfirmed()
+
+    await skips.run(PollMidCall(), NOW)
+    assert (event(db, eid).status, event(db, eid).skip) == ("opted_out", "done")
+
+
+async def test_an_old_or_overruled_opt_out_does_not_explain_a_vanished_event(db):
+    end_guard = WriteResult(ok=False, channel="ecobee", before={"demand_response_running": True},
+                            request={"refused": True, "mandatory": False, "link_ref": "L1"},
+                            error="the utility event 'Peak Saver' ends within 2 minutes; nothing sent")
+    eid = setup_event(db)  # a later attempt still found the event on top: the first did not land
+    await skips.run(FakeSource(unconfirmed()), NOW)
+    await skips.run(FakeSource(end_guard), NOW + timedelta(minutes=3))
+    later = NOW + timedelta(minutes=5)
+    events.ingest(db, [gone_snapshot(later)], later)
+    db.commit()
+    assert (event(db, eid).status, event(db, eid).skip) == ("ended", "requested")
+
+    db.query(UtilityEvent).delete()
+    db.query(ControlAction).delete()
+    db.commit()
+    eid = setup_event(db)  # the opt-out was too long ago to explain it
+    await skips.run(FakeSource(unconfirmed()), NOW)
+    later = NOW + skips.LANDED_WITHIN + timedelta(minutes=1)
+    events.ingest(db, [gone_snapshot(later)], later)
+    db.commit()
+    assert (event(db, eid).status, event(db, eid).skip) == ("ended", "requested")
+
+
+async def test_the_sweep_settles_a_landed_opt_out_too(db):
+    eid = setup_event(db)  # no poll after the opt-out: the clock closes the row
+    late = END - timedelta(minutes=3)
+    await skips.run(FakeSource(unconfirmed()), late)
+    events.sweep(db, END + events.RUNNING_GRACE + timedelta(seconds=30))
+    db.commit()
+    row = event(db, eid)
+    assert (row.status, row.skip) == ("opted_out", "done")
 
 
 # --- rules ------------------------------------------------------------------------------------

@@ -114,7 +114,7 @@ async def test_event_above_our_hold_and_resume_never_cancels_it():
     house, clock = house_at()
     held = await house.set_hold(HoldRequest(unit_key="up", heat_f=68, cool_f=75, hours=2, reason="ours"))
     assert held.ok
-    house.inject_event("up", peak(T0 + timedelta(minutes=10)))
+    house.inject_event("up", peak(T0 + timedelta(minutes=10), hours=1.0))
     clock.t = T0 + timedelta(minutes=11)
     s = await snap(house, "up")
     assert s.hold.hold_type == "demandResponse" and s.cool_sp_f == s.settings["program_cool_f"] + 2.0
@@ -122,9 +122,17 @@ async def test_event_above_our_hold_and_resume_never_cancels_it():
     resumed = await house.resume_program("up", "controller resume", force=True)
     assert resumed.ok is False and "demandResponse event is in effect" in resumed.error
     assert resumed.readback is None
-    rewrite = await house.set_hold(HoldRequest(unit_key="up", heat_f=68, cool_f=75, hours=2, reason="ours"))
-    assert rewrite.ok is False and "a running demandResponse event overrides the hold" in rewrite.error
+    # like the ecobee adapter: no hold is written while the event runs, by the controller or the owner
+    for by_owner in (False, True):
+        rewrite = await house.set_hold(HoldRequest(unit_key="up", heat_f=67, cool_f=74, hours=2, reason="x",
+                                                   by_owner=by_owner))
+        assert rewrite.ok is False and rewrite.readback is None
+        assert rewrite.request["refused"] is True and rewrite.request["event"] == "demandResponse"
+        assert rewrite.error == "a running demandResponse event is in effect; not written"
     assert (await snap(house, "up")).hold.hold_type == "demandResponse"
+    clock.t = T0 + timedelta(minutes=71)  # the event is over: our hold runs again, untouched
+    s = await snap(house, "up")
+    assert (s.hold.hold_type, s.hold.cool_f, s.hold.set_by_us) == ("holdHours", 75, True)
 
 
 # --- opt-out ---------------------------------------------------------------------------
@@ -177,6 +185,61 @@ async def test_opt_out_refusals():
     clock.t = T0 + timedelta(minutes=59)
     ending = await house.opt_out_event("main", "x")
     assert ending.ok is False and "ends within 2 minutes" in ending.error
+
+
+async def test_opt_out_of_a_different_event_is_refused():
+    """Finding 4 (simulator side): the skip names event dr-A, but dr-B runs on top now."""
+    house, clock = house_at()
+    house.inject_event("up", peak(T0, link_ref="dr-B", name="Peak Saver Extended"))
+    clock.t = T0 + timedelta(minutes=1)
+    other = await house.opt_out_event("up", "Skipped from the app", link_ref="dr-A", name="Peak Saver",
+                                      start=T0 - timedelta(hours=1))
+    assert other.ok is False and other.request["other_event"] is True and other.request["mandatory"] is False
+    assert other.error == "a different utility event is on top; nothing sent"
+    assert (await snap(house, "up")).hold.link_ref == "dr-B"
+    same = await house.opt_out_event("up", "Skipped from the app", link_ref="dr-B")
+    assert same.ok is True, same.error
+    assert same.request["sent"] is True and same.readback["event_running"] is False
+
+
+async def test_two_running_events_opt_out_of_the_top_one_only():
+    house, clock = house_at()
+    house.inject_event("up", peak(T0, link_ref="dr-1"))
+    house.inject_event("up", peak(T0 + timedelta(minutes=5), link_ref="dr-2", name="Other program"))
+    clock.t = T0 + timedelta(minutes=6)
+    result = await house.opt_out_event("up", "x", link_ref="dr-1")
+    assert result.ok is True, result.error
+    assert result.readback["event_running"] is False and result.readback["demand_response_running"] is True
+    assert (await snap(house, "up")).hold.link_ref == "dr-2"
+
+
+async def test_owner_hold_is_a_persons_hold():
+    """The owner's hold from the app is a person's: never ``set_by_us``; the controller cannot
+    replace it or cancel it; the owner's own forced resume can."""
+    house, _ = house_at()
+    owner = await house.set_hold(HoldRequest(unit_key="up", heat_f=69, cool_f=74, hours=2, reason="Owner hold",
+                                             by_owner=True))
+    assert owner.ok is True, owner.error
+    assert owner.readback["hold"]["set_by_us"] is False
+    s = await snap(house, "up")
+    assert (s.hold.hold_type, s.hold.set_by_us, s.cool_sp_f) == ("holdHours", False, 74)
+    ctrl = await house.set_hold(HoldRequest(unit_key="up", heat_f=68, cool_f=76, hours=2, reason="tick"))
+    assert ctrl.ok is False and ctrl.request["not_ours"] is True and "not set by the controller" in ctrl.error
+    assert ctrl.before["hold"]["set_by_us"] is False
+    resume = await house.resume_program("up", "controller resume")
+    assert resume.ok is False and resume.error == "the running hold was not set by the controller; not cancelled"
+    assert (await snap(house, "up")).cool_sp_f == 74
+    # the owner may write over their own hold, and their forced resume ends it
+    again = await house.set_hold(HoldRequest(unit_key="up", heat_f=69, cool_f=75, hours=1, reason="Owner",
+                                             by_owner=True))
+    assert again.ok is True, again.error
+    back = await house.resume_program("up", "Owner: back to automatic", force=True)
+    assert back.ok is True and back.readback["hold"] is None
+    # the controller's own hold is ours: it renews and cancels it freely
+    ours = await house.set_hold(HoldRequest(unit_key="up", heat_f=68, cool_f=76, hours=2, reason="tick"))
+    renew = await house.set_hold(HoldRequest(unit_key="up", heat_f=68, cool_f=76, hours=2, reason="renew"))
+    assert ours.ok and renew.ok and renew.before["hold"]["set_by_us"] is True
+    assert (await house.resume_program("up", "controller resume")).ok is True
 
 
 # --- Smart Away / Follow Me ------------------------------------------------------------

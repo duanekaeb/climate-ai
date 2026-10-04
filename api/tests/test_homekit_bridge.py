@@ -339,6 +339,64 @@ async def test_readback_mismatch_is_not_verified(tmp_path):
     assert not res.ok and "current mode" in (res.error or "")
 
 
+def _lose_after(p, iid, *, on_put: bool) -> None:
+    """The thermostat applies the put to ``iid``, then the answer (``on_put``) or the next
+    request (the read-back GET) is lost to a disconnect."""
+    orig = p.put_characteristics
+
+    async def put(rows):
+        res = await orig(rows)
+        if any((a, i) == iid for a, i, _ in rows):
+            if on_put:
+                raise disconnected()
+            p.fail_next = [disconnected()]
+        return res
+
+    p.put_characteristics = put
+
+
+@pytest.mark.parametrize("on_put", [False, True], ids=["readback_get_failed", "put_answer_lost"])
+@pytest.mark.parametrize("write", ["hold", "clear"])
+async def test_a_write_that_went_out_unverified_keeps_a_readback(tmp_path, write, on_put):
+    """Finding 19: a hold or resume the thermostat applied, whose answer or read-back was lost,
+    is failed WITH a read-back object (sent), so the homekit service counts it as ours (maybe
+    landed) instead of reading the thermostat's new state as a person's change."""
+    bridge, ctl, dev, _ = await loaded(tmp_path)
+    key = "VENDOR_ECOBEE_SET_HOLD_SCHEDULE" if write == "hold" else "VENDOR_ECOBEE_CLEAR_HOLD"
+    if write == "clear":
+        await bridge.set_climate_hold("hallway", "away", datetime.now(UTC) + timedelta(hours=1), TZ)
+    _lose_after(pairing(ctl), dev.k(1, key), on_put=on_put)
+    if write == "hold":
+        res = await bridge.set_climate_hold("hallway", "sleep", datetime.now(UTC) + timedelta(hours=1), TZ)
+        assert dev.get(1, "VENDOR_ECOBEE_CURRENT_MODE") == 1  # it IS on the thermostat
+        assert res.readback is not None and res.readback["expected_mode"] == 1
+        assert "the hold was sent and may be on the thermostat" in (res.error or "")
+    else:
+        res = await bridge.clear_hold("hallway")
+        assert dev.get(1, "VENDOR_ECOBEE_CURRENT_MODE") == 0
+        assert "the resume was sent" in (res.error or "")
+    assert not res.ok and res.readback is not None and res.readback["sent"] is True
+
+
+@pytest.mark.parametrize("write", ["hold", "clear"])
+async def test_a_write_that_never_went_out_or_was_rejected_has_no_readback(tmp_path, write):
+    bridge, ctl, dev, _ = await loaded(tmp_path)
+    p = pairing(ctl)
+
+    async def run():
+        if write == "hold":
+            return await bridge.set_climate_hold("hallway", "sleep", datetime.now(UTC) + timedelta(hours=1), TZ)
+        return await bridge.clear_hold("hallway")
+
+    p.fail_next = [disconnected()]  # the GET before anything is written fails
+    first = await run()
+    assert not first.ok and first.readback is None and dev.writes == []
+    key = "VENDOR_ECOBEE_SET_HOLD_SCHEDULE" if write == "hold" else "VENDOR_ECOBEE_CLEAR_HOLD"
+    p.put_status = {dev.k(1, key): -70410}  # the thermostat answers the put with an error: not applied
+    rejected = await run()
+    assert not rejected.ok and "rejected" in (rejected.error or "") and rejected.readback is None
+
+
 async def test_never_writes_home_sleep_away_targets(tmp_path):
     bridge, ctl, dev, _ = await loaded(tmp_path)
     await bridge.set_climate_hold("hallway", "sleep", datetime.now(UTC) + timedelta(hours=2), TZ)
@@ -408,7 +466,8 @@ def test_homekit_snapshot_reads_the_thermostat_and_carries_only_configuration():
     assert snap.equipment_running == ["compCool1"] and snap.climate_ref == "home" and snap.hold is None
     assert {r.sensor_key: r.temp_f for r in snap.sensors} == {"main.hallway_tstat": 71.6, "main.kitchen": 70.7}
     assert (snap.name, snap.model, snap.sensor_sets) == ("Hallway", "aresSmart", {"home": ["main.hallway_tstat"]})
-    assert snap.settings == {"heatCoolMinDelta": 4.0, "hasHeatPump": False}  # no stale program setpoints
+    # no stale program setpoints; replacing the cloud's snapshot starts a HomeKit run now
+    assert snap.settings == {"heatCoolMinDelta": 4.0, "hasHeatPump": False, "homekit_since": SNAP_NOW.isoformat()}
     assert snap.outdoor_temp_f is None  # not read over HomeKit: never invented
     heating = hk.snapshot_from_values("main", tstat_values(HEATING_COOLING_CURRENT=1, HEATING_COOLING_TARGET=None),
                                       AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot())
@@ -453,6 +512,51 @@ def test_homekit_snapshot_hold_rules():
                       hold_type="vacation")
     kept = hk.snapshot_from_values("main", tstat_values(), AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot(vac))
     assert kept.hold is not None and kept.hold.hold_type == "vacation" and kept.hold.set_by_us is False
+
+
+@pytest.mark.parametrize("end", [SNAP_NOW + timedelta(hours=3), None], ids=["with_end", "no_end"])
+@pytest.mark.parametrize("mode", [0, 2, 3, None])
+def test_an_unrecognised_ecobee_event_is_carried_whatever_the_mode_shows(end, mode):
+    """Finding 21: HomeKit cannot see ecobee events. An event type outside KNOWN_HOLD_TYPES
+    the cloud reported running stays the snapshot's hold until its end (or, with none, for
+    the whole HomeKit run): the controller stays hands-off and its setpoints (here relative,
+    cooling 2°F above Home) are never read as a person's change."""
+    ev = hk.HoldInfo(kind="temperature", hold_type="switchOccupancy", is_relative=True, cool_offset_f=2.0,
+                     start=SNAP_NOW - timedelta(hours=1), end=end)
+    over = {"VENDOR_ECOBEE_CURRENT_MODE": mode, "TEMPERATURE_COOLING_THRESHOLD": 25.6}
+    snap = hk.snapshot_from_values("main", tstat_values(**over), AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot(ev))
+    assert snap.hold == ev
+    # ...and on the next poll, from HomeKit's own snapshot
+    again = hk.snapshot_from_values("main", tstat_values(**over), AID_MAP, SNAP_NOW + timedelta(minutes=1), TZ,
+                                    previous=snap)
+    assert again.hold == ev
+    # once its end has passed it is dropped (with mode 3 the temperature hold shown takes its place)
+    if end is not None:
+        after = hk.snapshot_from_values("main", tstat_values(**over), AID_MAP, end + timedelta(minutes=1), TZ,
+                                        previous=snap)
+        assert after.hold is None or after.hold.hold_type != "switchOccupancy"
+
+
+def test_homekit_snapshots_record_when_homekit_took_over():
+    """Finding 7: settings['homekit_since'] is the start of this HomeKit run: this snapshot's
+    time when it replaces the cloud's (or nothing), carried while it replaces HomeKit's own."""
+    first = hk.snapshot_from_values("main", tstat_values(), AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot())
+    assert first.settings["homekit_since"] == SNAP_NOW.isoformat()
+    assert hk.snapshot_from_values("main", tstat_values(), AID_MAP, SNAP_NOW, TZ).settings == {
+        "homekit_since": SNAP_NOW.isoformat()}
+    later = SNAP_NOW + timedelta(hours=5)
+    nxt = hk.snapshot_from_values("main", tstat_values(), AID_MAP, later, TZ, previous=first)
+    assert nxt.settings["homekit_since"] == SNAP_NOW.isoformat()
+    # a cloud snapshot in between starts a new run, whatever its settings carry
+    cloud = cloud_snapshot().model_copy(update={"settings": {"homekit_since": SNAP_NOW.isoformat()}})
+    assert hk.snapshot_from_values("main", tstat_values(), AID_MAP, later, TZ,
+                                   previous=cloud).settings["homekit_since"] == later.isoformat()
+    # a HomeKit snapshot without it (an older release, or unreadable: continuing): start unknown
+    old = first.model_copy(update={"settings": {"hasHeatPump": False}})
+    assert "homekit_since" not in hk.snapshot_from_values("main", tstat_values(), AID_MAP, later, TZ,
+                                                          previous=old).settings
+    assert "homekit_since" not in hk.snapshot_from_values("main", tstat_values(), AID_MAP, later, TZ,
+                                                          continuing=True).settings
 
 
 async def test_clear_hold_reads_back(tmp_path):

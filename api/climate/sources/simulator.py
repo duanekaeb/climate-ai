@@ -26,7 +26,9 @@ rooms is inside its sleep window (OccupancySettings), 'home' otherwise, setpoint
 ControlSettings.comfort (day / night / away). Smart Away (``autoAway``, on by default like a
 new ecobee): during 'home', when none of the unit's occupancy sensors has seen motion for 30
 minutes the unit switches to its away band until motion returns. ``holdHours`` holds override
-the program until they end. Control is on the average of the participating sensors (holds
+the program until they end. A hold the owner set from the app (``HoldRequest.by_owner``) is a
+person's hold, as on ecobee: never ``set_by_us``; a controller write or unforced resume over it
+is refused, and so is any hold write while an injected event runs (``base.write_refusal``). Control is on the average of the participating sensors (holds
 use the Home set) with ±0.5°F hysteresis and a 5-minute minimum run. ``apply_settings``
 switches the simulated ``autoAway`` / ``followMeComfort`` (Follow Me is reported only).
 
@@ -57,6 +59,7 @@ from zoneinfo import ZoneInfo
 
 from climate.house import ROOMS, SENSORS, UNITS
 from climate.sources.base import (
+    NOT_OURS_ERROR,
     HoldInfo,
     HoldRequest,
     RuntimeInterval,
@@ -65,6 +68,8 @@ from climate.sources.base import (
     ThermostatEvent,
     UnitSnapshot,
     WriteResult,
+    event_identity,
+    write_refusal,
 )
 from climate.sources.openmeteo import WeatherHourIn
 from climate.store.app_settings import (
@@ -611,6 +616,7 @@ class _Hold:
     start_m: int
     end_m: int
     reason: str = ""
+    by_owner: bool = False  # the owner's hold from the app: a person's hold, never the controller's
 
 
 @dataclass
@@ -1448,7 +1454,7 @@ class SimulatedHouse:
             start=_dt(hold.start_m),
             end=_dt(hold.end_m),
             hold_type="holdHours",
-            set_by_us=True,
+            set_by_us=not hold.by_owner,
         )
 
     def _running(self, u: int) -> list[str]:
@@ -1561,6 +1567,7 @@ class SimulatedHouse:
                 "start": _iso(hold.start_m),
                 "end": _iso(hold.end_m),
                 "hold_type": "holdHours",
+                "set_by_us": not hold.by_owner,
             }
         else:
             top = None
@@ -1603,15 +1610,20 @@ class SimulatedHouse:
         return [s.model_copy(deep=True) for s in self._slots if start <= s.ts < end]
 
     async def set_hold(self, req: HoldRequest) -> WriteResult:
-        """Apply a holdHours temperature hold now and read it back."""
+        """Apply a holdHours temperature hold now and read it back. Refused like the ecobee
+        adapter (``base.write_refusal`` on what runs now): a controller write over the owner's
+        hold from the app (``not_ours``: a person's hold), and any write while an injected
+        vacation or utility event runs (``event``). The owner's hold is kept as ``by_owner``:
+        it is never ``set_by_us``."""
         self._tick()
-        request = {
+        request: dict[str, object] = {
             "unit_key": req.unit_key,
             "heat_f": req.heat_f,
             "cool_f": req.cool_f,
             "hours": req.hours,
             "hold_type": "holdHours",
             "reason": req.reason,
+            "by_owner": bool(req.by_owner),
         }
         u = UNIT_INDEX.get(req.unit_key)
         if u is None:
@@ -1629,9 +1641,15 @@ class SimulatedHouse:
                 readback=self._brief(u),
                 error=error,
             )
+        refusal = write_refusal(self._hold_info(u), by_owner=bool(req.by_owner))
+        if refusal is not None:
+            extra, error = refusal
+            return WriteResult(ok=False, channel="simulator", before=before, request={**request, **extra},
+                               error=error)
         assert self._m is not None
         heat, cool = round(float(req.heat_f), 1), round(float(req.cool_f), 1)
-        self._hold[u] = _Hold(heat, cool, self._m, self._m + 60 * int(req.hours), req.reason)
+        self._hold[u] = _Hold(heat, cool, self._m, self._m + 60 * int(req.hours), req.reason,
+                              by_owner=bool(req.by_owner))
         self._rev[u] += 1
         readback = self._brief(u)
         hold = readback["hold"]
@@ -1642,12 +1660,7 @@ class SimulatedHouse:
             and hold["cool_f"] == cool
             and hold["end"] == _iso(self._m + 60 * int(req.hours))
         )
-        error = None
-        if not ok:
-            # like ecobee: the hold is stored underneath, but a running event stays on top
-            error = (f"a running {hold['hold_type']} event overrides the hold"
-                     if isinstance(hold, dict) and hold.get("hold_type") != "holdHours"
-                     else "read-back does not match the request")
+        error = None if ok else "read-back does not match the request"
         self._persist_if_db()
         return WriteResult(
             ok=ok,
@@ -1676,11 +1689,13 @@ class SimulatedHouse:
         return None
 
     async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
-        """Clear any hold so the unit follows its program again; read it back. Every simulated
-        hold is the controller's, so ``force`` changes nothing. A running event is never
-        cancelled from here (like ecobee: that is ``opt_out_event``'s job)."""
+        """Clear the hold so the unit follows its program again; read it back. Like ecobee,
+        without ``force`` the owner's hold from the app (a person's) is refused
+        (``NOT_OURS_ERROR``); the controller's own hold is always cleared. A running event
+        (the simulator runs vacation and utility events only, which ecobee never lets a resume
+        cancel) is never cancelled from here, forced or not: that is ``opt_out_event``'s job."""
         self._tick()
-        request = {"unit_key": unit_key, "action": "resumeProgram", "reason": reason}
+        request = {"unit_key": unit_key, "action": "resumeProgram", "reason": reason, "force": force}
         u = UNIT_INDEX.get(unit_key)
         if u is None:
             return WriteResult(
@@ -1697,6 +1712,10 @@ class SimulatedHouse:
                 request=request,
                 error=f"a running {event.ev.event_type} event is in effect; not resuming",
             )
+        hold = self._hold[u]
+        if not force and hold is not None and hold.by_owner and self._m < hold.end_m:
+            return WriteResult(ok=False, channel="simulator", before=before, request=request,
+                               error=NOT_OURS_ERROR)
         if self._hold[u] is not None:
             self._hold[u] = None
             self._home_since[u] = self._m
@@ -1713,13 +1732,18 @@ class SimulatedHouse:
             error=None if ok else "hold still present after resume",
         )
 
-    async def opt_out_event(self, unit_key: str, reason: str) -> WriteResult:
+    async def opt_out_event(self, unit_key: str, reason: str, *, link_ref: str | None = None,
+                            name: str | None = None, start: datetime | None = None) -> WriteResult:
         """Opt out of the running utility event the way ecobee's resumeProgram does: refused
-        (``request['refused']``) unless a demandResponse event is on top, when it is mandatory
-        (``request['mandatory']``) or when it ends within 2 minutes; otherwise the event is
-        removed from this unit (a hold underneath, if any, runs again) and read back."""
+        (``request['refused']``) unless a demandResponse event is on top, when an identity is
+        given (``link_ref`` / ``name`` + ``start``) and the top event is a different one
+        (``request['other_event']``), when it is mandatory (``request['mandatory']``) or when
+        it ends within 2 minutes; otherwise the event is removed from this unit (a hold
+        underneath, if any, runs again) and read back: ok when THIS event no longer runs."""
         self._tick()
         request: dict[str, object] = {"unit_key": unit_key, "action": "resumeProgram", "reason": reason}
+        asked = (None if link_ref is None and name is None and start is None
+                 else event_identity(link_ref, name, start))
         u = UNIT_INDEX.get(unit_key)
         if u is None:
             return WriteResult(
@@ -1738,6 +1762,12 @@ class SimulatedHouse:
                                error=f"no utility event to opt out of ({on_top}); nothing sent")
         label = f" {event.ev.name!r}" if event.ev.name else ""
         request.update(event_name=event.ev.name, link_ref=event.ev.link_ref)
+        top = event_identity(event.ev.link_ref, event.ev.name, event.ev.start)
+        if asked is not None and top != asked:
+            return WriteResult(ok=False, channel="simulator", before=before,
+                               request={**request, "asked_for": asked, "refused": True, "mandatory": False,
+                                        "other_event": True},
+                               error="a different utility event is on top; nothing sent")
         if event.ev.is_optional is False:
             return WriteResult(ok=False, channel="simulator", before=before,
                                request={**request, "refused": True, "mandatory": True},
@@ -1763,12 +1793,17 @@ class SimulatedHouse:
         self._event_on[u] = None
         self._home_since[u] = self._m
         self._rev[u] += 1
-        running = self._dr_running(u)
-        readback = {**self._brief(u), "demand_response_running": running}
+        request["sent"] = True
+        m = self._m
+        running = any(e.start_m <= m < e.end_m and e.ev.event_type == "demandResponse"
+                      and event_identity(e.ev.link_ref, e.ev.name, e.ev.start) == top
+                      for e in self._events[u])
+        readback = {**self._brief(u), "demand_response_running": self._dr_running(u), "event_running": running}
         self._persist_if_db()
         return WriteResult(ok=not running, channel="simulator", before=before, request=request,
                            readback=readback,
-                           error="the utility event is still running after the opt-out" if running else None)
+                           error=f"the utility event{label} is still running after the opt-out" if running
+                           else None)
 
     async def apply_settings(self, unit_key: str, settings: dict[str, bool], reason: str) -> WriteResult:
         """Set the simulated Smart Away (``autoAway``) and/or Follow Me (``followMeComfort``) on

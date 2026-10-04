@@ -196,6 +196,12 @@ the schedule, `VENDOR_ECOBEE_CLEAR_HOLD`):
    failed only when a result row has `status != 0` (4.0.1 returns rows for successes too), and
    the optimistic echo is never taken as proof.
 
+A write that went out but could not be confirmed (the thermostat's answer to the hold or
+resume was lost, or the read-back failed) is logged as failed **with** a read-back marked
+`sent`: it may be on the thermostat, so the app counts it as its own and never reads what it
+set as a change by hand. A write the thermostat rejected, or one that failed before anything
+was sent, has no read-back.
+
 The Home/Sleep/Away target setpoints are **never written**: they permanently edit the
 schedule. Every write is logged in `control_actions` with the channel `homekit`, the reason,
 before/after values and the read-back.
@@ -222,7 +228,9 @@ the next schedule change (or the end of a hold).
 - **ecobee holds as such.** No hold type ("2 hours", "until the next change", "until I change
   it"), no start time and no hint of who set it. A HomeKit snapshot reports a hold only when it
   is our own HomeKit hold, a hold the cloud reported before it went down that the thermostat
-  still shows, or a temperature hold it can see.
+  still shows, or a temperature hold it can see. A vacation, utility event or unrecognised
+  ecobee event the cloud reported running is kept until its end (an unrecognised one without an
+  end, until the cloud is back), so the controller stays hands-off while it runs.
 - **Utility (demand-response) events.** None is announced, started or ended over HomeKit, and
   the HomeKit snapshot lists no events and no utility. An event the cloud announced before it
   went down still makes the controller stand aside during its scheduled window. An event
@@ -251,10 +259,22 @@ upstairs thermostat (seen over HomeKit while the ecobee cloud is down); the cont
 aside until the cloud is back." That entry is your hold for that unit, "until you change it",
 because HomeKit cannot show when it ends. The controller writes nothing to that unit until
 the cloud is back. Then the real ecobee hold state decides: a hold still running stays your
-hold, and one that has ended frees the unit. A HomeKit hold the controller had queued before
-the change is not sent; it is logged as "Not sent: someone changed the thermostat by hand".
-The same change is not logged again while it stays on the thermostat. A different change gets a
-new entry.
+hold, and one that has ended frees the unit. The same change is not logged again while it stays
+on the thermostat. A different change gets a new entry.
+
+An entry belongs to its outage. Every HomeKit snapshot records when HomeKit took over the unit
+(`homekit_since` in the snapshot's settings), and an entry older than that is ignored: once
+the cloud has reported in between, a later outage, or a cloud snapshot that is merely more than
+10 minutes old, starts with a clean slate instead of bringing an old hand change back.
+
+Right before it sends a HomeKit write the controller queued, the service reads that thermostat
+again. A change made since the last poll (up to a minute earlier) is logged first, and the write
+is not sent: it is logged as "Not sent: someone changed the thermostat by hand".
+
+Your own buttons keep working during the outage. **Back to automatic** and **Resume schedule**
+go over HomeKit (`VENDOR_ECOBEE_CLEAR_HOLD`); a change by hand never blocks them (you are the
+person), and once verified they end that hold just as they do with the cloud. Like every owner
+action they fail while the controller is off.
 
 What it cannot catch, or may get wrong:
 - With no hold of ours running, a comfort setting picked by hand looks exactly like the
@@ -265,11 +285,14 @@ What it cannot catch, or may get wrong:
   exactly one comfort setting's setpoints looks like that setting.
 - Pressing Resume during our hold looks like picking whatever the schedule shows, so it is
   logged as a hand change as well. The controller then stands aside, which is the safe
-  direction.
+  direction. Our own resume, or our own hold, that went out unconfirmed is not: it may have
+  landed, so what it may have set counts as ours.
 - Nothing is read as a hand change while a utility event is in its window or the cloud's last
-  snapshot showed a vacation or an unrecognised ecobee event: their setpoints are not a
-  person's. A vacation or utility event that **starts** during the outage without the app
-  knowing about it can be mistaken for a hand change.
+  snapshot showed a vacation or an unrecognised ecobee event that is still running: their
+  setpoints are not a person's. A vacation or utility event that **starts** during the outage
+  without the app knowing about it can be mistaken for a hand change.
+- A change made in the moment between the service's fresh read and the controller's write
+  (well under a second) can still be overwritten without being logged.
 - **Not checked on a real ecobee.** Two things are unverified: whether a temperature set at the
   wall reads as "temperature hold" in the current-mode characteristic, and whether the active
   setpoints ever drift from a comfort setting's targets on their own (Smart Recovery, eco+).

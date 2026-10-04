@@ -326,3 +326,32 @@ async def test_current_plan_has_no_side_effects(db):
     assert not by["bed"].would_write and "suggest-only" in by["bed"].guard.blocked_reason
     assert by["up"].current_cool_f == 78.0
     assert actions(db) == []
+
+
+async def test_an_owner_action_prepared_before_the_controller_was_switched_off_is_not_sent(db):
+    """execute_queued reads the mode again before each write: an owner hold prepared before
+    the controller was switched off (a hand-back, say) fails instead of reaching a thermostat."""
+
+    class SwitchesOff(FakeSource):
+        async def set_hold(self, req: HoldRequest) -> WriteResult:
+            put_setting_off()
+            return await super().set_hold(req)
+
+    def put_setting_off() -> None:
+        from climate.store.db import session_scope
+
+        with session_scope() as s:
+            put_setting(s, "control", ControlSettings(mode="off"))
+
+    setup_house(db, mode="suggest")
+    for unit in ("up", "bed"):
+        db.add(ControlAction(ts=NOW - timedelta(minutes=1), unit_key=unit, actor="owner", mode="act",
+                             channel="simulator", action="set_hold", status="queued", rule="manual", reason="Owner hold",
+                             request={"unit_key": unit, "heat_f": 69.0, "cool_f": 75.0, "hours": 1}))
+    db.commit()
+    src = SwitchesOff()
+    await controller.execute_queued(src, NOW)
+    assert [h.unit_key for h in src.holds] == ["up"]
+    up, bed = actions(db, actor="owner")
+    assert up.status == "verified" and src.holds[0].by_owner is True
+    assert (bed.status, bed.error) == ("failed", "Not sent: the controller was switched off.")
