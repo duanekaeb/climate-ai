@@ -53,6 +53,7 @@ from scipy.optimize import least_squares, nnls
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
+from climate.analytics.daily import heat_metrics
 from climate.house import ROOMS
 from climate.store.app_settings import LocationSettings, get_setting
 from climate.store.orm import ModelFit, Unit
@@ -308,7 +309,7 @@ _RUNTIME_SQL = text(
     SELECT floor(extract(epoch FROM ts) / 900)::bigint AS b, unit_key,
            avg(zone_temp_f) AS temp,
            avg(comp_cool1)::float8 / 300.0 AS cool,
-           avg(greatest(comp_heat1, aux_heat1))::float8 / 300.0 AS heat,
+           avg(comp_heat1)::float8 / 300.0 AS heat1, avg(aux_heat1)::float8 / 300.0 AS aux1,
            avg(cool_sp_f) AS csp, avg(heat_sp_f) AS hsp, avg(outdoor_temp_f) AS tout,
            bool_or(hvac_mode = 'off') AS off
     FROM runtime_5m WHERE ts >= :s AND ts < :e
@@ -394,10 +395,14 @@ def load_series(session: Session, start: datetime, end: datetime, tz: str) -> Se
     off = np.zeros((n, 3), dtype=bool)
     tout_sum = np.zeros(n)
     tout_cnt = np.zeros(n)
-    for b, unit, t, c, h, cs, hs, to, is_off in session.execute(_RUNTIME_SQL, {"s": start, "e": end}):
+    # Heating duty uses the unit's stage-1 heating metric like every other runtime figure
+    # (analytics.daily.heat_metrics): comp_heat1 for a heat pump, aux_heat1 for a furnace.
+    heat_is_comp = heat_metrics(session)
+    for b, unit, t, c, h1, a1, cs, hs, to, is_off in session.execute(_RUNTIME_SQL, {"s": start, "e": end}):
         i, z = int(b) - b0, ZIDX.get(unit)
         if z is None or not 0 <= i < n:
             continue
+        h = h1 if heat_is_comp.get(unit, False) else a1
         temp[i, z] = np.nan if t is None else t
         on_c[i, z] = np.nan if c is None else min(1.0, max(0.0, c))
         on_h[i, z] = np.nan if h is None else min(1.0, max(0.0, h))

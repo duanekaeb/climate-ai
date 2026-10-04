@@ -25,6 +25,8 @@ class FakeSource:
         self.ok = ok
         self.holds: list[HoldRequest] = []
         self.resumes: list[str] = []
+        self.forced: list[bool] = []
+        self.refuse_resume = False
 
     async def set_hold(self, req: HoldRequest) -> WriteResult:
         self.holds.append(req)
@@ -34,8 +36,12 @@ class FakeSource:
         return WriteResult(ok=False, channel=self.kind, request=req.model_dump(mode="json"),
                            readback={"heat_f": 70.0, "cool_f": 80.0}, error="Read-back 70/80 does not match.")
 
-    async def resume_program(self, unit_key: str, reason: str) -> WriteResult:
+    async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
         self.resumes.append(unit_key)
+        self.forced.append(force)
+        if self.refuse_resume and not force:
+            return WriteResult(ok=False, channel=self.kind, request={"unit_key": unit_key, "refused": True},
+                               error="the running hold was not written by the controller; not resuming")
         return WriteResult(ok=True, channel=self.kind, readback={"hold": None})
 
     async def poll_revisions(self) -> dict[str, str]:

@@ -17,9 +17,12 @@ Details that matter for honesty:
   of balance points fits that whole range equally well; a narrow weather range lets a high
   balance point chase noise). Grid points inside the 90% profile-likelihood set of the best
   one (n * ln(SSE / SSE_min) <= chi2(1, 0.90) = 2.71) are statistically indistinguishable, and
-  among them we keep the smallest non-negative intercept: as much runtime as the data allows
-  is attributed to weather (an HVAC unit barely runs on a day with no degree-days). Plain max
-  adjusted R² is the special case of a one-point set; the fit's notes name the set.
+  among them we keep the smallest non-negative intercept that passes the NMBE check: as much
+  runtime as the data allows is attributed to weather (an HVAC unit barely runs on a day with
+  no degree-days), without picking a candidate whose intercept is pinned at 0 and whose
+  residuals then no longer average to zero. Only when no candidate in the set passes NMBE is
+  the smallest intercept kept regardless (that fit then fails its checks and says so). Plain
+  max adjusted R² is the special case of a one-point set; the fit's notes name the set.
 - Every fit keeps its residual std and lag-1 autocorrelation for the savings interval
   (ASHRAE G14 fractional savings uncertainty, ``ResidualStats``).
 """
@@ -86,6 +89,7 @@ class BaselineFit:
     notes: str | None = None
     fit_id: int | None = None  # model_fits.id when loaded from the database
     fitted_at: datetime | None = None
+    n_mode_days: int | None = None  # training days with runtime in this mode (None: not recorded)
     # In-memory only: day -> (actual full-day seconds, fitted seconds) for the training days.
     daily: dict[date, tuple[float, float]] | None = field(default=None, repr=False, compare=False)
 
@@ -170,7 +174,11 @@ def fit_baseline(days: list[DayRow], mode: str) -> BaselineFit | None:
     with np.errstate(divide="ignore", invalid="ignore"):
         lr = n * np.log(np.maximum(sse, tiny) / best)
     ties = np.flatnonzero(valid & (lr <= PROFILE_LR_90))
-    j = int(ties[np.lexsort((sse[ties], icpt[ties]))[0]])  # smallest intercept, then SSE
+    dof = max(n - N_PARAMS, 1)
+    nmbe_all = resid.sum(axis=0) / (dof * ym)
+    nmbe_ok = ties[np.abs(nmbe_all[ties]) <= NMBE_MAX]
+    pool = nmbe_ok if nmbe_ok.size else ties
+    j = int(pool[np.lexsort((sse[pool], icpt[pool]))[0]])  # smallest intercept passing NMBE, then SSE
 
     b0, b1, bp = float(icpt[j]), float(slope[j]), float(BP_GRID[j])
     fitted = b0 + b1 * X[:, j]
@@ -178,7 +186,6 @@ def fit_baseline(days: list[DayRow], mode: str) -> BaselineFit | None:
     sse_j = float((r * r).sum())
     sst = float(((y - ym) ** 2).sum())
     r2 = 1.0 - sse_j / sst if sst > 0 else 0.0
-    dof = max(n - N_PARAMS, 1)
     adj = 1.0 - (1.0 - r2) * (n - 1) / dof
     std = math.sqrt(sse_j / dof)
     ordinals = np.array([d.day.toordinal() for d in rows])
@@ -187,10 +194,9 @@ def fit_baseline(days: list[DayRow], mode: str) -> BaselineFit | None:
         notes.append("intercept constrained to 0")
     tie_bps = BP_GRID[ties]
     if tie_bps.size > 1:
-        notes.append(
-            f"90% balance-point set {tie_bps.min():.0f}-{tie_bps.max():.0f}°F ({tie_bps.size} candidates); "
-            "kept the smallest non-negative intercept"
-        )
+        kept = ("kept the smallest non-negative intercept that passes NMBE" if nmbe_ok.size
+                else "none passes NMBE, so kept the smallest non-negative intercept")
+        notes.append(f"90% balance-point set {tie_bps.min():.0f}-{tie_bps.max():.0f}°F ({tie_bps.size} candidates); {kept}")
     return BaselineFit(
         unit_key=rows[0].unit_key,
         mode=mode,
@@ -207,6 +213,7 @@ def fit_baseline(days: list[DayRow], mode: str) -> BaselineFit | None:
         train_end=rows[-1].day,
         adj_r2=adj,
         notes="; ".join(notes),
+        n_mode_days=int((y > 0).sum()),
         daily={d.day: (float(a), float(f)) for d, a, f in zip(rows, y, fitted, strict=True)},
     )
 
@@ -271,6 +278,10 @@ class ResidualStats:
     n: int  # training days
     p: int  # fitted parameters
     mean_y_s: float  # mean daily actual over the training days
+    # The training days' fitted values and residuals (None when the spread was combined from
+    # stored fits): lets a single day's interval follow the level when residuals scale with it.
+    fitted: np.ndarray | None = field(default=None, repr=False, compare=False)
+    resid: np.ndarray | None = field(default=None, repr=False, compare=False)
 
     @property
     def n_eff(self) -> float:
@@ -283,19 +294,65 @@ class ResidualStats:
     def t(self, conf: float = 0.90) -> float:
         return float(sstats.t.ppf(0.5 + conf / 2.0, max(self.n_eff - self.p, 1.0)))
 
-    def halfwidth(self, m: int, mean_expected_day_s: float | None = None, conf: float = 0.90) -> float:
-        """Half-width (seconds) of the interval on a sum of m reporting days of
-        (expected - actual): ASHRAE G14 / Reddy-Claridge,
-        t * 1.26 * sigma * sqrt(m * (n/n') * (1 + 2/n')), n' = n(1-rho)/(1+rho).
-        G14 scales sigma with the reporting period's level (CV * mean expected); we use the
+    def level_scale(self, mean_expected_day_s: float | None) -> float:
+        """G14 scales sigma with the reporting period's level (CV * mean expected); we use the
         larger of that and the absolute sigma, so neither a hot nor a mild period narrows it."""
+        if mean_expected_day_s is None or self.mean_y_s <= 0:
+            return 1.0
+        return max(1.0, mean_expected_day_s / self.mean_y_s)
+
+    def sum_se(self, m: int, mean_expected_day_s: float | None = None) -> float:
+        """Standard error (seconds) of a sum of m reporting days of (actual - expected) in the
+        ASHRAE G14 / Reddy-Claridge form: 1.26 * sigma * sqrt(m * (n/n') * (1 + 2/n')),
+        n' = n(1-rho)/(1+rho), sigma scaled by ``level_scale``. The 1.26 and (1 + 2/n') terms
+        cover the baseline's own estimation error, which grows when the period's weather lies
+        outside the training range (a shoulder season)."""
         if m <= 0:
             return 0.0
         n_eff = max(self.n_eff, 1.0)
-        scale = 1.0
-        if mean_expected_day_s is not None and self.mean_y_s > 0:
-            scale = max(1.0, mean_expected_day_s / self.mean_y_s)
-        return self.t(conf) * G14_FACTOR * self.sigma_s * scale * math.sqrt(m * (self.n / n_eff) * (1.0 + 2.0 / n_eff))
+        scale = self.level_scale(mean_expected_day_s)
+        return G14_FACTOR * self.sigma_s * scale * math.sqrt(m * (self.n / n_eff) * (1.0 + 2.0 / n_eff))
+
+    def halfwidth(self, m: int, mean_expected_day_s: float | None = None, conf: float = 0.90) -> float:
+        """Half-width (seconds) of the interval on a sum of m reporting days of
+        (expected - actual): t(n' - p) * ``sum_se``. For a multi-day period (savings, the
+        waterfall); one day uses ``day_halfwidth``."""
+        if m <= 0:
+            return 0.0
+        return self.t(conf) * self.sum_se(m, mean_expected_day_s)
+
+    def day_sigma(self, expected_day_s: float | None = None) -> float:
+        """Residual std (seconds) for ONE day expected to run ``expected_day_s``.
+
+        When the training residuals scale with the runtime level (|residual| rank-correlates
+        with the fitted value, Spearman p < 0.05) a linear spread model |r| ~ a + b * fitted is
+        fitted and normalized so its RMS over the training days is sigma; the day gets sigma
+        times its level's share. Otherwise (no level dependence) sigma itself. Without the
+        training series it falls back to ``level_scale`` (never narrower than sigma)."""
+        if expected_day_s is None or not math.isfinite(expected_day_s):
+            return self.sigma_s
+        f, r = self.fitted, self.resid
+        if f is None or r is None or f.size < MIN_DAYS or float(np.std(f)) <= 0:
+            return self.sigma_s * self.level_scale(expected_day_s)
+        a = np.abs(r)
+        rs, pval = sstats.spearmanr(f, a)
+        if not (math.isfinite(rs) and rs > 0 and pval < 0.05):
+            return self.sigma_s
+        b1, b0 = np.polyfit(f, a, 1)
+        if b1 <= 0:
+            return self.sigma_s
+        floor = 0.1 * float(a.mean())
+        spread = np.maximum(b0 + b1 * f, floor)
+        day = max(float(b0 + b1 * expected_day_s), floor)
+        return self.sigma_s * day / math.sqrt(float(np.mean(spread * spread)))
+
+    def day_halfwidth(self, expected_day_s: float | None = None, conf: float = 0.90) -> float:
+        """Half-width (seconds) of the prediction interval for a SINGLE day:
+        t(n - p, 0.5 + conf/2) * sigma_day * sqrt(1 + 1/n), sigma_day from ``day_sigma``.
+        The G14 sum formula is for multi-day periods: at m = 1 its 1.26 and autocorrelation
+        terms make a 90% range cover about 99% of days."""
+        tq = float(sstats.t.ppf(0.5 + conf / 2.0, max(self.n - self.p, 1)))
+        return tq * self.day_sigma(expected_day_s) * math.sqrt(1.0 + 1.0 / max(self.n, 1))
 
 
 def _clip_rho(rho: float) -> float:
@@ -324,7 +381,7 @@ def residual_stats(fits: Iterable[tuple[BaselineFit, float]]) -> ResidualStats |
             n = len(common)
             sigma = math.sqrt(float((r * r).sum()) / max(n - p, 1))
             ords = np.array([k.toordinal() for k in common])
-            return ResidualStats(sigma, _clip_rho(_lag1(ords, r)), n, p, float(yv.mean()))
+            return ResidualStats(sigma, _clip_rho(_lag1(ords, r)), n, p, float(yv.mean()), fitted=yv - r, resid=r)
     sigma = math.sqrt(sum((w * f.resid_std_s) ** 2 for f, w in fits))
     return ResidualStats(
         sigma_s=sigma,
@@ -449,6 +506,7 @@ def refit_all(session: Session, now: datetime, train_days: int = 90) -> list[int
                 "cvrmse": _r(fit.cvrmse, 4),
                 "nmbe": _r(fit.nmbe, 4),
                 "n_days": int(fit.n_days),
+                "n_mode_days": int(fit.n_mode_days) if fit.n_mode_days is not None else None,
                 "passes": bool(fit.passes),
             }),
             status="active",
@@ -483,6 +541,7 @@ def fit_from_row(row: ModelFit) -> BaselineFit | None:
             notes=row.notes,
             fit_id=int(row.id),
             fitted_at=row.created_at,
+            n_mode_days=int(m["n_mode_days"]) if m.get("n_mode_days") is not None else None,
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -546,8 +605,11 @@ def _day_mode(fits: dict[tuple[str, str], BaselineFit], row: DayRow) -> str | No
 
 def daily_runtime(session: Session, days: int = 30, now: datetime | None = None) -> list[DailyRuntime]:
     """GET /runtime/daily: the last ``days`` local days (today included, partial) per unit,
-    with the active baseline's expectation for the day's mode. ``expected_min`` is None for
-    incomplete days (a partial day's expectation depends on WHEN the missing hours were)."""
+    with the active baseline's expectation for the day's mode over the slots the day has data
+    for (``expected_covered_seconds``, comparable to cool_min / heat_min). ``expected_min`` is
+    None for incomplete days and for today, which is still in progress (a partial day's
+    expectation depends on WHEN the missing hours are; late in the evening today already has
+    90% of its slots, but its missing hours are the evening, not a random sample)."""
     tz = house_tz(session)
     today = local_date(now or utcnow(), tz)
     rows = daily_rows(session, today - timedelta(days=max(days, 1) - 1), today, tz)
@@ -556,7 +618,7 @@ def daily_runtime(session: Session, days: int = 30, now: datetime | None = None)
     for r in rows:
         mode = _day_mode(fits, r)
         expected = None
-        if mode is not None and is_complete(r):
+        if mode is not None and is_complete(r) and r.day < today:
             e = expected_covered_seconds(fits[(r.unit_key, mode)], r)
             expected = None if math.isnan(e) else round(e / 60.0, 1)
         out.append(

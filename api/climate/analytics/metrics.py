@@ -19,9 +19,11 @@ from climate.analytics.baseline import (
     expected_seconds,
     involved_modes,
     pre_period_fits,
+    residual_stats,
 )
 from climate.analytics.daily import (
     MAXED_DUTY,
+    DayRow,
     daily_rows,
     full_day_seconds,
     heat_metrics,
@@ -44,7 +46,8 @@ from climate.timeutil import day_bounds_utc, floor_slot, in_window, local_date, 
 COMFORT_TOL_F = 0.5
 STATE_MAX_AGE_S = 15 * 60  # a room_states row describes the room for at most this long
 DRIFT_Z = 2.0
-MIN_DRIFT_DAYS = 3
+MIN_DRIFT_MODE_DAYS = 5  # complete recent days with runtime in the mode
+MIN_DRIFT_TRAIN_MODE_DAYS = 10  # training days with runtime in the mode
 _SLOT = 300.0
 UNIT_NAME = {"main": "Main floor", "up": "Upstairs", "bed": "Bed/office wing"}
 MODE_WORD = {"cool": "cooling", "heat": "heating"}
@@ -231,16 +234,67 @@ def comfort(session: Session, days: int = 7) -> list[ComfortRow]:
 # ---------------------------------------------------------------------------------------
 
 
+def drift_check(fit: BaselineFit, rows: list[DayRow]) -> tuple[DriftUnit | None, str | None]:
+    """Check one baseline (its unit and mode) against recent day rows.
+
+    Returns (DriftUnit, None) when checked, else (None, why it was not checked):
+    - a fit that fails its checks (CV(RMSE) / NMBE) says nothing about drift;
+    - the mode must have been in use (runtime > 0) on >= 10 training days and on >= 5 of the
+      complete recent days, or the "residuals" are just an idle mode's intercept.
+
+    z = mean residual / its standard error, the same error model as the savings interval
+    (``ResidualStats.sum_se``, ASHRAE G14): residual std scaled by
+    max(1, mean expected recent / mean training runtime) (residuals grow with runtime: a hot
+    week after a mild training window is noisier in seconds, not drifting), widened for lag-1
+    autocorrelation and for the baseline's own estimation error, which matters most in a
+    shoulder season when the recent weather lies beyond the training range."""
+    unit, mode = fit.unit_key, fit.mode
+    word = MODE_WORD.get(mode, mode)
+    if not fit.passes:
+        return None, f"its baseline fails its checks ({fit.check_summary()})"
+    if fit.n_mode_days is not None and fit.n_mode_days < MIN_DRIFT_TRAIN_MODE_DAYS:
+        return None, (f"its baseline saw {word} on only {fit.n_mode_days} training days "
+                      f"(needs {MIN_DRIFT_TRAIN_MODE_DAYS})")
+    resid: list[float] = []
+    exp: list[float] = []
+    in_mode = 0
+    for r in rows:
+        if r.unit_key != unit or not is_complete(r):
+            continue
+        e = expected_seconds(fit, r)
+        if math.isnan(e):
+            continue
+        actual = full_day_seconds(r, mode)
+        resid.append(actual - e)
+        exp.append(e)
+        in_mode += actual > 0
+    if in_mode < MIN_DRIFT_MODE_DAYS:
+        return None, (f"{word} ran on only {in_mode} of {len(resid)} complete recent days "
+                      f"(needs {MIN_DRIFT_MODE_DAYS})")
+    st = residual_stats([(fit, 1.0)])
+    m = len(resid)
+    mean_r = float(np.mean(resid))
+    mean_e = float(np.mean(exp))
+    se = st.sum_se(m, mean_e) / m if st is not None else 0.0
+    z = mean_r / se if se > 0 else 0.0
+    return DriftUnit(
+        unit_key=unit, mode=mode,  # type: ignore[arg-type]
+        recent_days=m, resid_mean_pct=round(mean_r / mean_e * 100.0, 1) if mean_e > 0 else 0.0,
+        z=round(z, 2), drifting=abs(z) > DRIFT_Z,
+    ), None
+
+
 def drift(session: Session, recent_days: int = 7) -> DriftReport:
-    """Recent mean residual of each active baseline vs its training residual spread; z > 2
+    """Recent mean residual of each active baseline vs its training residual spread; |z| > 2
     for the recent window -> drifting (triggers a Claude investigation via the worker).
 
     The recent window is the last ``recent_days`` finished local days. Residuals are taken
     against the baseline trained on the 90 days BEFORE that window (an active fit refitted
     nightly has already learned the recent days and would never drift); if no such fit
-    exists the active fit is used and the note says so. z = mean residual / (residual std *
-    sqrt((1 + rho) / ((1 - rho) * m))) with rho the training lag-1 autocorrelation in [0, 0.9];
-    |z| > 2 is drifting. Only unit/modes in use during the window are checked."""
+    exists the active fit is used and the note says so. Only unit/modes in use during the
+    window are checked, and only with a baseline that passes its checks and a mode that ran
+    on enough training and recent days (``drift_check``, which also defines z); the note
+    names everything skipped and why."""
     tz = house_tz(session)
     end = local_date(utcnow(), tz) - timedelta(days=1)
     start = end - timedelta(days=recent_days - 1)
@@ -254,35 +308,16 @@ def drift(session: Session, recent_days: int = 7) -> DriftReport:
     in_use = involved_modes(rows, fits)
 
     units: list[DriftUnit] = []
-    short: list[str] = []
+    skipped: list[str] = []
     for key in sorted(fits, key=lambda k: (unit_order(k[0]), MODES.index(k[1]) if k[1] in MODES else 9)):
         if key not in in_use:
             continue
         unit, mode = key
-        fit = fits[key]
-        resid, exp = [], []
-        for r in rows:
-            if r.unit_key != unit or not is_complete(r):
-                continue
-            e = expected_seconds(fit, r)
-            if math.isnan(e):
-                continue
-            resid.append(full_day_seconds(r, mode) - e)
-            exp.append(e)
-        m = len(resid)
-        if m < MIN_DRIFT_DAYS:
-            short.append(f"{UNIT_NAME.get(unit, unit).lower()} {MODE_WORD.get(mode, mode)}")
-            continue
-        rho = min(max(fit.resid_lag1, 0.0), 0.9)
-        se = fit.resid_std_s * math.sqrt((1.0 + rho) / ((1.0 - rho) * m))
-        mean_r = float(np.mean(resid))
-        z = mean_r / se if se > 0 else 0.0
-        mean_e = float(np.mean(exp))
-        units.append(DriftUnit(
-            unit_key=unit, mode=mode,  # type: ignore[arg-type]
-            recent_days=m, resid_mean_pct=round(mean_r / mean_e * 100.0, 1) if mean_e > 0 else 0.0,
-            z=round(z, 2), drifting=abs(z) > DRIFT_Z,
-        ))
+        checked, why = drift_check(fits[key], rows)
+        if checked is None:
+            skipped.append(f"{UNIT_NAME.get(unit, unit).lower()} {MODE_WORD.get(mode, mode)}: {why}")
+        else:
+            units.append(checked)
 
     drifting = [u for u in units if u.drifting]
     if drifting:
@@ -292,9 +327,9 @@ def drift(session: Session, recent_days: int = 7) -> DriftReport:
     elif units:
         note = f"No drift: every checked baseline is within {DRIFT_Z:.0f} standard errors over the last {recent_days} days."
     else:
-        note = f"Nothing to check: no unit/mode in use has {MIN_DRIFT_DAYS}+ complete days in the last {recent_days} days."
-    if short:
-        note += " Too few complete recent days for: " + ", ".join(short) + "."
+        note = f"Nothing checked for drift over the last {recent_days} days."
+    if skipped:
+        note += " Not checked: " + "; ".join(skipped) + "."
     if in_sample:
         note += (" No baseline from before the window for " + ", ".join(f"{u} {m}" for u, m in in_sample)
                  + "; the active fit was used, which has already seen these days.")

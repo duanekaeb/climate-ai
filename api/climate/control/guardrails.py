@@ -284,11 +284,12 @@ def _toward(current: float, wanted: float, step: float) -> float:
 
 def _bounds(limits: HardLimits) -> tuple[float, float, float, float]:
     """(min heat, max heat, min cool, max cool) tightened onto the 0.5°F grid, inside the limits."""
+    tol = 1e-6  # float noise only: a limit 0.003°F off the grid must not round outward
     return (
-        math.ceil(limits.min_heat_f * 2 - _EPS) / 2,
-        math.floor(limits.max_heat_f * 2 + _EPS) / 2,
-        math.ceil(limits.min_cool_f * 2 - _EPS) / 2,
-        math.floor(limits.max_cool_f * 2 + _EPS) / 2,
+        math.ceil(limits.min_heat_f * 2 - tol) / 2,
+        math.floor(limits.max_heat_f * 2 + tol) / 2,
+        math.ceil(limits.min_cool_f * 2 - tol) / 2,
+        math.floor(limits.max_cool_f * 2 + tol) / 2,
     )
 
 

@@ -34,6 +34,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from climate.analytics import baseline as baseline_mod
+from climate.analytics.daily import heat_metrics
 from climate.api.schemas import BacktestOut, SimPoint, SimulateOut
 from climate.control.guardrails import round_setpoint
 from climate.control.policy import PolicyParams
@@ -508,7 +509,7 @@ def backtest(session: Session, params: dict, days: int = 28) -> BacktestOut:
 
 _RECENT_SQL = text(
     """
-    SELECT unit_key, sum(comp_cool1) AS cool, sum(greatest(comp_heat1, aux_heat1)) AS heat,
+    SELECT unit_key, sum(comp_cool1) AS cool, sum(comp_heat1) AS heat1, sum(aux_heat1) AS aux1,
            avg(cool_sp_f) AS csp, avg(heat_sp_f) AS hsp
     FROM runtime_5m WHERE ts >= :s AND ts < :e GROUP BY unit_key
     """
@@ -561,8 +562,9 @@ def _choose_mode(session: Session, s: rc.Series, day: date, recorded: bool, now:
         if m is not None:
             return m
     rows = session.execute(_RECENT_SQL, {"s": now - timedelta(days=3), "e": now}).all()
+    heat_is_comp = heat_metrics(session)  # each unit's stage-1 heating metric, as in the analytics
     cool = sum(float(r.cool or 0) for r in rows)
-    heat = sum(float(r.heat or 0) for r in rows)
+    heat = sum(float((r.heat1 if heat_is_comp.get(r.unit_key, False) else r.aux1) or 0) for r in rows)
     if cool > 0 or heat > 0:
         return "cool" if cool >= heat else "heat"
     t = s.t_out[np.isfinite(s.t_out)]

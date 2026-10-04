@@ -104,10 +104,13 @@ def power(
     effect_pct: Annotated[float, Query(gt=0, le=100)] = 10.0,
     alpha: Annotated[float, Query(gt=0, lt=0.5)] = 0.10,
     power: Annotated[float, Query(ge=0.5, lt=1.0)] = 0.8,
+    block_days: Annotated[int, Query(ge=1, le=analysis.MAX_BLOCK_DAYS)] = analysis.DEFAULT_BLOCK_DAYS,
     _: Role = ReaderDep,
     session: Session = SessionDep,
 ) -> PowerOut:
-    return analysis.power(session, effect_pct, alpha, power)
+    """Days per arm for an effect, sized with the same within-block design effect the analysis
+    applies to ``block_days``-day blocks."""
+    return analysis.power(session, effect_pct, alpha, power, block_days)
 
 
 @router.get("/experiments/{experiment_id}", response_model=ExperimentDetail)

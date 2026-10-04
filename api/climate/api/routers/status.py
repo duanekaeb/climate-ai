@@ -450,13 +450,17 @@ def room_history(
     return RoomHistory(room_key=room_key, hours=hours, points=points, setpoints=setpoints)
 
 
-def _expected_min(fit: baseline.BaselineFit | None, row: daily.DayRow) -> float | None:
-    """The weather-expected runtime for a COMPLETE day; None for today and other partial days
-    (a partial day's expectation depends on which hours are missing)."""
-    if fit is None or not daily.is_complete(row):
+def _expected_min(fit: baseline.BaselineFit | None, row: daily.DayRow, today: date) -> float | None:
+    """The weather-expected runtime for a COMPLETE, finished day over the slots it has data for
+    (a >= 90% day's cool_min / heat_min cover only those slots, so the full-day expectation
+    would overstate it by up to 10%); None for today (still in progress: late in the evening it
+    has 90% of its slots, but the missing ones are the evening) and other partial days (a
+    partial day's expectation depends on which hours are missing). Same rule as
+    baseline.daily_runtime."""
+    if fit is None or row.day >= today or not daily.is_complete(row):
         return None
     try:
-        e = baseline.expected_seconds(fit, row)
+        e = baseline.expected_covered_seconds(fit, row)
         return None if not math.isfinite(e) else _r(e / 60.0)
     except Exception:
         log.warning("expected runtime failed for %s %s", row.unit_key, row.day, exc_info=True)
@@ -482,7 +486,7 @@ def runtime_daily(
                 heat_min=round(r.heat_s / 60.0, 1),
                 aux_min=round(r.aux_s / 60.0, 1),
                 fan_min=round(r.fan_s / 60.0, 1),
-                expected_min=_expected_min(fits.get((r.unit_key, mode)) if mode else None, r),
+                expected_min=_expected_min(fits.get((r.unit_key, mode)) if mode else None, r, today),
                 mode=mode,
                 outdoor_mean_f=_r(r.outdoor_mean_f),
                 outdoor_max_f=_r(r.outdoor_max_f),

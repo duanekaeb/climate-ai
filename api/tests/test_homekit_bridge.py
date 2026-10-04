@@ -72,6 +72,15 @@ def test_type_constants_match_aiohomekit():
     assert hk.SERVICE_ACCESSORY_INFORMATION == ST.ACCESSORY_INFORMATION
     assert hk.SERVICE_THERMOSTAT == ST.THERMOSTAT
     assert not (hk.ALLOWED_WRITE_KEYS & hk.PUSH_KEYS)
+    assert hk.COMFORT_TARGET_TYPES == {
+        "home": (CT.VENDOR_ECOBEE_HOME_TARGET_HEAT, CT.VENDOR_ECOBEE_HOME_TARGET_COOL),
+        "sleep": (CT.VENDOR_ECOBEE_SLEEP_TARGET_HEAT, CT.VENDOR_ECOBEE_SLEEP_TARGET_COOL),
+        "away": (CT.VENDOR_ECOBEE_AWAY_TARGET_HEAT, CT.VENDOR_ECOBEE_AWAY_TARGET_COOL),
+    }
+    # the comfort targets are read-only: every one of them is write-forbidden
+    assert {t for pair in hk.COMFORT_TARGET_TYPES.values() for t in pair} == hk.FORBIDDEN_WRITE_TYPES
+    read_only = {"HEATING_COOLING_TARGET", "TEMPERATURE_HEATING_THRESHOLD", "TEMPERATURE_COOLING_THRESHOLD"}
+    assert read_only <= set(hk.CHAR_TYPES) and not (read_only & (hk.ALLOWED_WRITE_KEYS | hk.PUSH_KEYS))
 
 
 async def test_start_creates_private_state_dir_and_no_pairing_file(tmp_path):
@@ -172,7 +181,8 @@ async def test_read_polls_in_batches_of_49_one_request_at_a_time(tmp_path):
     a, b = await asyncio.gather(bridge.read("hallway"), bridge.read("hallway"))
     assert a.ok and b.ok
     gets = [payload for kind, payload in p.calls if kind == "get"]
-    readable = 8 * 12 + 8  # 8 readable per sensor and on the thermostat (write-only ones skipped)
+    readable = 8 * 12 + 11  # 8 readable per sensor, 11 on the thermostat (write-only ones and the
+    # comfort targets, read only before a climate hold, are skipped)
     assert all(len(g) <= 49 for g in gets)
     assert len(gets) == 2 * -(-readable // 49)
     assert sum(len(g) for g in gets) == 2 * readable
@@ -339,6 +349,106 @@ async def test_never_writes_home_sleep_away_targets(tmp_path):
     with pytest.raises(hk.HomekitWriteForbidden):
         await bridge._put(ent, [(BIG_AID, dev.iids[(BIG_AID, "TEMPERATURE_CURRENT")], 21.0)])
     assert p.calls == []
+
+
+async def test_read_comfort_targets_is_one_get_and_never_a_put(tmp_path):
+    bridge, ctl, dev, _ = await loaded(tmp_path)
+    p = pairing(ctl)
+    p.calls.clear()
+    targets = await bridge.read_comfort_targets("hallway")
+    assert targets == {"home": {"heat_f": 68.0, "cool_f": 76.0}, "sleep": {"heat_f": 67.0, "cool_f": 74.0},
+                       "away": {"heat_f": 62.0, "cool_f": 80.0}}
+    assert [kind for kind, _ in p.calls] == ["get"]
+    assert {dev.types[k] for k in p.calls[0][1]} == hk.FORBIDDEN_WRITE_TYPES
+    assert dev.writes == []
+    # one the thermostat does not answer for stays unknown
+    p.missing = {dev.k(1, "05B97374-6DC0-439B-A0FA-CA33F612D425")}  # sleep heat
+    assert (await bridge.read_comfort_targets("hallway"))["sleep"] == {"heat_f": None, "cool_f": 74.0}
+    p.fail_next = [disconnected()]
+    with pytest.raises(hk.HomekitError):
+        await bridge.read_comfort_targets("hallway")
+
+
+# --- the HomeKit fallback snapshot (pure) ---------------------------------------------
+
+
+SNAP_NOW = datetime(2026, 10, 4, 20, 0, tzinfo=UTC)  # 15:00 in Chicago
+AID_MAP = {1: "main.hallway_tstat", BIG_AID: "main.kitchen"}
+
+
+def tstat_values(**over) -> dict:
+    vals = {
+        "TEMPERATURE_CURRENT": 22.0, "RELATIVE_HUMIDITY_CURRENT": 45.0, "HEATING_COOLING_CURRENT": 2,
+        "HEATING_COOLING_TARGET": 3, "TEMPERATURE_HEATING_THRESHOLD": 20.0, "TEMPERATURE_COOLING_THRESHOLD": 24.4,
+        "VENDOR_ECOBEE_CURRENT_MODE": 0, "VENDOR_ECOBEE_TIMESTAMP": "2026-10-04T22:00:00-05:00R",
+        "OCCUPANCY_DETECTED": 1,
+    }
+    vals.update(over)
+    return {1: vals, BIG_AID: {"TEMPERATURE_CURRENT": 21.5, "OCCUPANCY_DETECTED": 0, "STATUS_ACTIVE": True}}
+
+
+def cloud_snapshot(hold=None):
+    return hk.UnitSnapshot(
+        unit_key="main", ts=SNAP_NOW - timedelta(minutes=20), source="ecobee", name="Hallway", model="aresSmart",
+        hvac_mode="cool", heat_sp_f=68.0, cool_sp_f=75.0, climate_ref="home", hold=hold, outdoor_temp_f=84.0,
+        sensor_sets={"home": ["main.hallway_tstat"]},
+        settings={"heatCoolMinDelta": 4.0, "hasHeatPump": False, "program_heat_f": 68.0, "program_cool_f": 76.0},
+    )
+
+
+def test_homekit_snapshot_reads_the_thermostat_and_carries_only_configuration():
+    snap = hk.snapshot_from_values("main", tstat_values(), AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot())
+    assert (snap.source, snap.ts, snap.connected, snap.revision) == ("homekit", SNAP_NOW, True, None)
+    assert (snap.zone_temp_f, snap.zone_humidity) == (71.6, 45.0)
+    assert (snap.hvac_mode, snap.heat_sp_f, snap.cool_sp_f) == ("auto", 68.0, 76.0)
+    assert snap.equipment_running == ["compCool1"] and snap.climate_ref == "home" and snap.hold is None
+    assert {r.sensor_key: r.temp_f for r in snap.sensors} == {"main.hallway_tstat": 71.6, "main.kitchen": 70.7}
+    assert (snap.name, snap.model, snap.sensor_sets) == ("Hallway", "aresSmart", {"home": ["main.hallway_tstat"]})
+    assert snap.settings == {"heatCoolMinDelta": 4.0, "hasHeatPump": False}  # no stale program setpoints
+    assert snap.outdoor_temp_f is None  # not read over HomeKit: never invented
+    heating = hk.snapshot_from_values("main", tstat_values(HEATING_COOLING_CURRENT=1, HEATING_COOLING_TARGET=None),
+                                      AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot())
+    assert heating.equipment_running == ["auxHeat1"] and heating.hvac_mode == "cool"  # mode kept from the cloud
+    bare = hk.snapshot_from_values("main", {1: {"TEMPERATURE_CURRENT": 22.0}}, AID_MAP, SNAP_NOW, TZ)
+    assert (bare.hvac_mode, bare.climate_ref, bare.hold, bare.equipment_running) == ("off", None, None, [])
+
+
+def test_homekit_snapshot_hold_rules():
+    until = SNAP_NOW + timedelta(minutes=90)
+    stamp = hk.format_hold_end(until, TZ, "R")
+    # 1. our verified climate hold, shown by CURRENT_MODE and TIMESTAMP
+    ours = hk.snapshot_from_values("main", tstat_values(VENDOR_ECOBEE_CURRENT_MODE=2, VENDOR_ECOBEE_TIMESTAMP=stamp),
+                                   AID_MAP, SNAP_NOW, TZ, our_hold=("away", until))
+    assert ours.hold is not None
+    assert (ours.hold.kind, ours.hold.climate_ref, ours.hold.end, ours.hold.set_by_us) == ("climate", "away", until, True)
+    # ...but not when the thermostat shows another climate or another end time
+    for over in ({"VENDOR_ECOBEE_CURRENT_MODE": 0, "VENDOR_ECOBEE_TIMESTAMP": stamp},
+                 {"VENDOR_ECOBEE_CURRENT_MODE": 2, "VENDOR_ECOBEE_TIMESTAMP": "2026-10-04T22:00:00-05:00R"}):
+        other = hk.snapshot_from_values("main", tstat_values(**over), AID_MAP, SNAP_NOW, TZ, our_hold=("away", until))
+        assert other.hold is None
+    # 2. the cloud's record of OUR temperature hold is carried while the thermostat still shows it
+    cloud_hold = hk.HoldInfo(kind="temperature", heat_f=68.0, cool_f=76.0, end=until, hold_type="holdHours",
+                             set_by_us=True)
+    temp = tstat_values(VENDOR_ECOBEE_CURRENT_MODE=3, VENDOR_ECOBEE_TIMESTAMP=stamp)
+    carried = hk.snapshot_from_values("main", temp, AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot(cloud_hold))
+    assert carried.hold == cloud_hold
+    # 3. ...changed by hand (other setpoints): a temperature hold that is NOT ours
+    moved = tstat_values(VENDOR_ECOBEE_CURRENT_MODE=3, VENDOR_ECOBEE_TIMESTAMP=stamp,
+                         TEMPERATURE_COOLING_THRESHOLD=22.2)
+    manual = hk.snapshot_from_values("main", moved, AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot(cloud_hold))
+    assert manual.hold is not None and manual.hold.set_by_us is False
+    assert (manual.hold.kind, manual.hold.heat_f, manual.hold.cool_f, manual.hold.end) == ("temperature", 68.0, 72.0, until)
+    # 4. a cloud hold that ended, or a mode that no longer shows it: no hold
+    ended = cloud_hold.model_copy(update={"end": SNAP_NOW - timedelta(minutes=1)})
+    assert hk.snapshot_from_values("main", tstat_values(), AID_MAP, SNAP_NOW, TZ,
+                                   previous=cloud_snapshot(ended)).hold is None
+    assert hk.snapshot_from_values("main", tstat_values(), AID_MAP, SNAP_NOW, TZ,
+                                   previous=cloud_snapshot(cloud_hold)).hold is None
+    # a vacation with a known end is kept until that end, whatever the mode shows
+    vac = hk.HoldInfo(kind="temperature", heat_f=62.0, cool_f=82.0, end=SNAP_NOW + timedelta(days=2),
+                      hold_type="vacation")
+    kept = hk.snapshot_from_values("main", tstat_values(), AID_MAP, SNAP_NOW, TZ, previous=cloud_snapshot(vac))
+    assert kept.hold is not None and kept.hold.hold_type == "vacation" and kept.hold.set_by_us is False
 
 
 async def test_clear_hold_reads_back(tmp_path):

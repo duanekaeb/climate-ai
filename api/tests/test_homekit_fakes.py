@@ -32,6 +32,17 @@ from aiohomekit.exceptions import (
 from climate.sources.homekit import CHAR_TYPES, FORBIDDEN_WRITE_TYPES
 
 HOME_TARGET_HEAT = "E4489BBC-5227-4569-93E5-B345E3E5508F"
+HOME_TARGET_COOL = "7D381BAA-20F9-40E5-9BE9-AEB92D4BECEF"
+SLEEP_TARGET_HEAT = "05B97374-6DC0-439B-A0FA-CA33F612D425"
+SLEEP_TARGET_COOL = "A251F6E7-AC46-4190-9C5D-3D06277BDF9F"
+AWAY_TARGET_HEAT = "73AAB542-892A-4439-879A-D2A883724B69"
+AWAY_TARGET_COOL = "5DA985F0-898A-4850-B987-B76C6C78D670"
+# comfort targets in °C: home 68/76 °F, sleep 67/74 °F, away 62/80 °F
+COMFORT_TARGETS_C = {
+    "home": (HOME_TARGET_HEAT, 20.0, HOME_TARGET_COOL, 24.4),
+    "sleep": (SLEEP_TARGET_HEAT, 19.4, SLEEP_TARGET_COOL, 23.3),
+    "away": (AWAY_TARGET_HEAT, 16.7, AWAY_TARGET_COOL, 26.7),
+}
 SVC_INFO = "3E"  # short form on purpose: the adapter must normalize it
 SVC_THERMOSTAT = "0000004A-0000-1000-8000-0026BB765291"
 SVC_TEMP = "0000008A-0000-1000-8000-0026BB765291"
@@ -86,7 +97,11 @@ class FakeDevice:
                 ("VENDOR_ECOBEE_SET_HOLD_SCHEDULE", [PW], None),
                 ("VENDOR_ECOBEE_CLEAR_HOLD", [PW], None),
                 ("VENDOR_ECOBEE_EQUIPMENT_RUNNING", vend, 2),
-                (HOME_TARGET_HEAT, [PR, PW], 20.0),
+                ("HEATING_COOLING_TARGET", [PR, PW, EV], 3),
+                ("TEMPERATURE_HEATING_THRESHOLD", [PR, PW, EV], 20.0),
+                ("TEMPERATURE_COOLING_THRESHOLD", [PR, PW, EV], 24.4),
+                *[(t, [PR, PW], v) for heat_t, heat_c, cool_t, cool_c in COMFORT_TARGETS_C.values()
+                  for t, v in ((heat_t, heat_c), (cool_t, cool_c))],
             ]),
             (SVC_OCC, [
                 ("OCCUPANCY_DETECTED", [PR, EV], 1),
@@ -137,6 +152,10 @@ class FakeDevice:
         ctype = self.types[(aid, iid)]
         if ctype == CHAR_TYPES["VENDOR_ECOBEE_SET_HOLD_SCHEDULE"]:
             self.set(1, "VENDOR_ECOBEE_CURRENT_MODE", value)
+            # the climate's own targets become the active setpoints
+            heat_t, _h, cool_t, _c = COMFORT_TARGETS_C[["home", "sleep", "away"][value]]
+            self.set(1, "TEMPERATURE_HEATING_THRESHOLD", self.get(1, heat_t))
+            self.set(1, "TEMPERATURE_COOLING_THRESHOLD", self.get(1, cool_t))
         elif ctype == CHAR_TYPES["VENDOR_ECOBEE_CLEAR_HOLD"]:
             if value:
                 self.set(1, "VENDOR_ECOBEE_CURRENT_MODE", 0)
@@ -362,7 +381,11 @@ def disconnected() -> AccessoryDisconnectedError:
 
 
 __all__ = [
+    "AWAY_TARGET_COOL",
+    "AWAY_TARGET_HEAT",
+    "COMFORT_TARGETS_C",
     "FORBIDDEN_WRITE_TYPES",
+    "HOME_TARGET_COOL",
     "HOME_TARGET_HEAT",
     "SECRET_LTSK",
     "FakeController",

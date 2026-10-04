@@ -19,6 +19,8 @@ Everything heavy is aggregated in SQL (GROUP BY hour) and shaped with numpy, so 
 from __future__ import annotations
 
 import math
+import threading
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -180,9 +182,29 @@ _HEAT_SQL = text(
 )
 
 
+# The units rows as they stand (equipment and row version): a change to any unit, such as its
+# equipment being set in setup, invalidates the cached answer at once.
+_UNITS_VERSION_SQL = text("SELECT key, equipment->>'heating', xmin::text FROM units ORDER BY sort, key")
+HEAT_METRICS_TTL_S = 600.0
+_heat_cache: dict[str, tuple[tuple, float, dict[str, bool]]] = {}
+_heat_lock = threading.Lock()
+
+
 def heat_metrics(session: Session) -> dict[str, bool]:
     """unit_key -> True when the heating metric is comp_heat1 (heat pump), False when it is
-    aux_heat1 (furnace). Unknown equipment: compressor heat if the unit ever reported it."""
+    aux_heat1 (furnace). Unknown equipment: compressor heat if the unit ever reported it.
+
+    Cached per process for ``HEAT_METRICS_TTL_S`` (10 minutes) per database, keyed on the units
+    rows' equipment and row versions: only the "ever reported compressor heat" scan of
+    runtime_5m (needed while a unit's equipment is unknown) is reused, so a unit that starts
+    reporting compressor heat switches metric within 10 minutes."""
+    units = tuple(tuple(r) for r in session.execute(_UNITS_VERSION_SQL))
+    db = str(session.get_bind().url)
+    now = time.monotonic()
+    with _heat_lock:
+        hit = _heat_cache.get(db)
+    if hit is not None and hit[0] == units and now - hit[1] < HEAT_METRICS_TTL_S:
+        return dict(hit[2])
     out: dict[str, bool] = {}
     for key, heating, has_comp in session.execute(_HEAT_SQL):
         if heating == "heat_pump":
@@ -191,7 +213,14 @@ def heat_metrics(session: Session) -> dict[str, bool]:
             out[key] = False
         else:
             out[key] = bool(has_comp)
+    with _heat_lock:
+        _heat_cache[db] = (units, now, dict(out))
     return out
+
+
+def clear_heat_metrics_cache() -> None:
+    with _heat_lock:
+        _heat_cache.clear()
 
 
 def unit_weights(session: Session) -> dict[str, float]:

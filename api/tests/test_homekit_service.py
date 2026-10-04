@@ -21,10 +21,11 @@ from climate.collector import homekit_service as svc_mod
 from climate.collector import ingest
 from climate.collector.homekit_service import HomekitService, save_pairing, secret_key
 from climate.sources import homekit as hk
+from climate.sources.base import UnitSnapshot
 from climate.store import secrets
 from climate.store.app_settings import SourceSettings, get_heartbeat, put_setting
 from climate.store.db import session_scope
-from climate.store.orm import ControlAction, HomekitDevice, SecretRow, Sensor, Unit
+from climate.store.orm import ControlAction, HomekitDevice, LiveUnit, SecretRow, Sensor, Unit
 from tests.test_homekit_fakes import SECRET_LTSK, FakeController, FakeDevice, disconnected
 
 BIG_AID = 4295608971
@@ -422,3 +423,177 @@ async def test_run_executes_steps_and_beats(env):
     db.expire_all()
     hb = get_heartbeat(db, "homekit")
     assert hb is not None and hb.ok and hb.detail["enabled"] is True and hb.detail["paired"] == 0
+
+
+# --- review findings: resume alias, stuck rows, fallback snapshot, comfort limits -----
+
+
+async def test_queued_resume_program_is_an_alias_of_clear_hold(env):
+    """The controller queues {"kind": "resume_program"}; older rows carry that kind too."""
+    db, dev = env["db"], env["dev"]
+    await paired_and_ready(env)
+    aid = queue(db, {"kind": "resume_program", "unit_key": "main"})
+    await env["svc"].execute_actions()
+    row = action(db, aid)
+    assert row.status == "verified", row.error
+    assert dev.writes == [(1, dev.iids[(1, "VENDOR_ECOBEE_CLEAR_HOLD")], True)]
+
+
+def _sent_row(db, ts: datetime, unit: str = "main") -> int:
+    row = ControlAction(ts=ts, unit_key=unit, actor="controller", mode="act", channel="homekit", action="set_hold",
+                        status="sent", reason="claimed before a crash", request={"kind": "climate_hold", "climate": "home"})
+    db.add(row)
+    db.commit()
+    return row.id
+
+
+async def test_stuck_sent_rows_expire_so_the_unit_is_not_blocked(env):
+    """Finding 3: a row a crashed run left 'sent' must not block the unit forever."""
+    db, clock, dev = env["db"], env["clock"], env["dev"]
+    await paired_and_ready(env)
+    stuck = _sent_row(db, clock() - timedelta(days=2))
+    recent = _sent_row(db, clock() - timedelta(minutes=5), unit="up")
+    await env["svc"].execute_actions()
+    row = action(db, stuck)
+    assert row.status == "failed" and row.completed_at is not None
+    assert "expired" in row.error and "unknown" in row.error
+    assert action(db, recent).status == "sent"  # younger than 15 minutes: left alone
+    db.expire_all()
+    pending = db.execute(select(ControlAction.id).where(
+        ControlAction.unit_key == "main", ControlAction.channel == "homekit",
+        ControlAction.status.in_(("queued", "sent")))).all()
+    assert pending == []  # what the controller checks before queueing a new HomeKit write
+    assert dev.writes == []  # expiring never writes to the thermostat
+
+
+async def test_stuck_sent_rows_expire_even_while_homekit_is_disabled(env):
+    db, clock, svc = env["db"], env["clock"], env["svc"]
+    put_setting(db, "source", SourceSettings(homekit_enabled=False))
+    stuck = _sent_row(db, clock() - timedelta(hours=1))
+    svc.disabled_recheck_s = 0.01
+    stop = asyncio.Event()
+    task = asyncio.create_task(svc.run(stop))
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if action(db, stuck).status != "sent":
+            break
+    stop.set()
+    await asyncio.wait_for(task, 5)
+    assert action(db, stuck).status == "failed"
+
+
+def _live(db, unit: str = "main") -> LiveUnit | None:
+    db.expire_all()
+    return db.get(LiveUnit, unit)
+
+
+def _put_live(db, ts: datetime, source: str = "ecobee", unit: str = "main", **kw) -> None:
+    snap = UnitSnapshot(unit_key=unit, ts=ts, source=source, name="Hallway", hvac_mode="cool", heat_sp_f=68.0,
+                        cool_sp_f=75.0, climate_ref="home", settings={"hasHeatPump": False, "program_heat_f": 68.0},
+                        **kw)
+    db.merge(LiveUnit(unit_key=unit, ts=ts, source=source, revision="1|2", snapshot=snap.model_dump(mode="json")))
+    db.commit()
+
+
+async def test_stale_cloud_snapshot_is_replaced_by_a_homekit_snapshot(env):
+    """Finding 3: with the cloud down the live snapshot goes stale and the controller blocks;
+    the HomeKit service keeps it fresh from the thermostat."""
+    db, clock = env["db"], env["clock"]
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True))
+    _put_live(db, clock() - timedelta(minutes=11))
+    await paired_and_ready(env)
+    await env["svc"].poll_due()
+    row = _live(db)
+    assert (row.source, row.ts, row.revision) == ("homekit", clock(), None)
+    snap = UnitSnapshot.model_validate(row.snapshot)
+    assert (snap.source, snap.connected, snap.zone_temp_f, snap.zone_humidity) == ("homekit", True, 71.6, 45.0)
+    assert (snap.hvac_mode, snap.heat_sp_f, snap.cool_sp_f, snap.climate_ref) == ("auto", 68.0, 76.0, "home")
+    assert snap.equipment_running == ["compCool1"] and snap.hold is None
+    assert {r.sensor_key for r in snap.sensors} == {"main.hallway_tstat", "main.kitchen"}
+    assert snap.name == "Hallway" and "program_heat_f" not in snap.settings
+    # while the cloud stays down, every poll refreshes it
+    env["clock"].advance(61)
+    env["dev"].set(1, "TEMPERATURE_CURRENT", 23.0)
+    await env["svc"].poll_due()
+    row = _live(db)
+    assert row.ts == clock() and UnitSnapshot.model_validate(row.snapshot).zone_temp_f == 73.4
+
+
+async def test_a_current_or_newer_cloud_snapshot_is_never_overwritten(env):
+    db, clock = env["db"], env["clock"]
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True))
+    _put_live(db, clock() - timedelta(minutes=9))  # the cloud is current
+    _put_live(db, clock() + timedelta(seconds=30), unit="up")  # newer than this poll
+    await paired_and_ready(env)
+    await env["svc"].poll_due()
+    assert _live(db).source == "ecobee"
+    with session_scope() as s:  # direct: a newer row of any source is left alone
+        assert not svc_mod.write_homekit_snapshot(s, "up", {1: {"TEMPERATURE_CURRENT": 20.0}}, {}, clock())
+    assert _live(db, "up").source == "ecobee"
+    # simulator mode: the simulator owns live_units, HomeKit never writes there
+    put_setting(db, "source", SourceSettings(kind="simulator", homekit_enabled=True))
+    db.commit()
+    with session_scope() as s:
+        assert not svc_mod.write_homekit_snapshot(s, "main", {1: {"TEMPERATURE_CURRENT": 20.0}}, {},
+                                                  clock() + timedelta(hours=1))
+
+
+async def test_our_homekit_climate_hold_shows_as_ours_in_the_fallback_snapshot(env):
+    db, clock = env["db"], env["clock"]
+    put_setting(db, "source", SourceSettings(kind="ecobee", homekit_enabled=True))
+    _put_live(db, clock() - timedelta(minutes=30))
+    await paired_and_ready(env)
+    until = clock() + timedelta(minutes=90)
+    aid = queue(db, {"kind": "climate_hold", "climate": "away", "until": until.isoformat()})
+    await env["svc"].execute_actions()
+    assert action(db, aid).status == "verified"
+    await env["svc"].poll_due()
+    snap = UnitSnapshot.model_validate(_live(db).snapshot)
+    assert snap.hold is not None
+    assert (snap.hold.kind, snap.hold.climate_ref, snap.hold.set_by_us) == ("climate", "away", True)
+    assert snap.hold.end == until and snap.climate_ref == "away"
+    assert (snap.heat_sp_f, snap.cool_sp_f) == (62.0, 80.0)  # the away targets now hold
+
+
+@pytest.mark.parametrize(("target", "celsius", "needle"), [
+    ("AWAY_HEAT", 10.0, "heat 50°F is outside 60-74°F"),
+    ("AWAY_COOL", 32.0, "cool 89.5°F is outside 70-84°F"),
+    ("AWAY_COOL", 18.0, "below the 3°F deadband"),
+])
+async def test_climate_hold_outside_the_hard_limits_is_refused(env, target, celsius, needle):
+    """Finding 3: a climate hold holds whatever that comfort setting's targets are; they are
+    read (never written) and checked against the hard limits first."""
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    uuid = {"AWAY_HEAT": "73AAB542-892A-4439-879A-D2A883724B69",
+            "AWAY_COOL": "5DA985F0-898A-4850-B987-B76C6C78D670"}[target]
+    dev.set(1, uuid, celsius)
+    aid = queue(db, {"kind": "climate_hold", "climate": "away", "until": (clock() + timedelta(hours=1)).isoformat()})
+    await env["svc"].execute_actions()
+    row = action(db, aid)
+    assert row.status == "failed" and needle in (row.error or ""), row.error
+    assert "climate_targets" in row.before and row.readback is None
+    assert dev.writes == []
+
+
+async def test_climate_hold_with_unreadable_targets_is_refused(env):
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    env["ctl"].aliases["hallway"].missing = {dev.k(1, "5DA985F0-898A-4850-B987-B76C6C78D670")}
+    aid = queue(db, {"kind": "climate_hold", "climate": "away", "until": (clock() + timedelta(hours=1)).isoformat()})
+    await env["svc"].execute_actions()
+    row = action(db, aid)
+    assert row.status == "failed" and "could not read the away comfort setting" in (row.error or "")
+    assert dev.writes == []
+
+
+async def test_climate_hold_within_limits_logs_the_targets_it_holds(env):
+    db, dev, clock = env["db"], env["dev"], env["clock"]
+    await paired_and_ready(env)
+    aid = queue(db, {"kind": "climate_hold", "climate": "sleep", "until": (clock() + timedelta(hours=1)).isoformat()})
+    await env["svc"].execute_actions()
+    row = action(db, aid)
+    assert row.status == "verified", row.error
+    assert row.before["climate_targets"] == {"sleep": {"heat_f": 67.0, "cool_f": 74.0}}
+    written = {dev.types[(a, i)] for a, i, _ in dev.writes}
+    assert not (written & hk.FORBIDDEN_WRITE_TYPES)

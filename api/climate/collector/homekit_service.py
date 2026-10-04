@@ -367,13 +367,125 @@ def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) ->
     return jobs
 
 
+def expire_stuck_actions(session: Session, now: datetime, max_age: timedelta = SENT_MAX_AGE) -> int:
+    """Fail channel='homekit' rows still 'sent' more than ``max_age`` after they were queued.
+
+    A row is 'sent' only while this service executes it, which takes seconds; an old one was
+    claimed by a run that crashed or restarted mid-write. Left alone it would block the unit
+    forever (the controller queues nothing new while a HomeKit row is queued or sent)."""
+    rows = (
+        session.execute(
+            select(ControlAction)
+            .where(ControlAction.channel == "homekit", ControlAction.status == "sent",
+                   ControlAction.ts < now - max_age)
+            .with_for_update(skip_locked=True)
+        )
+        .scalars()
+        .all()
+    )
+    for r in rows:
+        r.status = "failed"
+        r.error = (
+            f"expired: claimed by the HomeKit service but not finished within {int(max_age.total_seconds() // 60)} "
+            "minutes (the service probably restarted mid-write); whether it reached the thermostat is unknown"
+        )
+        r.completed_at = now
+        events.publish(session, "action", r.id)
+    if rows:
+        log.warning("homekit: %d stuck 'sent' action(s) marked failed", len(rows))
+    return len(rows)
+
+
+def _our_climate_hold(session: Session, unit_key: str, now: datetime) -> tuple[str, datetime] | None:
+    """(climate, until) of our newest verified HomeKit climate hold, unless a later verified
+    HomeKit resume cleared it or it has ended."""
+    row = session.execute(
+        select(ControlAction)
+        .where(ControlAction.unit_key == unit_key, ControlAction.channel == "homekit",
+               ControlAction.status == "verified", ControlAction.action.in_(("set_hold", "resume_program")))
+        .order_by(ControlAction.ts.desc(), ControlAction.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    req = (row.request or {}) if row is not None else {}
+    if req.get("kind") != "climate_hold" or req.get("climate") not in CLIMATE_CODES:
+        return None
+    until = _parse_until(req.get("until"))
+    return (str(req["climate"]), until) if until is not None and until > now else None
+
+
+def write_homekit_snapshot(
+    session: Session,
+    unit_key: str,
+    values: dict[int, dict[str, Any]],
+    aid_map: dict[int, str],
+    now: datetime,
+    stale_after: timedelta = CLOUD_STALE_AFTER,
+) -> bool:
+    """Write a HomeKit-derived snapshot into live_units when the unit's live snapshot is older
+    than ``stale_after`` (the ecobee cloud is down) or is already HomeKit's. Only in ecobee
+    source mode. Never overwrites a NEWER snapshot or a current cloud one: the row is locked and
+    the upsert re-checks both in SQL. Returns True when written."""
+    if get_setting(session, "source", SourceSettings).kind != "ecobee":
+        return False
+    if session.get(Unit, unit_key) is None:
+        return False
+    row = session.execute(select(LiveUnit).where(LiveUnit.unit_key == unit_key).with_for_update()).scalar_one_or_none()
+    previous: UnitSnapshot | None = None
+    if row is not None:
+        if row.ts > now:
+            return False  # a newer snapshot is already there
+        if row.source != "homekit" and now - row.ts <= stale_after:
+            return False  # the cloud is current
+        try:
+            previous = UnitSnapshot.model_validate(row.snapshot)
+        except ValidationError:
+            previous = None
+    tz = get_setting(session, "location", LocationSettings).tz
+    snap = snapshot_from_values(unit_key, values, aid_map, now, tz, previous=previous,
+                                our_hold=_our_climate_hold(session, unit_key, now))
+    stmt = insert(LiveUnit).values(unit_key=unit_key, ts=now, source="homekit", revision=None,
+                                   snapshot=snap.model_dump(mode="json"))
+    ex = stmt.excluded
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[LiveUnit.unit_key],
+        set_={"ts": ex.ts, "source": ex.source, "revision": ex.revision, "snapshot": ex.snapshot},
+        where=(LiveUnit.ts <= ex.ts) & or_(LiveUnit.source == "homekit", LiveUnit.ts < now - stale_after),
+    )
+    written = session.execute(stmt.execution_options(preserve_rowcount=True)).rowcount > 0  # type: ignore[attr-defined]
+    if written:
+        events.publish(session, "status")
+    return written
+
+
+def comfort_violation(climate: str, targets: dict[str, float | None], limits: HardLimits) -> str | None:
+    """Why a climate hold of ``climate`` must not be written, judged on that comfort setting's
+    own heat/cool targets (read from the thermostat) against the hard limits; None when fine."""
+    heat, cool = targets.get("heat_f"), targets.get("cool_f")
+    if heat is None or cool is None:
+        return (f"could not read the {climate} comfort setting's heat/cool targets from the thermostat, so a "
+                f"{climate} hold would hold unknown temperatures; not written")
+    problems: list[str] = []
+    if not limits.min_heat_f <= heat <= limits.max_heat_f:
+        problems.append(f"heat {heat:g}°F is outside {limits.min_heat_f:g}-{limits.max_heat_f:g}°F")
+    if not limits.min_cool_f <= cool <= limits.max_cool_f:
+        problems.append(f"cool {cool:g}°F is outside {limits.min_cool_f:g}-{limits.max_cool_f:g}°F")
+    if cool - heat < limits.min_deadband_f:
+        problems.append(f"cool - heat = {cool - heat:g}°F is below the {limits.min_deadband_f:g}°F deadband")
+    if not problems:
+        return None
+    return (f"the {climate} comfort setting holds {heat:g}/{cool:g}°F, outside the hard limits "
+            f"({'; '.join(problems)}); not written")
+
+
 def finish_action(session: Session, action_id: int, result: WriteResult, now: datetime) -> None:
     r = session.get(ControlAction, action_id)
     if r is None:
         return
     r.status = "verified" if result.ok else "failed"
-    if r.before is None and result.before:
-        r.before = dict(result.before)
+    if result.before:
+        # what the thermostat showed before the write (timestamp, current mode, the comfort
+        # targets a climate hold holds) next to the queuer's own 'before' (which wins on a clash)
+        r.before = {**dict(result.before), **(r.before or {})}
     r.readback = None if result.readback is None else dict(result.readback)
     r.readback_ok = None if result.readback is None else bool(result.ok)
     r.error = result.error
@@ -439,6 +551,8 @@ class HomekitService:
         disabled_recheck_seconds: float = 60.0,
         code_timeout_seconds: float = 300.0,
         action_max_age: timedelta = timedelta(minutes=10),
+        sent_max_age: timedelta = SENT_MAX_AGE,
+        cloud_stale_after: timedelta = CLOUD_STALE_AFTER,
     ) -> None:
         self.bridge = bridge if bridge is not None else HomekitBridge()
         self.bridge.on_event = self._on_event
@@ -451,6 +565,8 @@ class HomekitService:
         self.disabled_recheck_s = disabled_recheck_seconds
         self.code_timeout_s = code_timeout_seconds
         self.action_max_age = action_max_age
+        self.sent_max_age = sent_max_age
+        self.cloud_stale_after = cloud_stale_after
         self._states: dict[str, _AliasState] = {}
         self._event_aids: dict[str, set[int]] = {}
         self._reconnected: set[str] = set()
@@ -500,6 +616,7 @@ class HomekitService:
                     if self.bridge.started:
                         log.info("HomeKit is disabled in settings; stopping the controller")
                         await self._stop_bridge()
+                    await self._expire_stuck()
                     await self._beat(True, enabled=False)
                     await _sleep(stop, self.disabled_recheck_s)
                     continue
@@ -752,6 +869,18 @@ class HomekitService:
             readings = readings_from_values(res.values, st.aid_map, now) if res.ok else []
             await self._db(record_poll, st.device_id, res, readings, now)
             await self._repair_alert(st, res)
+            if res.ok and st.unit_key:
+                await self._fallback_snapshot(st, res, now)
+
+    async def _fallback_snapshot(self, st: _AliasState, res: ReadResult, now: datetime) -> None:
+        """Keep the unit's live snapshot fresh from HomeKit while the cloud's is stale."""
+        try:
+            if await self._db(write_homekit_snapshot, st.unit_key, res.values, st.aid_map, now,
+                              self.cloud_stale_after):
+                log.info("homekit %r: cloud snapshot of unit %s is stale; wrote a HomeKit snapshot",
+                         st.alias, st.unit_key)
+        except Exception as exc:  # noqa: BLE001 - one unit's snapshot never stops the poll
+            log.warning("homekit %r: HomeKit snapshot for unit %s failed: %s", st.alias, st.unit_key, _short(exc))
 
     async def _repair_alert(self, st: _AliasState, res: ReadResult) -> None:
         """Best effort: alert once when the device forgets our pairing; resolve on recovery."""
@@ -792,7 +921,16 @@ class HomekitService:
         matches = [st.alias for st in candidates if st.unit_key == unit_key]
         return matches[0] if len(matches) == 1 else None
 
+    async def _expire_stuck(self) -> None:
+        try:
+            await self._db(expire_stuck_actions, self.clock(), self.sent_max_age)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("homekit: could not expire stuck actions: %s", _short(exc))
+
     async def execute_actions(self) -> None:
+        # No job of this process is in flight here (jobs run inside this call), so any old
+        # 'sent' row was left by an earlier run.
+        await self._db(expire_stuck_actions, self.clock(), self.sent_max_age)
         jobs = await self._db(claim_queued_actions, self.clock(), self.action_max_age)
         if not jobs:
             return
@@ -826,8 +964,21 @@ class HomekitService:
             lo, hi = hold_window(self.clock(), limits.max_hold_hours)
             if until is None or not (lo <= until <= hi):
                 return fail(f"hold end {job.request.get('until')!r} must be 5 min to {limits.max_hold_hours} h ahead")
-            return await self.bridge.set_climate_hold(alias, climate, until, tz)
-        if kind == "clear_hold":
+            # A climate hold holds whatever that comfort setting's targets are: READ them (never
+            # written) and refuse a hold the hard limits would not allow as a temperature hold.
+            try:
+                targets = await self.bridge.read_comfort_targets(alias)
+            except HomekitError as exc:
+                return fail(f"could not read the comfort settings before the hold ({exc}); not written")
+            chosen = targets.get(str(climate), {})
+            why = comfort_violation(str(climate), chosen, limits)
+            if why is not None:
+                return WriteResult(ok=False, channel="homekit", request=job.request, error=why,
+                                   before={"climate_targets": {str(climate): chosen}})
+            result = await self.bridge.set_climate_hold(alias, climate, until, tz)
+            result.before = {**result.before, "climate_targets": {str(climate): chosen}}
+            return result
+        if kind in CLEAR_HOLD_KINDS:
             return await self.bridge.clear_hold(alias)
         return fail(f"unknown HomeKit request kind {kind!r}")
 

@@ -2,7 +2,8 @@
 
 Owns the ThermostatSource (simulator or ecobee) and runs, with independent cadences:
 poll (summary/detail), runtime pulls, weather sync (hourly), controller tick (every 3 min),
-queued owner actions (every 10 s), change gates (every 15 min), nightly jobs (baselines,
+queued owner actions (every 10 s), ecobee settings (Smart Away / Follow Me kept off: at start,
+then once a local day), change gates (every 15 min), nightly jobs (baselines,
 room offsets, RC fit, experiment days, daily report, agent schedule), the jobs table (refit /
 backtest / backfill requests), anomaly triggers for Claude (drift, sensor offline, upstairs
 maxed out), and a heartbeat. Switching app_settings['source'] swaps the source live.
@@ -47,6 +48,7 @@ from climate.config import Settings, get_settings
 from climate.sources.base import ThermostatSource
 from climate.store.app_settings import (
     AgentSettings,
+    ControlSettings,
     LocationSettings,
     SourceSettings,
     get_raw,
@@ -66,6 +68,8 @@ WEATHER_S = 3600
 TICK_S = 180
 SIM_TICK_MIN_S = 60
 EXECUTE_S = 10
+SETTINGS_S = 15 * 60  # how often the settings loop looks; it writes at start and once a day
+SETTINGS_RETRY_S = 3600  # after a failed settings write
 CHANGES_S = 15 * 60
 DAILY_CHECK_S = 60
 SCHEDULE_S = 60
@@ -129,8 +133,10 @@ class LockedSource:
         async with self._lock:
             return await self._inner.set_hold(req)
 
-    async def resume_program(self, unit_key: str, reason: str) -> Any:
+    async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> Any:
         async with self._lock:
+            if force:  # an owner's explicit resume; the controller never forces
+                return await self._inner.resume_program(unit_key, reason, force=True)
             return await self._inner.resume_program(unit_key, reason)
 
     async def health(self) -> Any:
@@ -351,6 +357,14 @@ def trigger_agent(now: datetime, events: list[dict[str, Any]]) -> list[int]:
     return sorted(set(run_ids))
 
 
+def _control_mode() -> str:
+    with session_scope() as s:
+        try:
+            return get_setting(s, "control", ControlSettings).mode
+        except Exception:  # noqa: BLE001 - unreadable settings: treat as off
+            return "off"
+
+
 def _schedule_agent(now: datetime) -> list[int]:
     with session_scope() as s:
         return agent_queue.schedule_due(s, now)
@@ -392,6 +406,10 @@ class Worker:
         self._last_build_mono: float | None = None
         self._loops: dict[str, _LoopState] = {}
         self._daily: dict[str, str] = {}
+        # (source object, local day, mode) the ecobee settings were last kept for; in memory so
+        # every worker start checks them once
+        self._settings_done: tuple[int, str, str] | None = None
+        self._settings_retry_mono: float | None = None
         self._stop = asyncio.Event()
 
     # --- lifecycle --------------------------------------------------------------------
@@ -515,6 +533,7 @@ class Worker:
             ("weather", lambda: WEATHER_S, self.weather_step),
             ("tick", self.tick_interval, self.tick_step),
             ("execute", lambda: EXECUTE_S, self.execute_step),
+            ("settings", lambda: SETTINGS_S, self.settings_step),
             ("changes", lambda: CHANGES_S, self.changes_step),
             ("agent_schedule", lambda: SCHEDULE_S, self.schedule_step),
             ("jobs", lambda: JOBS_S, self.jobs_step),
@@ -635,6 +654,35 @@ class Worker:
         from climate.control import controller
 
         await controller.execute_queued(self.source, utcnow())
+
+    async def settings_step(self) -> None:
+        """Keep Smart Away and Follow Me off (``controller.keep_settings``): at start, again once
+        a local day, when the source is rebuilt or the controller mode changes, and an hour
+        after a failed write. Sources without ``ensure_settings`` (the simulator) are skipped."""
+        src = self.source
+        if src is None or not callable(getattr(src, "ensure_settings", None)):
+            return
+        now = utcnow()
+        tz, mode = await asyncio.to_thread(_tz), await asyncio.to_thread(_control_mode)
+        key = (id(src), local_date(now, tz).isoformat(), mode)
+        if key == self._settings_done:
+            return
+        mono = time.monotonic()
+        if self._settings_retry_mono is not None and mono < self._settings_retry_mono:
+            return
+        from climate.control import controller
+
+        try:
+            result = await controller.keep_settings(src, now)
+        except Exception:
+            self._settings_retry_mono = mono + SETTINGS_RETRY_S  # don't hammer ecobee; the loop logs it
+            raise
+        if result.ok:
+            self._settings_done, self._settings_retry_mono = key, None
+        else:
+            self._settings_retry_mono = mono + SETTINGS_RETRY_S
+        if result.ids:
+            log.info("ecobee settings check (%s): control action(s) %s", result.mode, result.ids)
 
     async def changes_step(self) -> None:
         await asyncio.to_thread(_advance_changes, utcnow())

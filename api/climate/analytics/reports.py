@@ -66,7 +66,7 @@ def _unit_line(row: DayRow | None, fits: dict[tuple[str, str], BaselineFit], inv
         out["note"] = "no outdoor data"
         return out
     st = residual_stats((fits[(unit_key, m)], 1.0) for m in modes)
-    hw = st.halfwidth(1, exp) if st else 0.0
+    hw = st.day_halfwidth(exp) if st else 0.0
     out.update(expected_min=round(exp / 60.0, 1), baseline_ok=True,
                ci90_min=[round(max(exp - hw, 0.0) / 60.0, 1), round((exp + hw) / 60.0, 1)])
     return out
@@ -79,7 +79,10 @@ def build_daily_report(session: Session, day: date) -> int:
     Returns the report id.
 
     "Expected" comes from the baselines trained on the 90 days before the day (so the day
-    never grades itself) with a 90% range for a single day (ASHRAE G14 form, m = 1)."""
+    never grades itself) with a 90% prediction interval for a single day,
+    t(n - p, 0.95) * sigma_day * sqrt(1 + 1/n) (``ResidualStats.day_halfwidth``; sigma_day
+    follows the day's level when the residuals scale with runtime). The multi-day G14 form
+    is for savings periods; at m = 1 it would cover about 99% of days, not 90%."""
     tz = house_tz(session)
     t0, t1 = day_bounds_utc(day, tz)
     fits = pre_period_fits(session, day, tz)
@@ -100,7 +103,7 @@ def build_daily_report(session: Session, day: date) -> int:
         exp = sum(weights.get(u["unit_key"], 1.0) * u["expected_min"] for u in with_data)
         keys = [k for k in sorted(involved) if k in fits]
         st = residual_stats((fits[k], weights.get(k[0], 1.0)) for k in keys)
-        hw = (st.halfwidth(1, exp * 60.0) / 60.0) if st else 0.0
+        hw = (st.day_halfwidth(exp * 60.0) / 60.0) if st else 0.0
         house.update(expected_min=round(exp, 1), ci90_min=[round(max(exp - hw, 0.0), 1), round(exp + hw, 1)],
                      baseline_ok=True)
 
