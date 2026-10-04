@@ -1240,7 +1240,12 @@ class SimulatedHouse:
             outdoor_humidity=round(ctx.wx[1]),
             sensors=self._readings(u, ctx, ts),
             sensor_sets={name: [SENSOR_KEYS[i] for i in members] for name, members in SENSOR_SETS[u].items()},
-            settings=dict(SNAPSHOT_SETTINGS),
+            settings={
+                **SNAPSHOT_SETTINGS,
+                # what the schedule itself would hold now (lets the controller resume early)
+                "program_heat_f": self._bands[u][ctx.program[u]][0],
+                "program_cool_f": self._bands[u][ctx.program[u]][1],
+            },
             connected=True,
         )
 

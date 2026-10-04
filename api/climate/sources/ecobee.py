@@ -379,6 +379,12 @@ def _snapshot_from(
     if zone_t is None and extended.get("actualTemperature"):
         zone_t = P.tenths_to_f(extended["actualTemperature"][-1])
     snap_settings: dict[str, object] = dict(P.curated_settings(settings))
+    # The schedule's own setpoints for the climate in force (program.currentClimateRef stays the
+    # scheduled climate during a hold), so the controller can resume a hold of ours early.
+    prog_heat, prog_cool = P.program_setpoints(program)
+    if prog_heat is not None and prog_cool is not None:
+        snap_settings["program_heat_f"] = prog_heat
+        snap_settings["program_cool_f"] = prog_cool
     tz_name = (t.get("location") or {}).get("timeZone")
     if tz_name:
         snap_settings["timeZone"] = tz_name

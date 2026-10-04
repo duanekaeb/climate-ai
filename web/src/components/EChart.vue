@@ -26,7 +26,6 @@ const props = withDefaults(defineProps<{ option: echarts.EChartsCoreOption; heig
 const el = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 let ro: ResizeObserver | null = null
-let mo: MutationObserver | null = null
 
 function render() {
   if (!el.value) return
@@ -38,14 +37,11 @@ onMounted(() => {
   render()
   ro = new ResizeObserver(() => chart?.resize())
   if (el.value) ro.observe(el.value)
-  // re-render when the dark class flips so cssVar() colors update
-  mo = new MutationObserver(() => render())
-  mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
 })
+// Theme flips re-render too: cssVar() is reactive, so callers' option computeds recompute.
 watch(() => props.option, render, { deep: true })
 onBeforeUnmount(() => {
   ro?.disconnect()
-  mo?.disconnect()
   chart?.dispose()
   chart = null
 })

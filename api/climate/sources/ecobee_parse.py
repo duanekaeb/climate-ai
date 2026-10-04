@@ -389,6 +389,15 @@ def parse_sensor_sets(program: dict[str, Any], id_to_key: dict[str, str]) -> dic
     return sets
 
 
+def program_setpoints(program: dict[str, Any]) -> tuple[float | None, float | None]:
+    """(heat °F, cool °F) of the program's current climate (heatTemp/coolTemp are tenths)."""
+    ref = program.get("currentClimateRef")
+    for climate in program.get("climates") or []:
+        if ref and climate.get("climateRef") == ref:
+            return tenths_to_f(climate.get("heatTemp")), tenths_to_f(climate.get("coolTemp"))
+    return None, None
+
+
 def climate_sensor_ids(program: dict[str, Any]) -> dict[str, list[str]]:
     """{climateRef: [base sensor ids]} straight from the program (for read-backs)."""
     out: dict[str, list[str]] = {}

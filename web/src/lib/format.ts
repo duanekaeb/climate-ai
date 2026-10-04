@@ -1,4 +1,15 @@
 // Display helpers shared by every view.
+import { ref } from 'vue'
+
+// Bumps when <html>'s class flips between light and dark. cssVar() reads it, so any computed
+// chart option that calls cssVar() re-runs with the new theme's colors.
+const themeTick = ref(0)
+if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
+  new MutationObserver(() => themeTick.value++).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class'],
+  })
+}
 export const UNIT_NAMES: Record<string, string> = { main: 'Main floor', up: 'Upstairs', bed: 'Bed / Office' }
 export const UNIT_COLORS: Record<string, string> = {
   main: 'var(--color-unit-main)',
@@ -38,7 +49,15 @@ export function localTime(iso: string, tz?: string): string {
 export function localDate(iso: string, tz?: string): string {
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: tz })
 }
-/** Read a CSS variable (for chart colors that must follow the theme). */
+/** Read a CSS variable (for chart colors that must follow the theme). Reactive to theme flips. */
 export function cssVar(name: string): string {
+  void themeTick.value
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
+/** Label a local calendar day given as 'YYYY-MM-DD' without any time-zone shift. */
+export function dayLabel(ymd: string, opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  if (!y || !m || !d) return ymd
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString([], { ...opts, timeZone: 'UTC' })
 }

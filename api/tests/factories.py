@@ -79,8 +79,9 @@ def make_history(session: Session, days: int = 30, end: datetime | None = None, 
         t += timedelta(minutes=5)
 
     for table, rows in ((WeatherHour, weather), (Runtime5m, runtime), (Reading5m, readings)):
-        # Postgres allows at most 65,535 bind parameters per statement.
-        chunk = max(1, 60_000 // max(1, len(rows[0]) if rows else 1))
+        # Postgres allows at most 65,535 bind parameters per statement, and SQLAlchemy binds
+        # every table column for each row of a multi-row insert.
+        chunk = max(1, 60_000 // len(table.__table__.columns))
         for i in range(0, len(rows), chunk):
             session.execute(insert(table).values(rows[i : i + chunk]).on_conflict_do_nothing())
     session.flush()

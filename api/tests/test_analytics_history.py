@@ -221,10 +221,12 @@ def test_coupling_is_positive_and_the_bed_wing_placebo_is_not(hist):
     true = 12 * COUPLING_S_PER_DEGF / 60  # minutes per hour per °F
     assert c.ci90[0] > 0 and c.ci90[0] <= c.coef_min_per_degf <= c.ci90[1]
     assert c.coef_min_per_degf == pytest.approx(true, rel=0.25)
-    assert c.placebo_coef is not None and abs(c.placebo_coef) < 0.2 * c.coef_min_per_degf
-    assert c.placebo_ci90[0] <= 0 <= c.placebo_ci90[1], c.interpretation
+    # The bed wing has no coupling in the factories; a 90% interval may still miss zero by chance,
+    # so the check is that the placebo is small next to the real effect and reported as such.
+    assert c.placebo_coef is not None and abs(c.placebo_coef) < 0.1 * c.coef_min_per_degf
+    assert c.placebo_ci90[0] <= c.placebo_coef <= c.placebo_ci90[1]
     assert 0 < len(c.points) <= 2000 and c.n_hours >= 24 * 25
-    assert "consistent with no effect" in c.interpretation
+    assert "Caution" not in c.interpretation, c.interpretation
 
 
 def test_natural_experiments_find_the_float_effect(hist):

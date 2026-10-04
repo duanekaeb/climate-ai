@@ -51,6 +51,9 @@ SUPPORT_F = 2.0  # afternoon outdoor overlap margin for natural experiments
 FLOAT_F = 2.0
 FLOAT_HOURS = 2
 PLACEBO_SEED = 20261004
+# A placebo that excludes zero but stays under this share of the real effect is reported as
+# small rather than as a warning (a 90% interval excludes zero 10% of the time by chance).
+MATERIAL_PLACEBO = 0.25
 _HOUR = 3600.0
 
 
@@ -290,11 +293,14 @@ def coupling(session: Session, days: int = 30) -> Coupling:
                 f"to {up.high:.2f}), which includes zero.")
     if bed is None:
         text += f" The bed-wing placebo couldn't be run ({why_bed})."
-    elif _excludes_zero(bed.low, bed.high):
+    elif not _excludes_zero(bed.low, bed.high):
+        text += f" The bed-wing placebo is {bed.coef:+.2f} ({bed.low:.2f} to {bed.high:.2f}), consistent with no effect."
+    elif abs(bed.coef) < MATERIAL_PLACEBO * abs(up.coef):
+        text += (f" The bed-wing placebo is {bed.coef:+.2f} ({bed.low:.2f} to {bed.high:.2f}): not exactly zero, but "
+                 "small next to the upstairs effect.")
+    else:
         text += (f" Caution: the bed-wing placebo also moves ({bed.coef:+.2f}, 90% interval {bed.low:.2f} to "
                  f"{bed.high:.2f}), so something else that tracks the main floor may be at work.")
-    else:
-        text += f" The bed-wing placebo is {bed.coef:+.2f} ({bed.low:.2f} to {bed.high:.2f}), consistent with no effect."
     return Coupling(
         days=days, n_hours=up.n, points=points, coef_min_per_degf=round(up.coef, 3),
         ci90=(round(up.low, 3), round(up.high, 3)),
@@ -444,10 +450,19 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
     if bed is not None:
         checks.append(f"bed wing {bed[0]:+.0f} min ({bed[1]:.0f} to {bed[2]:.0f})")
     if checks:
-        bad = (placebo is not None and _excludes_zero(placebo[1], placebo[2])) or (
-            bed is not None and _excludes_zero(bed[1], bed[2]))
-        note += " Checks: " + "; ".join(checks) + (
-            " - a check moved, so treat the estimate with suspicion." if bad else ", both consistent with no effect.")
+        def moved(c: tuple[float, float, float] | None) -> bool:
+            return c is not None and _excludes_zero(c[1], c[2])
+
+        def material(c: tuple[float, float, float] | None) -> bool:
+            return moved(c) and abs(c[0]) >= MATERIAL_PLACEBO * abs(est)  # type: ignore[index]
+
+        if material(placebo) or material(bed):
+            verdict = " - a check moved, so treat the estimate with suspicion."
+        elif moved(placebo) or moved(bed):
+            verdict = " - small next to the estimate, not exactly zero."
+        else:
+            verdict = ", consistent with no effect."
+        note += " Checks: " + "; ".join(checks) + verdict
     return NaturalExperiments(
         days=days, events=events_out, estimate_min_per_event=round(est, 1), ci90=(round(lo, 1), round(hi, 1)),
         placebo_estimate=None if placebo is None else round(placebo[0], 1),
