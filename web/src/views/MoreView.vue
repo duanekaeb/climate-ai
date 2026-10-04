@@ -1,31 +1,18 @@
 <script setup lang="ts">
 // More (the phone tab): every secondary screen, theme info and sign out.
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import Card from '@/components/Card.vue'
 import Icon from '@/components/Icon.vue'
-import { useThemeKey } from '@/components/runtime/chartKit'
+import { setTheme, theme } from '@/lib/theme'
 import { routes } from '@/router'
 import { useAuth } from '@/stores/auth'
 import { stopLiveUpdates } from '@/stores/status'
 
 const auth = useAuth()
 const router = useRouter()
-const themeKey = useThemeKey()
 
 const links = routes.filter((r) => r.meta?.nav === 'more')
-
-const theme = computed(() => {
-  void themeKey.value
-  const dark = document.documentElement.classList.contains('dark')
-  let saved: string | null = null
-  try {
-    saved = localStorage.getItem('climate.theme')
-  } catch {
-    saved = null
-  }
-  return { dark, chosen: saved === 'dark' || saved === 'light' }
-})
 
 const busy = ref(false)
 const error = ref('')
@@ -67,8 +54,9 @@ async function signOut() {
         <span><span class="font-medium">{{ theme.dark ? 'Dark' : 'Light' }}</span> mode is on.</span>
       </p>
       <p class="mt-1 text-sm text-muted">
-        {{ theme.chosen ? 'You picked it with the sun / moon button at the top of the screen; tap it again to switch.' : 'It follows your device setting. Tap the sun / moon button at the top of the screen to choose one.' }}
+        {{ theme.choice ? 'You picked it with the sun / moon button at the top of the screen, so it stays put when your device switches.' : 'It follows your device setting and switches when your device does. The sun / moon button at the top of the screen picks one.' }}
       </p>
+      <button v-if="theme.choice" type="button" class="btn mt-3" @click="setTheme(null)">Use device setting</button>
     </Card>
 
     <Card title="Account">

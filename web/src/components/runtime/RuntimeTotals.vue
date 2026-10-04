@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { DailyRuntime } from '@/api/types'
 import { UNIT_COLORS, UNIT_NAMES, minutes } from '@/lib/format'
-import { type FailingBaselines, baselineFailNote, failingInUse, summarizeDays, unitTotals } from '@/stores/runtime'
+import { type FailingBaselines, baselineFailShort, failingInUse, summarizeDays, unitTotals } from '@/stores/runtime'
 
 const props = defineProps<{ rows: DailyRuntime[]; days: number; failing: FailingBaselines }>()
 
@@ -12,7 +12,7 @@ const totals = computed(() => unitTotals(props.rows, props.failing))
 // The house expectation is summed per day, and only on days where every unit that ran has an
 // expectation from a passing baseline (the same rule as the chart and the summary above).
 const houseDays = computed(() => summarizeDays(props.rows, props.failing))
-const failingNotes = computed(() => failingInUse(props.rows, props.failing).map(baselineFailNote))
+const failingNotes = computed(() => failingInUse(props.rows, props.failing).map(baselineFailShort))
 const house = computed(() => {
   const t = totals.value
   const covered = houseDays.value.filter((d) => d.expected !== null)
@@ -86,11 +86,10 @@ const partial = computed(
     </table>
     <p class="mt-2 text-xs text-muted">
       Runtime counts cooling on cooling days and heating on heating days. Expected is the weather-normalized baseline.
-      <template v-if="partial">* The baseline covers only some of these days.</template>
-      <template v-if="failingNotes.length">
-        <span class="text-warn">† <template v-for="(n, i) in failingNotes" :key="n">{{ i ? '; ' : '' }}{{ n }}</template>,
-          so those days aren't counted in Expected.</span>
-      </template>
+      <template v-if="partial">* The baseline covers only some of these days. </template>
+      <span v-if="failingNotes.length" class="text-warn">
+        † Leaves out days whose baseline fails its checks ({{ failingNotes.length === 1 ? failingNotes[0] : 'listed under Daily runtime' }}).
+      </span>
       Whether a change saved anything, with a 90% interval, is on
       <RouterLink to="/results" class="text-accent underline">Did it work?</RouterLink>
     </p>

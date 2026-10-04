@@ -2,6 +2,7 @@
 // WKWebView wrapper and the PWA behave the same). 401 -> background updates stop and the
 // router sends you to /login.
 import { router } from '@/router'
+import { useAuth } from '@/stores/auth'
 import { stopLiveUpdates } from '@/stores/status'
 
 export class ApiError extends Error {
@@ -32,6 +33,10 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (res.status === 401 && !path.startsWith('/auth')) {
+    // The session is gone: say so (or the sign-in page would bounce straight back on the
+    // stale "signed in" state) and stop the background polling and the socket.
+    const auth = useAuth()
+    if (auth.state?.authenticated) auth.state = { ...auth.state, authenticated: false, role: null }
     stopLiveUpdates()
     const here = router.currentRoute.value.fullPath
     if (!here.startsWith('/login')) router.push({ path: '/login', query: { next: here } })

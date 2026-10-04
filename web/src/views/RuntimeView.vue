@@ -14,7 +14,7 @@ import TapChart from '@/components/runtime/TapChart.vue'
 import { chartTheme, dayLabel, useThemeKey } from '@/components/runtime/chartKit'
 import { dailyRuntimeOption } from '@/components/runtime/runtimeCharts'
 import { UNIT_COLORS, UNIT_NAMES, minutes } from '@/lib/format'
-import { baselineFailNote, failingInUse, sortUnitKeys, summarizeDays, useRuntime } from '@/stores/runtime'
+import { baselineFailShort, failingInUse, sortUnitKeys, summarizeDays, useRuntime } from '@/stores/runtime'
 import { useStatus } from '@/stores/status'
 
 const RANGES = [14, 30, 90]
@@ -27,7 +27,7 @@ const tz = computed(() => status.data?.tz ?? Intl.DateTimeFormat().resolvedOptio
 const rows = computed(() => store.daily ?? [])
 const days = computed(() => summarizeDays(rows.value, store.failing))
 // Failing baselines behind some expectation in this range: their expectations are left out.
-const failingNotes = computed(() => failingInUse(rows.value, store.failing).map(baselineFailNote))
+const failingNotes = computed(() => failingInUse(rows.value, store.failing).map(baselineFailShort))
 const unitKeys = computed(() => sortUnitKeys(rows.value.map((r) => r.unit_key)))
 const hasOutdoor = computed(() => days.value.some((d) => d.outdoorMean !== null))
 
@@ -132,12 +132,16 @@ const intradayModes = computed(() => {
           <p v-if="store.dailyError" role="status" class="text-xs text-warn">Couldn't refresh: {{ store.dailyError }}</p>
           <div v-if="failingNotes.length" class="flex items-start gap-1.5 text-xs text-warn">
             <Icon name="alert" :size="14" class="mt-px shrink-0" />
-            <p>
-              † <template v-for="(n, i) in failingNotes" :key="n">{{ i ? '; ' : '' }}{{ n }}</template>.
-              Expected leaves those out, so {{ summary.excludedDays }} of {{ days.length }} days have no house
-              expectation.
-              <RouterLink to="/results" class="underline">Baselines</RouterLink>
-            </p>
+            <div class="min-w-0">
+              <p>
+                † Expected leaves out every baseline that fails its checks, so {{ summary.excludedDays }} of
+                {{ days.length }} days have no house expectation.
+                <RouterLink to="/results" class="underline">Baselines</RouterLink>
+              </p>
+              <ul class="num mt-0.5 list-disc pl-4">
+                <li v-for="n in failingNotes" :key="n">{{ n }}</li>
+              </ul>
+            </div>
           </div>
           <p v-else-if="store.baselinesError" role="status" class="text-xs text-warn">
             Couldn't check whether the baselines pass their checks ({{ store.baselinesError }}), so Expected may rest on a

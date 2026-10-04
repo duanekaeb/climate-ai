@@ -5,26 +5,18 @@ import { routes } from '@/router'
 import { useAuth } from '@/stores/auth'
 import { stopLiveUpdates, useStatus } from '@/stores/status'
 import Icon from '@/components/Icon.vue'
+import { theme, toggleTheme } from '@/lib/theme'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuth()
 const status = useStatus()
-const dark = ref(document.documentElement.classList.contains('dark'))
 
 const nav = routes.filter((r) => r.meta?.nav)
 const primary = nav.filter((r) => r.meta?.nav === 'primary')
 const showShell = computed(() => !route.meta.public)
 
-function toggleTheme() {
-  dark.value = !dark.value
-  document.documentElement.classList.toggle('dark', dark.value)
-  try {
-    localStorage.setItem('climate.theme', dark.value ? 'dark' : 'light')
-  } catch {
-    /* private mode */
-  }
-}
+const themeLabel = computed(() => (theme.dark ? 'Switch to light mode' : 'Switch to dark mode'))
 
 // The router guard loads auth before the first page renders; start live status once signed in
 // and inside the app (a 401 sends you to /login while auth still reads "signed in", so the
@@ -68,8 +60,8 @@ async function signOut() {
         </RouterLink>
       </nav>
       <div class="flex items-center justify-between px-2 pt-2 text-xs text-muted">
-        <button class="btn !px-2 !py-1" :title="dark ? 'Light mode' : 'Dark mode'" @click="toggleTheme">
-          <Icon :name="dark ? 'sun' : 'moon'" :size="16" />
+        <button type="button" class="btn !px-2 !py-1" :title="themeLabel" :aria-label="themeLabel" @click="toggleTheme">
+          <Icon :name="theme.dark ? 'sun' : 'moon'" :size="16" />
         </button>
         <button class="underline" :disabled="signingOut" @click="signOut">Sign out</button>
       </div>
@@ -85,7 +77,9 @@ async function signOut() {
           </span>
           <span class="chip bg-surface-2 text-muted" title="Controller mode">{{ status.data.controller.mode }}</span>
         </template>
-        <button class="btn !px-2 !py-1 md:hidden" @click="toggleTheme"><Icon :name="dark ? 'sun' : 'moon'" :size="16" /></button>
+        <button type="button" class="btn !px-2 !py-1 md:hidden" :title="themeLabel" :aria-label="themeLabel" @click="toggleTheme">
+          <Icon :name="theme.dark ? 'sun' : 'moon'" :size="16" />
+        </button>
       </header>
       <main class="mx-auto w-full max-w-6xl flex-1 px-4 pt-4 pb-28 md:pb-8">
         <RouterView />

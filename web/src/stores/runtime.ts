@@ -30,16 +30,14 @@ export function trustedExpected(r: DailyRuntime, failing: FailingBaselines): num
   return failedBaseline(r, failing) ? null : r.expected_min
 }
 
-/** "Upstairs cooling baseline fails its checks (CV(RMSE) 21.3%)" */
-export function baselineFailNote(b: BaselineOut): string {
+/** "Upstairs cooling (CV(RMSE) 21.3%)": a failing baseline and the check it fails (CV(RMSE)
+ *  first; NMBE when that is the only one). The Results tab has every number. */
+export function baselineFailShort(b: BaselineOut): string {
   const pct = (v: number, d: number) => `${v < 0 ? '−' : ''}${Math.abs(v * 100).toFixed(d)}%`
-  const why: string[] = []
-  const cvBad = b.cvrmse > BASELINE_CV_MAX
-  const nmbeBad = Math.abs(b.nmbe) > BASELINE_NMBE_MAX
-  if (cvBad || !nmbeBad) why.push(`CV(RMSE) ${pct(b.cvrmse, 1)}`)
-  if (nmbeBad) why.push(`NMBE ${pct(b.nmbe, 2)}`)
+  const nmbeOnly = b.cvrmse <= BASELINE_CV_MAX && Math.abs(b.nmbe) > BASELINE_NMBE_MAX
+  const why = nmbeOnly ? `NMBE ${pct(b.nmbe, 2)}` : `CV(RMSE) ${pct(b.cvrmse, 1)}`
   const mode = b.mode === 'cool' ? 'cooling' : 'heating'
-  return `${UNIT_NAMES[b.unit_key] ?? b.unit_key} ${mode} baseline fails its checks (${why.join(', ')})`
+  return `${UNIT_NAMES[b.unit_key] ?? b.unit_key} ${mode} (${why})`
 }
 
 /** The failing baselines that actually sit behind some expectation in these rows. */
