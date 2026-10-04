@@ -29,8 +29,8 @@ OCC_SENSORS = {"main": ["main.hallway_tstat", "main.school_room", "main.living_r
 
 
 def _insert(db, table, rows):
-    for i in range(0, len(rows), 5000):
-        db.execute(insert(table).values(rows[i : i + 5000]).on_conflict_do_nothing())
+    for i in range(0, len(rows), 2000):  # stays under Postgres' 65535 bind parameters
+        db.execute(insert(table).values(rows[i : i + 2000]).on_conflict_do_nothing())
     db.flush()
 
 

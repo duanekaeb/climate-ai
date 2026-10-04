@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi import status as http
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from climate import events
 from climate.api.auth import OwnerDep, ReaderDep, Role, WriterDep
-from climate.api.routers.control import unprocessable
+from climate.api.routers.control import SessionDep, unprocessable
 from climate.api.schemas import AlertOut, PublishReportBody, ReportOut
-from climate.store.db import get_session
 from climate.store.orm import AgentRun, Alert, Report
 from climate.timeutil import utcnow
 
@@ -32,10 +31,10 @@ def alert_out(a: Alert) -> AlertOut:
 
 @router.get("/reports", response_model=list[ReportOut])
 def list_reports(
-    kind: ReportKind | None = Query(None),
-    limit: int = Query(20, ge=1, le=200),
+    kind: ReportKind | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> list[ReportOut]:
     q = select(Report).order_by(Report.created_at.desc(), Report.id.desc()).limit(limit)
     if kind is not None:
@@ -44,7 +43,7 @@ def list_reports(
 
 
 @router.get("/reports/{report_id}", response_model=ReportOut)
-def get_report(report_id: int, _: Role = ReaderDep, session: Session = Depends(get_session)) -> ReportOut:
+def get_report(report_id: int, _: Role = ReaderDep, session: Session = SessionDep) -> ReportOut:
     report = session.get(Report, report_id)
     if report is None:
         raise HTTPException(http.HTTP_404_NOT_FOUND, f"Unknown report {report_id}.")
@@ -52,7 +51,7 @@ def get_report(report_id: int, _: Role = ReaderDep, session: Session = Depends(g
 
 
 @router.post("/reports", response_model=ReportOut)
-def publish_report(body: PublishReportBody, role: Role = WriterDep, session: Session = Depends(get_session)) -> ReportOut:
+def publish_report(body: PublishReportBody, role: Role = WriterDep, session: Session = SessionDep) -> ReportOut:
     """Claude publishes its reports (author 'claude'); the owner may add notes (author 'system')."""
     violations: list[tuple[str, str]] = []
     if role == "owner" and body.kind != "note":
@@ -83,10 +82,10 @@ def publish_report(body: PublishReportBody, role: Role = WriterDep, session: Ses
 
 @router.get("/alerts", response_model=list[AlertOut])
 def list_alerts(
-    open: bool = Query(True),  # noqa: A002 - the documented query parameter name
-    limit: int = Query(100, ge=1, le=500),
+    open: bool = True,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> list[AlertOut]:
     """open=true: unresolved alerts; open=false: all recent alerts, resolved included."""
     q = select(Alert).order_by(Alert.ts.desc(), Alert.id.desc()).limit(limit)
@@ -96,7 +95,7 @@ def list_alerts(
 
 
 @router.post("/alerts/{alert_id}/resolve", response_model=AlertOut)
-def resolve_alert(alert_id: int, _: Role = OwnerDep, session: Session = Depends(get_session)) -> AlertOut:
+def resolve_alert(alert_id: int, _: Role = OwnerDep, session: Session = SessionDep) -> AlertOut:
     alert = session.get(Alert, alert_id)
     if alert is None:
         raise HTTPException(http.HTTP_404_NOT_FOUND, f"Unknown alert {alert_id}.")

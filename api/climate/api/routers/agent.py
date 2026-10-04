@@ -8,16 +8,17 @@ none of these routes reaches a thermostat.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi import status as http
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from climate import agent_queue, events, notify
 from climate.api.auth import AgentDep, OwnerDep, ReaderDep, Role
-from climate.api.routers.control import house_tz, safe, unprocessable
+from climate.api.routers.control import SessionDep, house_tz, safe, unprocessable
 from climate.api.schemas import (
     AgentFinishBody,
     AgentHeartbeatBody,
@@ -27,7 +28,6 @@ from climate.api.schemas import (
     RunBody,
 )
 from climate.store.app_settings import AgentSettings, beat, get_heartbeat, get_setting
-from climate.store.db import get_session
 from climate.store.orm import AgentRun
 from climate.timeutil import day_bounds_utc, local_date, parse_hhmm, utcnow
 
@@ -148,20 +148,20 @@ def _sync_alerts(session: Session, body: AgentHeartbeatBody, today: date) -> Non
 
 
 @router.get("/agent/status", response_model=AgentInfo)
-def agent_status(_: Role = ReaderDep, session: Session = Depends(get_session)) -> AgentInfo:
+def agent_status(_: Role = ReaderDep, session: Session = SessionDep) -> AgentInfo:
     return agent_info(session)
 
 
 @router.get("/agent/runs", response_model=list[AgentRunOut])
 def list_runs(
-    limit: int = Query(20, ge=1, le=200), _: Role = ReaderDep, session: Session = Depends(get_session)
+    limit: Annotated[int, Query(ge=1, le=200)] = 20, _: Role = ReaderDep, session: Session = SessionDep
 ) -> list[AgentRunOut]:
     rows = session.execute(select(AgentRun).order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(limit))
     return [run_out(r) for r in rows.scalars()]
 
 
 @router.get("/agent/runs/{run_id}", response_model=AgentRunOut)
-def get_run(run_id: int, _: Role = ReaderDep, session: Session = Depends(get_session)) -> AgentRunOut:
+def get_run(run_id: int, _: Role = ReaderDep, session: Session = SessionDep) -> AgentRunOut:
     run = session.get(AgentRun, run_id)
     if run is None:
         raise HTTPException(http.HTTP_404_NOT_FOUND, f"Unknown agent run {run_id}.")
@@ -179,7 +179,7 @@ def _require_enabled(session: Session) -> None:
 
 
 @router.post("/agent/ask", response_model=AgentRunOut)
-def ask(body: AskBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> AgentRunOut:
+def ask(body: AskBody, _: Role = OwnerDep, session: Session = SessionDep) -> AgentRunOut:
     _require_enabled(session)
     question = body.question.strip()
     if len(question) < 2:
@@ -193,7 +193,7 @@ def ask(body: AskBody, _: Role = OwnerDep, session: Session = Depends(get_sessio
 
 
 @router.post("/agent/run", response_model=AgentRunOut)
-def run_now(body: RunBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> AgentRunOut:
+def run_now(body: RunBody, _: Role = OwnerDep, session: Session = SessionDep) -> AgentRunOut:
     _require_enabled(session)
     queued = session.execute(
         select(AgentRun).where(AgentRun.kind == body.kind, AgentRun.status == "queued")
@@ -218,7 +218,7 @@ def run_now(body: RunBody, _: Role = OwnerDep, session: Session = Depends(get_se
 
 
 @router.post("/agent/claim", response_model=AgentRunOut | None)
-def claim(_: Role = AgentDep, session: Session = Depends(get_session)) -> AgentRunOut | None:
+def claim(_: Role = AgentDep, session: Session = SessionDep) -> AgentRunOut | None:
     run = agent_queue.claim_next(session, utcnow())
     if run is None:
         session.commit()
@@ -232,7 +232,7 @@ def claim(_: Role = AgentDep, session: Session = Depends(get_session)) -> AgentR
 
 @router.post("/agent/runs/{run_id}/finish", response_model=AgentRunOut)
 def finish(
-    run_id: int, body: AgentFinishBody, _: Role = AgentDep, session: Session = Depends(get_session)
+    run_id: int, body: AgentFinishBody, _: Role = AgentDep, session: Session = SessionDep
 ) -> AgentRunOut:
     run = session.get(AgentRun, run_id)
     if run is None:
@@ -255,7 +255,7 @@ def finish(
 
 
 @router.post("/agent/heartbeat", response_model=AgentInfo)
-def heartbeat(body: AgentHeartbeatBody, _: Role = AgentDep, session: Session = Depends(get_session)) -> AgentInfo:
+def heartbeat(body: AgentHeartbeatBody, _: Role = AgentDep, session: Session = SessionDep) -> AgentInfo:
     now = utcnow()
     previous = get_heartbeat(session, "agent")
     beat(session, "agent", ok=body.signed_in is not False, **body.model_dump(mode="json"))

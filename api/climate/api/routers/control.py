@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime
-from typing import Literal, TypeVar
+from typing import Annotated, Literal, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -61,6 +61,7 @@ from climate.timeutil import utcnow
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["control"])
 T = TypeVar("T")
+SessionDep = Depends(get_session)  # module-level, like auth.OwnerDep
 
 ChangeStatus = Literal[
     "rejected", "backtest", "shadow", "awaiting_signoff", "held", "trial", "active", "retired", "cancelled"
@@ -80,7 +81,7 @@ def safe(session: Session, label: str, fn: Callable[[], T], default: T) -> T:
     try:
         with session.begin_nested():
             return fn()
-    except Exception:  # noqa: BLE001 - deliberately broad: degrade, never 500
+    except Exception:
         log.warning("%s failed; serving without it", label, exc_info=True)
         return default
 
@@ -259,13 +260,13 @@ def action_out(row: ControlAction) -> ControlActionOut:
 
 
 @router.get("/control/settings", response_model=SettingsOut)
-def get_settings_route(_: Role = ReaderDep, session: Session = Depends(get_session)) -> SettingsOut:
+def get_settings_route(_: Role = ReaderDep, session: Session = SessionDep) -> SettingsOut:
     return settings_out(session)
 
 
 @router.put("/control/settings", response_model=SettingsOut)
 def put_settings_route(
-    body: SettingsUpdate, _: Role = OwnerDep, session: Session = Depends(get_session)
+    body: SettingsUpdate, _: Role = OwnerDep, session: Session = SessionDep
 ) -> SettingsOut:
     violations: list[tuple[str, str]] = []
     if body.control is not None:
@@ -287,7 +288,7 @@ def put_settings_route(
 
 
 @router.post("/control/mode", response_model=ControllerInfo)
-def set_mode(body: ModeBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> ControllerInfo:
+def set_mode(body: ModeBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControllerInfo:
     current = get_setting(session, "control", ControlSettings)
     if current.mode != body.mode:
         current.mode = body.mode
@@ -299,7 +300,7 @@ def set_mode(body: ModeBody, _: Role = OwnerDep, session: Session = Depends(get_
 
 
 @router.get("/control/plan", response_model=PlanOut)
-def get_plan(_: Role = ReaderDep, session: Session = Depends(get_session)) -> PlanOut:
+def get_plan(_: Role = ReaderDep, session: Session = SessionDep) -> PlanOut:
     now = utcnow()
     rows = controller.current_plan(session, now)
     mode = get_setting(session, "control", ControlSettings).mode
@@ -313,10 +314,10 @@ def get_plan(_: Role = ReaderDep, session: Session = Depends(get_session)) -> Pl
 
 @router.get("/control/actions", response_model=list[ControlActionOut])
 def list_actions(
-    limit: int = Query(100, ge=1, le=1000),
-    unit_key: str | None = Query(None),
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    unit_key: str | None = None,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> list[ControlActionOut]:
     q = select(ControlAction).order_by(ControlAction.ts.desc(), ControlAction.id.desc()).limit(limit)
     if unit_key:
@@ -347,7 +348,7 @@ def _queue_action(session: Session, unit_key: str, action: str, reason: str, req
 
 
 @router.post("/control/hold", response_model=ControlActionOut)
-def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> ControlActionOut:
+def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
     require_unit(session, body.unit_key)
     lim = get_setting(session, "control", ControlSettings).limits
     heat, cool = round_setpoint(body.heat_f), round_setpoint(body.cool_f)
@@ -368,14 +369,14 @@ def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = Dep
 
 
 @router.post("/control/resume", response_model=ControlActionOut)
-def resume(body: UnitBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> ControlActionOut:
+def resume(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
     require_unit(session, body.unit_key)
     reason = "Owner: resume the thermostat's schedule"
     return _queue_action(session, body.unit_key, "resume_program", reason, {"unit_key": body.unit_key, "reason": reason})
 
 
 @router.post("/control/presence", response_model=SettingsOut)
-def presence(body: PresenceBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SettingsOut:
+def presence(body: PresenceBody, _: Role = OwnerDep, session: Session = SessionDep) -> SettingsOut:
     occ = get_setting(session, "occupancy", OccupancySettings)
     occ.phones_away = body.phones_away
     occ.phones_updated_at = utcnow()
@@ -414,10 +415,10 @@ def change_out(c: Change) -> ChangeOut:
 
 @router.get("/changes", response_model=list[ChangeOut])
 def list_changes(
-    status: ChangeStatus | None = Query(None),
-    limit: int = Query(200, ge=1, le=1000),
+    status: ChangeStatus | None = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> list[ChangeOut]:
     q = select(Change).order_by(Change.created_at.desc(), Change.id.desc()).limit(limit)
     if status is not None:
@@ -427,7 +428,7 @@ def list_changes(
 
 @router.post("/changes", response_model=ChangeOut)
 def propose_change(
-    body: ProposePolicyBody, role: Role = WriterDep, session: Session = Depends(get_session)
+    body: ProposePolicyBody, role: Role = WriterDep, session: Session = SessionDep
 ) -> ChangeOut:
     if not body.params:
         raise unprocessable([("params", "Name at least one policy parameter to change.")])
@@ -444,7 +445,7 @@ def propose_change(
 
 @router.post("/changes/{change_id}/decision", response_model=ChangeOut)
 def decide_change(
-    change_id: int, body: DecisionBody, role: Role = WriterDep, session: Session = Depends(get_session)
+    change_id: int, body: DecisionBody, role: Role = WriterDep, session: Session = SessionDep
 ) -> ChangeOut:
     if session.get(Change, change_id) is None:
         raise HTTPException(http.HTTP_404_NOT_FOUND, f"Unknown change {change_id}.")

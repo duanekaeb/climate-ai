@@ -7,9 +7,9 @@ bounded by the request bodies' limits.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi import status as http
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from climate import events
 from climate.api.auth import OwnerDep, ReaderDep, Role, WriterDep
-from climate.api.routers.control import active_policy, actor_for, unprocessable
+from climate.api.routers.control import SessionDep, active_policy, actor_for, unprocessable
 from climate.api.schemas import (
     ArmIn,
     BacktestBody,
@@ -38,7 +38,6 @@ from climate.api.schemas import (
 from climate.control.policy import PolicyParams
 from climate.experiments import analysis, switchback
 from climate.models import backtest
-from climate.store.db import get_session
 from climate.store.orm import Experiment, ExperimentDay, Job, ModelFit
 
 router = APIRouter(tags=["experiments"])
@@ -95,25 +94,25 @@ def _check_params(session: Session, params: dict[str, Any]) -> None:
 
 
 @router.get("/experiments", response_model=list[ExperimentOut])
-def list_experiments(_: Role = ReaderDep, session: Session = Depends(get_session)) -> list[ExperimentOut]:
+def list_experiments(_: Role = ReaderDep, session: Session = SessionDep) -> list[ExperimentOut]:
     rows = session.execute(select(Experiment).order_by(Experiment.created_at.desc(), Experiment.id.desc()))
     return [experiment_out(e) for e in rows.scalars()]
 
 
 @router.get("/experiments/power", response_model=PowerOut)
 def power(
-    effect_pct: float = Query(10.0, gt=0, le=100),
-    alpha: float = Query(0.10, gt=0, lt=0.5),
-    power: float = Query(0.8, ge=0.5, lt=1.0),
+    effect_pct: Annotated[float, Query(gt=0, le=100)] = 10.0,
+    alpha: Annotated[float, Query(gt=0, lt=0.5)] = 0.10,
+    power: Annotated[float, Query(ge=0.5, lt=1.0)] = 0.8,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> PowerOut:
     return analysis.power(session, effect_pct, alpha, power)
 
 
 @router.get("/experiments/{experiment_id}", response_model=ExperimentDetail)
 def experiment_detail(
-    experiment_id: int, _: Role = ReaderDep, session: Session = Depends(get_session)
+    experiment_id: int, _: Role = ReaderDep, session: Session = SessionDep
 ) -> ExperimentDetail:
     exp = _require_experiment(session, experiment_id)
     days = session.execute(
@@ -132,7 +131,7 @@ def experiment_detail(
 
 @router.post("/experiments", response_model=ExperimentOut)
 def propose_experiment(
-    body: ProposeExperimentBody, role: Role = WriterDep, session: Session = Depends(get_session)
+    body: ProposeExperimentBody, role: Role = WriterDep, session: Session = SessionDep
 ) -> ExperimentOut:
     keys = [a.key for a in body.arms]
     if len(set(keys)) != len(keys):
@@ -154,7 +153,7 @@ def propose_experiment(
 
 @router.post("/experiments/{experiment_id}/decision", response_model=ExperimentOut)
 def decide_experiment(
-    experiment_id: int, body: ExperimentDecisionBody, _: Role = OwnerDep, session: Session = Depends(get_session)
+    experiment_id: int, body: ExperimentDecisionBody, _: Role = OwnerDep, session: Session = SessionDep
 ) -> ExperimentOut:
     _require_experiment(session, experiment_id)
     try:
@@ -175,7 +174,7 @@ def decide_experiment(
 
 
 @router.get("/models", response_model=list[ModelFitOut])
-def list_models(_: Role = ReaderDep, session: Session = Depends(get_session)) -> list[ModelFitOut]:
+def list_models(_: Role = ReaderDep, session: Session = SessionDep) -> list[ModelFitOut]:
     """The latest fit per (kind, unit, mode)."""
     q = (
         select(ModelFit)
@@ -190,7 +189,7 @@ def job_out(job: Job) -> JobOut:
 
 
 @router.post("/models/refit", response_model=JobOut)
-def refit(role: Role = WriterDep, session: Session = Depends(get_session)) -> JobOut:
+def refit(role: Role = WriterDep, session: Session = SessionDep) -> JobOut:
     pending = session.execute(
         select(Job).where(Job.kind == "refit", Job.status.in_(("queued", "running"))).order_by(Job.id.desc()).limit(1)
     ).scalar_one_or_none()
@@ -205,7 +204,7 @@ def refit(role: Role = WriterDep, session: Session = Depends(get_session)) -> Jo
 
 
 @router.post("/models/backtest", response_model=BacktestOut)
-def run_backtest(body: BacktestBody, _: Role = WriterDep, session: Session = Depends(get_session)) -> BacktestOut:
+def run_backtest(body: BacktestBody, _: Role = WriterDep, session: Session = SessionDep) -> BacktestOut:
     _check_params(session, body.params)
     try:
         return backtest.backtest(session, body.params, body.days)
@@ -214,7 +213,7 @@ def run_backtest(body: BacktestBody, _: Role = WriterDep, session: Session = Dep
 
 
 @router.post("/models/simulate", response_model=SimulateOut)
-def run_simulate(body: SimulateBody, _: Role = WriterDep, session: Session = Depends(get_session)) -> SimulateOut:
+def run_simulate(body: SimulateBody, _: Role = WriterDep, session: Session = SessionDep) -> SimulateOut:
     _check_params(session, body.params)
     try:
         return backtest.simulate(session, body.params, body.date)
@@ -223,7 +222,7 @@ def run_simulate(body: SimulateBody, _: Role = WriterDep, session: Session = Dep
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
-def get_job(job_id: int, _: Role = ReaderDep, session: Session = Depends(get_session)) -> JobOut:
+def get_job(job_id: int, _: Role = ReaderDep, session: Session = SessionDep) -> JobOut:
     job = session.get(Job, job_id)
     if job is None:
         raise HTTPException(http.HTTP_404_NOT_FOUND, f"Unknown job {job_id}.")

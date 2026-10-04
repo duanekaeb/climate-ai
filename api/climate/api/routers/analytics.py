@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from climate.analytics import attribution, baseline, coupling, metrics
 from climate.api.auth import ReaderDep, Role
-from climate.api.routers.control import house_tz, safe, unprocessable
+from climate.api.routers.control import SessionDep, house_tz, safe, unprocessable
 from climate.api.schemas import (
     BaselineOut,
     ComfortRow,
@@ -27,7 +28,6 @@ from climate.api.schemas import (
     Waterfall,
 )
 from climate.house import UNIT_KEYS
-from climate.store.db import get_session
 from climate.store.orm import ModelFit
 from climate.timeutil import local_date, utcnow
 
@@ -44,10 +44,10 @@ def _today(session: Session) -> date:
 
 @router.get("/analytics/savings", response_model=Savings)
 def savings(
-    start: date | None = Query(None),
-    end: date | None = Query(None),
+    start: date | None = None,
+    end: date | None = None,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> Savings:
     if end is None:
         end = _today(session) - timedelta(days=1)  # last complete day
@@ -62,7 +62,7 @@ def savings(
 
 @router.get("/analytics/waterfall", response_model=Waterfall)
 def waterfall(
-    week_start: date | None = Query(None), _: Role = ReaderDep, session: Session = Depends(get_session)
+    week_start: date | None = None, _: Role = ReaderDep, session: Session = SessionDep
 ) -> Waterfall:
     if week_start is None:
         today = _today(session)
@@ -73,7 +73,7 @@ def waterfall(
 
 
 @router.get("/analytics/baselines", response_model=list[BaselineOut])
-def baselines(_: Role = ReaderDep, session: Session = Depends(get_session)) -> list[BaselineOut]:
+def baselines(_: Role = ReaderDep, session: Session = SessionDep) -> list[BaselineOut]:
     rows = session.execute(
         select(ModelFit)
         .where(ModelFit.kind == "baseline", ModelFit.status == "active")
@@ -147,25 +147,25 @@ def _from_row(row: ModelFit) -> BaselineOut | None:
 
 @router.get("/analytics/coupling", response_model=Coupling)
 def coupling_route(
-    days: int = Query(30, ge=3, le=365), _: Role = ReaderDep, session: Session = Depends(get_session)
+    days: Annotated[int, Query(ge=3, le=365)] = 30, _: Role = ReaderDep, session: Session = SessionDep
 ) -> Coupling:
     return coupling.coupling(session, days)
 
 
 @router.get("/analytics/comfort", response_model=list[ComfortRow])
 def comfort(
-    days: int = Query(7, ge=1, le=90), _: Role = ReaderDep, session: Session = Depends(get_session)
+    days: Annotated[int, Query(ge=1, le=90)] = 7, _: Role = ReaderDep, session: Session = SessionDep
 ) -> list[ComfortRow]:
     return metrics.comfort(session, days)
 
 
 @router.get("/analytics/drift", response_model=DriftReport)
-def drift(_: Role = ReaderDep, session: Session = Depends(get_session)) -> DriftReport:
+def drift(_: Role = ReaderDep, session: Session = SessionDep) -> DriftReport:
     return metrics.drift(session)
 
 
 @router.get("/analytics/natural-experiments", response_model=NaturalExperiments)
 def natural_experiments(
-    days: int = Query(90, ge=7, le=730), _: Role = ReaderDep, session: Session = Depends(get_session)
+    days: Annotated[int, Query(ge=7, le=730)] = 90, _: Role = ReaderDep, session: Session = SessionDep
 ) -> NaturalExperiments:
     return coupling.natural_experiments(session, days)

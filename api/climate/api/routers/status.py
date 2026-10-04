@@ -11,8 +11,9 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi import status as http
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -22,10 +23,10 @@ from climate import state
 from climate.analytics import baseline, daily, metrics
 from climate.api.auth import ReaderDep, Role
 from climate.api.routers.agent import agent_info
-from climate.api.routers.control import controller_info, house_tz, parse_dt, safe
+from climate.api.routers.control import SessionDep, controller_info, house_tz, parse_dt, safe
 from climate.api.schemas import (
-    AlertOut,
     AgentInfo,
+    AlertOut,
     ControllerInfo,
     DailyRuntime,
     HomekitInfo,
@@ -56,7 +57,6 @@ from climate.store.app_settings import (
     get_raw,
     get_setting,
 )
-from climate.store.db import get_session
 from climate.store.orm import (
     Alert,
     HomekitDevice,
@@ -331,7 +331,7 @@ def open_alerts(session: Session, limit: int = 50) -> list[AlertOut]:
 
 
 @router.get("/status", response_model=HouseStatus)
-def get_status(_: Role = ReaderDep, session: Session = Depends(get_session)) -> HouseStatus:
+def get_status(_: Role = ReaderDep, session: Session = SessionDep) -> HouseStatus:
     now = utcnow()
     tz = house_tz(session)
     location = get_setting(session, "location", LocationSettings)
@@ -383,9 +383,9 @@ def get_status(_: Role = ReaderDep, session: Session = Depends(get_session)) -> 
 @router.get("/rooms/{room_key}/history", response_model=RoomHistory)
 def room_history(
     room_key: str,
-    hours: int = Query(24, ge=1, le=24 * 14),
+    hours: Annotated[int, Query(ge=1, le=24 * 14)] = 24,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> RoomHistory:
     room = session.get(Room, room_key)
     if room is None:
@@ -441,14 +441,14 @@ def _expected_min(fit: baseline.BaselineFit | None, row: daily.DayRow) -> float 
         return None
     try:
         return _r(baseline.expected_seconds(fit, row) / 60.0)
-    except Exception:  # noqa: BLE001 - the expected bar is optional; never fail the chart
+    except Exception:
         log.warning("expected runtime failed for %s %s", row.unit_key, row.day, exc_info=True)
         return None
 
 
 @router.get("/runtime/daily", response_model=list[DailyRuntime])
 def runtime_daily(
-    days: int = Query(30, ge=1, le=400), _: Role = ReaderDep, session: Session = Depends(get_session)
+    days: Annotated[int, Query(ge=1, le=400)] = 30, _: Role = ReaderDep, session: Session = SessionDep
 ) -> list[DailyRuntime]:
     tz = house_tz(session)
     today = local_date(utcnow(), tz)
@@ -479,7 +479,7 @@ def runtime_daily(
 
 @router.get("/runtime/intraday", response_model=Intraday)
 def runtime_intraday(
-    day: date | None = Query(None, alias="date"), _: Role = ReaderDep, session: Session = Depends(get_session)
+    day: Annotated[date | None, Query(alias="date")] = None, _: Role = ReaderDep, session: Session = SessionDep
 ) -> Intraday:
     tz = house_tz(session)
     d = day or local_date(utcnow(), tz)
@@ -505,10 +505,10 @@ def runtime_intraday(
 
 @router.get("/weather", response_model=WeatherOut)
 def weather(
-    hours_back: int = Query(48, ge=0, le=24 * 31),
-    hours_ahead: int = Query(48, ge=0, le=24 * 16),
+    hours_back: Annotated[int, Query(ge=0, le=24 * 31)] = 48,
+    hours_ahead: Annotated[int, Query(ge=0, le=24 * 16)] = 48,
     _: Role = ReaderDep,
-    session: Session = Depends(get_session),
+    session: Session = SessionDep,
 ) -> WeatherOut:
     now = utcnow()
     obs_start = now - timedelta(hours=hours_back)

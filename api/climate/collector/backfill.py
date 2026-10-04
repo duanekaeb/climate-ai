@@ -223,7 +223,14 @@ def _fit_once(now: datetime) -> dict[str, Any]:
 
 
 async def _backfill_simulated(sim: Any, start: datetime, end: datetime) -> tuple[dict[str, Any], list, list]:
-    runtime, snaps = await asyncio.to_thread(sim.generate_history, start, end)
+    # generate_history resets and advances the simulator's live state: on the worker's live
+    # source (worker.LockedSource) it must not interleave with advance_to / polls.
+    lock = getattr(sim, "lock", None)
+    if isinstance(lock, asyncio.Lock):
+        async with lock:
+            runtime, snaps = await asyncio.to_thread(sim.generate_history, start, end)
+    else:
+        runtime, snaps = await asyncio.to_thread(sim.generate_history, start, end)
     runtime, snaps = list(runtime), list(snaps)
     runtime_rows = await asyncio.to_thread(_ingest_runtime_batches, runtime, "simulator")
     reading_rows = await asyncio.to_thread(_ingest_snapshot_batches, snaps)
@@ -301,6 +308,11 @@ async def backfill_simulator_if_empty(days: int) -> dict | None:
     log.info("simulator: generating %d days of history", days)
     sim = SimulatedHouse.from_settings()
     result, runtime, snaps = await _backfill_simulated(sim, start, now)
+    try:
+        # Persist the end state so the worker's simulator (built after this) continues from it.
+        await sim.close()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not save the simulator state: %s", safe_error(exc))
     result["room_state_hours"] = await asyncio.to_thread(_room_states_history, start, now, runtime, snaps)
     result["fits"] = await asyncio.to_thread(_fit_once, now)
     log.info("simulator history: %d runtime rows, %d room-state hours", result["runtime_rows"], result["room_state_hours"])

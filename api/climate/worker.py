@@ -447,14 +447,21 @@ class Worker:
             self._daily = {k: str(v) for k, v in (await asyncio.to_thread(_load_json, DAILY_KEY)).items()}
         except Exception as exc:  # noqa: BLE001
             log.warning("startup bookkeeping failed: %s", safe_error(exc))
-        await self.ensure_source()
-        if self.source_kind == "simulator" and self.cfg.sim_backfill_days > 0:
+        # First start in simulator mode: generate history BEFORE building the live simulator,
+        # so it restores the state the history ended in and the series continue seamlessly.
+        try:
+            wanted = await asyncio.to_thread(self._wanted_kind)
+        except Exception as exc:  # noqa: BLE001
+            wanted = None
+            log.warning("could not read the source setting: %s", safe_error(exc))
+        if wanted == "simulator" and self.cfg.sim_backfill_days > 0:
             try:
                 result = await backfill_mod.backfill_simulator_if_empty(self.cfg.sim_backfill_days)
                 if result:
                     log.info("simulator history ready: %d runtime rows", result.get("runtime_rows", 0))
             except Exception as exc:  # noqa: BLE001
                 log.warning("simulator history backfill failed:\n%s", _trace(exc))
+        await self.ensure_source()
 
     async def _close_source(self) -> None:
         src, self.source, self.source_kind = self.source, None, None

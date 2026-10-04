@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import TypeVar
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi import status as http
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from climate import events
 from climate.api.auth import OwnerDep, Role
-from climate.api.routers.control import location_violations, require_unit, unprocessable
+from climate.api.routers.control import SessionDep, location_violations, require_unit, unprocessable
 from climate.api.routers.status import HOMEKIT_ONLINE_S, has_secret, heartbeat_fresh
 from climate.api.schemas import (
     DeviceBody,
@@ -49,7 +49,7 @@ from climate.config import get_settings
 from climate.sources import ecobee as ecobee_src
 from climate.store import secrets
 from climate.store.app_settings import LocationSettings, SourceSettings, get_raw, get_setting, put_setting
-from climate.store.db import get_session, session_scope
+from climate.store.db import session_scope
 from climate.store.orm import EcobeeThermostat, HomekitDevice, Room, Sensor, Unit
 from climate.timeutil import utcnow
 
@@ -87,7 +87,7 @@ def _mfa_pending() -> tuple[bool, str | None]:
     try:
         pending, kind = ecobee_src.mfa_pending()
         return bool(pending), kind
-    except Exception:  # noqa: BLE001 - an unavailable adapter means no challenge is pending
+    except Exception:
         log.warning("ecobee mfa_pending() failed", exc_info=True)
         return False, None
 
@@ -189,12 +189,12 @@ def _in_new_session(fn: Callable[[Session], T]) -> T:
 
 
 @router.get("/setup", response_model=SetupState)
-def get_setup(_: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def get_setup(_: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     return setup_state(session)
 
 
 @router.post("/setup/source", response_model=SetupState)
-def set_source(body: SourceBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def set_source(body: SourceBody, _: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     if body.kind == "ecobee" and not has_secret(session, REFRESH_TOKEN_KEY):
         raise HTTPException(http.HTTP_409_CONFLICT, "Sign in to ecobee before switching the source to ecobee.")
     current = get_setting(session, "source", SourceSettings)
@@ -205,7 +205,7 @@ def set_source(body: SourceBody, _: Role = OwnerDep, session: Session = Depends(
 
 
 @router.put("/setup/location", response_model=SetupState)
-def set_location(body: LocationSettings, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def set_location(body: LocationSettings, _: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     violations = location_violations(body, prefix="")
     if violations:
         raise unprocessable(violations)
@@ -274,7 +274,7 @@ async def ecobee_signout(_: Role = OwnerDep) -> SetupState:
 
 
 @router.post("/setup/ecobee/map", response_model=SetupState)
-def ecobee_map(body: EcobeeMapBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def ecobee_map(body: EcobeeMapBody, _: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     tstat = session.get(EcobeeThermostat, body.identifier)
     if tstat is None:
         raise HTTPException(http.HTTP_404_NOT_FOUND, f"Unknown ecobee thermostat {body.identifier!r}.")
@@ -307,7 +307,7 @@ def ecobee_map(body: EcobeeMapBody, _: Role = OwnerDep, session: Session = Depen
 
 
 @router.post("/setup/sensors/map", response_model=SetupState)
-def sensors_map(body: SensorMapBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def sensors_map(body: SensorMapBody, _: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     """Fields left out are unchanged; an explicit null unmaps."""
     sensor = session.get(Sensor, body.sensor_key)
     if sensor is None:
@@ -352,7 +352,7 @@ def _require_device(session: Session, device_id: str) -> HomekitDevice:
 
 
 @router.post("/setup/homekit/pair", response_model=SetupState)
-def homekit_pair(body: HomekitPairBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def homekit_pair(body: HomekitPairBody, _: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     dev = _require_device(session, body.device_id)
     require_unit(session, body.unit_key)
     if dev.pairing_state not in ("none", "failed"):
@@ -388,7 +388,7 @@ def homekit_pair(body: HomekitPairBody, _: Role = OwnerDep, session: Session = D
 
 
 @router.post("/setup/homekit/code", response_model=SetupState)
-def homekit_code(body: HomekitCodeBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def homekit_code(body: HomekitCodeBody, _: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     dev = _require_device(session, body.device_id)
     if dev.pairing_state != "awaiting_code":
         raise HTTPException(
@@ -403,7 +403,7 @@ def homekit_code(body: HomekitCodeBody, _: Role = OwnerDep, session: Session = D
 
 
 @router.post("/setup/homekit/unpair", response_model=SetupState)
-def homekit_unpair(body: DeviceBody, _: Role = OwnerDep, session: Session = Depends(get_session)) -> SetupState:
+def homekit_unpair(body: DeviceBody, _: Role = OwnerDep, session: Session = SessionDep) -> SetupState:
     dev = _require_device(session, body.device_id)
     if dev.pairing_state in ("none", "unpair_requested"):
         raise HTTPException(http.HTTP_409_CONFLICT, f"{dev.name} is not paired.")
