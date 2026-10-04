@@ -69,7 +69,50 @@ backfill's calendar events show which one fired.
    Follow Me is off.
 5. **Bed / Office stays independent** unless the data shows coupling to the main floor.
 6. **Protect the equipment and the air:** minimum run and off times, cycles per hour tracked,
-   indoor humidity ≤ 58%, and back-off when someone changes a thermostat by hand.
+   indoor humidity ≤ 58%.
+7. **A person's hold always wins** (below), and the controller stands down during vacations and
+   utility events.
+
+### People, ecobee and the utility
+
+**A hold someone sets always wins.** At the wall, in the ecobee app, through Apple Home or Siri,
+or from this app's hold form: the controller writes nothing to that unit while the hold runs,
+however long that is. A timed hold runs until it ends, then the controller takes over at once.
+"Until I change it" runs until someone presses Resume (thermostat or ecobee app) or taps one of
+two buttons on the Live card:
+- **Back to automatic**: the hold is cancelled and the controller steers again now.
+- **Resume schedule**: the hold is cancelled and the ecobee schedule runs for the "wait after
+  Resume" time (default 4 h) before the controller writes again. Pressing Resume at the
+  thermostat does the same, counted from when the app first sees it.
+An optional reminder pushes after a hold has run a set number of hours; it never changes
+anything. A hold at exactly the controller's setpoints is still a person's unless its start and
+end match the controller's own write.
+
+**Utility energy-saving events (demand response)** happen only if the ecobee account is
+enrolled in a utility program (Setup shows the utility and the thermostat's accept-events
+setting). ecobee lists an event before it starts; the app records it, pushes an alert when it is
+announced, starts and ends, and labels the Live card. While an event runs the controller stands
+down, by the snapshot and by the event's own clock window. The app never counteracts an event:
+there is no hidden counter-offset. The only ways out are honest opt-outs through ecobee's own
+cancel, which the program counts as opting out:
+- **Skip this event** (owner, per event): ecobee's documented cancel (`resumeProgram` on the
+  running event). Mandatory events can't be skipped. It may cost that event's credit.
+- **Skip rules** set ahead of time (someone asleep on that floor; an occupied room past a
+  temperature). In Suggest mode a rule only alerts.
+
+**Pre-cooling** (or pre-heating) before an announced event is not an opt-out, and is off by
+default: one 1–2 h hold (default 2°F cooler, within the usual step and hard limits) that ends at
+least 10 minutes before the event starts, so the event applies to the normal setpoint, never to a
+lowered one. The house coasts through the event from a cooler start while the AC rests.
+
+Event days, and pre-cooling before them, are left out of baselines, savings, experiments and
+backtests. A running ecobee event of a type the app doesn't know makes the app hands-off on
+that unit and alerts.
+
+**Hand back to ecobee.** Before the controller first changes Smart Away, Follow Me or a Home
+sensor set, it records the original values. One button (Setup) switches the controller off,
+releases the controller's own holds and restores those settings, logging every write. People's
+holds, vacations and utility events are left alone.
 
 ### Objective
 
@@ -218,7 +261,9 @@ sanity; shadow days; canary windows; drift watch that triggers a Claude investig
 Failed model → last good model. No good model → linked-floors rules. Claude unavailable (plan limit,
 expired sign-in) → changes awaiting sign-off stay pending, reports catch up later. Server down → holds expire
 within 2 hours, and each ecobee runs its own schedule (Smart Away stays off in settings). Cloud
-down → HomeKit live readings and basic timed holds.
+down → HomeKit live readings and basic timed holds; HomeKit shows no utility events, vacations or
+ecobee hold types, so a comfort setting or temperature picked by hand during the outage is treated
+as a person's hold until the cloud is back.
 
 ### Claude and model code
 
@@ -325,6 +370,9 @@ every data call yourself:
 | Holds | `setHold` with `holdType: holdHours` (1–2 h), `resumeProgram` | controller only |
 | Sensor sets | program update (read-modify-write) | a few times a day |
 | Stop ecobee fighting | `settings.autoAway=false`, `settings.followMeComfort=false` | once, verified daily |
+| Utility events + enrollment | the thermostat's `events` (running and announced `demandResponse`), `includeUtility`, `settings.drAccept` | with live detail |
+| Skip a utility event | `resumeProgram` on the running optional event (ecobee records the opt-out) | owner or owner's rule only |
+| Hand back | `resumeProgram` on our own holds, original sensor sets, original `autoAway` / `followMeComfort` | owner, once |
 
 That's about 30,000 requests a month, well under the 85,000 ecobee set for developer-key apps.
 Nothing is published for the account sign-in route, so the app stays inside that budget anyway.
@@ -433,3 +481,5 @@ Phase 4.
 10. Comfort bands per floor and time.
 11. Which Claude plan (Pro or Max)? It sets how much room the nightly runs have.
 12. Which unit feeds the Foyer?
+13. Is the ecobee account enrolled in a utility program (eco+ Community Energy Savings, a
+    utility rebate)? Setup shows it once the account is connected.

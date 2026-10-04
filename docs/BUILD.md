@@ -37,10 +37,14 @@ disagree, fix this file.
 | `ntfy` | binwiederhier/ntfy | — | Optional push notifications. |
 
 Data flow: sources → `collector.ingest` → `live_*`, `readings_5m`, `runtime_5m`,
-`occupancy_events`, `weather_hourly` → `state.load_house_state` (occupancy, offsets, policy)
-→ `control.policy.plan` → `control.guardrails.check` → `control.controller` (suggest/act,
-read-back, `control_actions`) . Nightly: baselines, room offsets, RC fit (shadow), experiment
-days, change gates, daily report, agent runs.
+`occupancy_events`, `weather_hourly` (live snapshots also → `utility.events.ingest` →
+`utility_events`) → `state.load_house_state` (occupancy, offsets, policy, people's holds,
+resume back-offs, utility events) → `control.policy.plan` → `control.guardrails.check` →
+`control.controller` (suggest/act, read-back, `control_actions`) → `utility.skips.run`
+(opt-outs) and `utility.events.sweep`. Nightly: baselines, room offsets, RC fit (shadow),
+experiment days, change gates, daily report, agent runs; analytics leave utility-event days
+out (`analytics.exclusions.event_days`). Behaviour for people's holds, utility events and
+hand-back: `docs/specs/holds-and-utility-events.md`.
 
 ## Conventions
 
@@ -71,10 +75,11 @@ days, change gates, daily report, agent runs.
 | ecobee cloud | `sources/ecobee.py` |
 | HomeKit | `sources/homekit.py`, `collector/homekit_service.py`, `api/scripts/pair_ecobee.py` |
 | Collector + worker | `collector/ingest.py`, `collector/poller.py`, `collector/backfill.py`, `worker.py`, `notify.py`, `agent_queue.py`, `cli.py`, `__main__` shims |
-| Occupancy + control | `state.py`, `occupancy/*`, `control/policy.plan`, `control/guardrails.py`, `control/controller.py`, `control/changes.py` |
+| Occupancy + control | `state.py`, `occupancy/*`, `control/policy.plan`, `control/guardrails.py`, `control/controller.py`, `control/handback.py`, `control/changes.py` |
+| Utility events | `utility/events.py` (ingest, sweep, alerts; `event_key` / `load_active` / `change_label` are contract), `utility/skips.py`, `analytics/exclusions.py` |
 | Analytics | `analytics/*` |
 | Experiments + models | `experiments/*`, `models/*` |
-| API routers | `api/routers/*` |
+| API routers | `api/routers/*`, `api/labels.py` |
 | Claude agent + MCP | `agent/` |
 | Web views | `web/src/views/*`, `web/src/components/*` (new ones), `web/src/stores/*` (new ones) |
 | Deploy | `docker-compose.yml`, `docker/`, `.env.example`, `deploy/`, `ios/`, `docs/DEPLOY.md`, `docs/HOMEKIT.md`, `README.md` |
@@ -186,7 +191,7 @@ wide without horizontal scrolling, and labels rooms without sensors as "no senso
 
 | View | Shows |
 |---|---|
-| Live | per-unit card (temp, setpoints, call, hold, today's runtime, duty, maxed minutes, policy target + reason), house occupancy, weather now, alerts, controller mode, agent status |
+| Live | per-unit card (temp, setpoints, call, whose hold and until when, Back to automatic / Resume schedule on a person's hold, the resume back-off, today's runtime, duty, maxed minutes, policy target + reason), utility event card (announced / running / skipped, Skip with confirm, undo, pre-cooling line), house occupancy, weather now, alerts, controller mode, agent status |
 | Rooms | 11 rooms grouped by floor with temp, occupancy state and reason, priority marker; tap a room → 24 h chart (temp, occupancy band, unit setpoints) |
 | Runtime | daily stacked runtime by unit vs expected (weather-normalized) and outdoor temp; intraday 5-min chart for a picked day |
 | Did it work? | savings with 90% interval (or why not yet), weekly waterfall, baselines table with pass/fail |
@@ -194,9 +199,9 @@ wide without horizontal scrolling, and labels rooms without sensors as "no senso
 | Experiments | list, detail with schedule calendar and analysis at checkpoints, power calculator, propose form, approve/stop for the owner |
 | Model | baseline + RC fits, identifiability notes, backtest and simulate forms |
 | Ask Claude | ask a question, see runs (status, result markdown), trigger nightly/weekly, sign-in status and token expiry |
-| Guardrails | controller mode switch, hard limits, comfort bands, sleep windows, policy params with Claude's sign-off ranges, pending changes with approve/hold/reject, action log with read-back |
+| Guardrails | controller mode switch, wait after Resume, hold reminder, hard limits, comfort bands, sleep windows, utility events (alerts, skip rules, pre-cooling), policy params with Claude's sign-off ranges, pending changes with approve/hold/reject, action log with read-back |
 | Reports | daily / nightly / weekly reports (markdown) |
-| Setup | location, data source (simulator ↔ ecobee), ecobee sign-in with MFA, thermostat → unit mapping, sensor mapping, HomeKit devices and pairing (enter the code shown on the thermostat) |
+| Setup | location, data source (simulator ↔ ecobee), ecobee sign-in with MFA, thermostat → unit mapping and utility enrollment, sensor mapping, HomeKit devices and pairing (enter the code shown on the thermostat), Hand back to ecobee |
 
 ## Runtime contracts (JSON stored in the database)
 
@@ -208,10 +213,16 @@ wide without horizontal scrolling, and labels rooms without sensors as "no senso
 | `app_settings['ecobee_status']` | `{signed_in_at, last_error, error_at}` (written by the sign-in path; signed-in = the encrypted refresh token exists) |
 | `app_settings['ecobee_holds']` | `{unit_key: {heat_f, cool_f, end, hours, written_at}}`: the last hold we wrote, used to tell our holds from manual ones |
 | `app_settings['simulator_state']` | simulator physics state (only in simulator mode) |
+| `app_settings['sim_events']` | `{unit_key: [ThermostatEvent JSON]}`: utility / vacation events injected with `python -m climate.cli sim-event`; the worker's simulator re-reads it every simulated minute |
 | `changes.payload` (policy) | `{"params": {partial PolicyParams}, "base_policy_version_id": int, "current": {...}}` |
 | `changes.gates` | `validation` (list of violations), `validated_at`, `backtest` (BacktestOut or `{error}`), `shadow` `{start, days}`, `decision` `{actor, decision, reason, at}`, `trial` `{start, end, verdict...}` |
 | `control_actions.request` (HomeKit channel) | `{"kind": "climate_hold", "climate": "home"\|"sleep"\|"away", "until": ISO-8601}` or `{"kind": "clear_hold"}` |
 | `control_actions.request` (owner resumes, action `resume_program`) | `{"kind": "resume_schedule"\|"automatic", "unit_key", "reason"}` (`/control/resume` and `/control/automatic`) |
+| `control_actions.request` (person's hold seen, `status='skipped'`, rule `hold_off`) | `{"kind": "manual_hold_detected", "by": "thermostat"\|"app", "heat_f", "cool_f", "climate_ref", "hold_type", "start", "end", "until"}` (one per hold; a refused controller resume adds `refused`, `attempted`). The homekit service's rows (actor `homekit_service`) carry `"source": "homekit"`, `"hold_type": "homekit_manual"`, `"until": null` |
+| `control_actions.request` (Resume seen) | `{"kind": "manual_resume_detected", "person_hold_detection_id"}` for a person's hold, or `{"kind", "cancelled_action_id", "hold_end"}` for the controller's own |
+| `control_actions` (utility opt-out) | action `opt_out_event`, rule `utility_opt_out`, request `{"kind": "utility_opt_out", "event_id", "by": "owner"\|"rule", "sent": {source request}}`; `event_prep` holds add `hold_end_by` |
+| `alerts.dedupe_key` (utility) | `utility_event:<event_key>:<phase>`, phases `announced`, `running`, `ended`, `cancelled`, `skipped`, `skip_refused`, `skip_failed`, `skip_waiting_off`, `skip_waiting_cloud`, `rule:<unit>`; `unknown_event:<type>`; `person_hold:<unit>:<detection id>` (hold reminders) |
+| `utility_events.detail` | the last `ThermostatEvent` seen plus the app's keys `skip_attempts` and `rule_requested_at` |
 | `app_settings['utility_events']` | `UtilityEventSettings` (alerts, skip rules, pre-cooling); edited through `PUT /control/settings` |
 | `app_settings['ecobee_original']` | `{unit_key: EcobeeOriginal}`: each unit's Smart Away, Follow Me and Home sensors before the controller's first change; read by `GET /control/handback` |
 | `jobs` kind `handback` | `params` `{}`, `requested_by` `owner`; `result` `{"steps": [HandbackStep...]}` |

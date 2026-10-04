@@ -37,6 +37,13 @@ open it on your laptop), choose the owner password, and explore the simulated ho
 follow **[docs/DEPLOY.md](docs/DEPLOY.md)** to put it behind your nginx with HTTPS (and switch
 `CLIMATE_COOKIE_SECURE` back to `true`), connect ecobee and HomeKit, and sign Claude in.
 
+To see how the app handles a utility energy-saving event, announce one in the simulated house:
+
+```bash
+docker compose exec app python -m climate.cli sim-event --unit up,main --in-min 30 --hours 2 --cool-offset 2
+docker compose exec app python -m climate.cli sim-event --clear   # remove it again
+```
+
 ## Architecture
 
 Docker Compose on one home server; every port binds to `127.0.0.1` and the owner's nginx is
