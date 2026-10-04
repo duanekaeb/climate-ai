@@ -67,8 +67,12 @@ const problems = computed(() => {
   const out: string[] = []
   const lat = Number(form.lat)
   const lon = Number(form.lon)
-  if (form.lat.trim() === '' || !Number.isFinite(lat) || lat < -90 || lat > 90) out.push('Latitude must be between -90 and 90.')
-  if (form.lon.trim() === '' || !Number.isFinite(lon) || lon < -180 || lon > 180) out.push('Longitude must be between -180 and 180.')
+  if (form.lat.trim() === '' || form.lon.trim() === '') {
+    out.push('Enter the latitude and longitude (or use this device\'s location).')
+  } else {
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) out.push('Latitude must be between -90 and 90.')
+    if (!Number.isFinite(lon) || lon < -180 || lon > 180) out.push('Longitude must be between -180 and 180.')
+  }
   if (!validTz(form.tz.trim())) out.push('Pick a time zone such as America/Chicago.')
   return out
 })
@@ -76,7 +80,7 @@ const problems = computed(() => {
 const mapUrl = computed(() => {
   const lat = Number(form.lat)
   const lon = Number(form.lon)
-  if (problems.value.some((p) => p.startsWith('Lat') || p.startsWith('Long'))) return ''
+  if (problems.value.some((p) => p.startsWith('Lat') || p.startsWith('Long') || p.startsWith('Enter'))) return ''
   return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=15/${lat}/${lon}`
 })
 

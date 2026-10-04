@@ -102,7 +102,7 @@ def uncertainty(sig: SensorSignal, now: datetime) -> str | None:
     if sig.ts is None:
         return f"no reading yet from the {name} sensor"
     if now - sig.ts > FRESH:
-        return f"no reading from the {name} sensor for {_minutes(now - sig.ts)} min"
+        return f"no reading from the {name} sensor for {_duration(now - sig.ts)}"
     if not has_occupancy_info(sig):
         return f"the {name} sensor reports no occupancy data"
     return None
@@ -200,10 +200,10 @@ def _sensored_room(
 
     if last is not None:
         return (
-            RoomStateResult(room_key, "empty", 0.8, f"No motion for {_minutes(now - last)} min."),
+            RoomStateResult(room_key, "empty", 0.8, f"No motion for {_duration(now - last)}."),
             last + empty_after,
         )
-    return RoomStateResult(room_key, "empty", 0.8, f"No motion in the last {_minutes(empty_after)} min."), None
+    return RoomStateResult(room_key, "empty", 0.8, f"No motion in the last {_duration(empty_after)}."), None
 
 
 def house_empty(
@@ -259,8 +259,8 @@ def house_empty(
     if doubts:
         return False, f"Can't confirm the house is empty: {doubts[0]}."
     if last is not None:
-        return True, f"Phones away and no motion anywhere for {_minutes(now - last)} min."
-    return True, f"Phones away and no motion anywhere in the last {_minutes(window)} min."
+        return True, f"Phones away and no motion anywhere for {_duration(now - last)}."
+    return True, f"Phones away and no motion anywhere in the last {_duration(window)}."
 
 
 # ---------------------------------------------------------------------------------------
@@ -343,6 +343,15 @@ def persist_room_states(session: Session, now: datetime, states: dict[str, RoomS
 def _room_name(room_key: str) -> str:
     r = ROOM_BY_KEY.get(room_key)
     return r.name if r else room_key
+
+
+def _duration(delta: timedelta) -> str:
+    """Human duration for reasons: '45 min', '3 h', '2 d'."""
+    mins = _minutes(delta)
+    if mins < 120:
+        return f"{mins} min"
+    hours = round(mins / 60)
+    return f"{hours} h" if hours < 48 else f"{round(hours / 24)} d"
 
 
 def _minutes(delta: timedelta) -> int:
