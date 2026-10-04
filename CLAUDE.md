@@ -14,11 +14,18 @@ Read `docs/BLUEPRINT.md` before building anything. It is the plan of record.
 
 ## Ground rules
 
+- **The machine learning and controller make every real-time decision; Claude is never in the
+  control path.** Claude verifies and tunes on a schedule (nightly, weekly, ≤ 3 triggered runs a
+  day, on request). If Claude can't run, pending changes wait and the house keeps running.
 - **Claude never writes to a thermostat.** Only the controller writes to ecobee. Claude's write
-  tools only queue proposals, which are validated against hard limits in code, then backtested,
-  shadowed and canaried.
-- **The unattended agent authenticates with an API key** (`ANTHROPIC_API_KEY`), not a
-  subscription token. Built-in tools are disallowed and it runs in an empty `cwd`.
+  tools only queue proposals or sign off / hold changes the models queued, validated against hard
+  limits in code, then backtested, shadowed and trial-windowed.
+- **Claude runs on the owner's Claude subscription through the Agent SDK**: authenticate with
+  `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. `ANTHROPIC_API_KEY` must never be set on
+  the server (it would take priority and bill the API). Never use `--bare` mode (it ignores the
+  subscription). Pin the SDK version and check sign-in at startup. Keep tool outputs summarized
+  and turns capped. On a usage-limit error, reschedule after the reset. Warn 30 days before the
+  one-year token expires. Built-in tools are disallowed and the agent runs in an empty `cwd`.
 - **No savings claim without weather normalization.** Compare total-house runtime against the
   weather-expected baseline and show a 90% interval. Fix the success measure and 2–3
   checkpoints before an experiment starts, with stricter intervals at the early ones; never stop on

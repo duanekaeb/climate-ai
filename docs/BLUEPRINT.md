@@ -4,7 +4,8 @@ A whole-house optimizer for three ecobee thermostats. It monitors every sensor, 
 from strategy in every number, learns how the floors push heat into each other, keeps occupied
 rooms comfortable first, and adjusts schedules to minimize total runtime. Statistical models do
 the learning. Claude Opus 5.5 (through the Claude Agent SDK) is the analyst that steers them. A
-deterministic controller does the controlling.
+deterministic controller does the controlling. Claude runs on the owner's own Claude
+subscription, a few times a day, and is never in the control path.
 
 The interactive version of this document, including a working mockup of the app, is
 [`blueprint.html`](./blueprint.html). Open it in a browser.
@@ -113,25 +114,33 @@ from its neighbors, so savings are always measured on the whole house.
 
 ## 4. Machine learning and Claude
 
+### The loop
+
+Data (always on: ecobee every 3 min, HomeKit within seconds, weather hourly, add-on sensors) →
+analytics and reporting (always on) → machine learning (always on: house model, plan, replans,
+experiments) → controller (every 3 min, inside your limits). Claude reads the analytics and the
+models' results a few times a day, verifies yesterday's decisions, signs off or holds the changes
+the models queued, proposes better features and settings, and writes the reports.
+
 ### Who decides what
 
 | Layer | Cadence | Does | Can change |
 |---|---|---|---|
-| **Claude Opus 5.5** (judgment) | nightly, weekly, minutes after an anomaly, on request | diagnose, design and audit experiments, explain, propose model improvements | proposes features, model settings, plan parameters inside a pre-approved range, and experiments (you approve); can veto the optimizer's next pick; all gated |
+| **Claude Opus 5.5** (judgment, on your subscription) | nightly, weekly, minutes after an anomaly (≤ 3/day), on request | verify yesterday's decisions, sign off or hold model changes, diagnose, design and audit experiments, explain, propose model improvements | proposes features, model settings, plan parameters inside a pre-approved range, and experiments (you approve); can veto the optimizer's next pick; all gated |
 | **Models & optimizer** (skill) | refit nightly; replan 6 AM, noon, 3 PM and on forecast shifts | baselines, house model, daily plan, experiment statistics, next-test choice | today's plan within policy and limits |
 | **Controller** (reflexes) | every 3 min; seconds on local occupancy changes | runs the plan; writes 1–2 h timed holds renewed only while healthy | never waits on Claude |
 
-Gates for every change: backtest → simulation → 3–7 shadow days (logs only) → trial window
-(acts for a limited window, such as afternoons) → your limits.
+Gates for every change: backtest → simulation → 3–7 shadow days (logs only) → Claude sign-off →
+trial window (acts for a limited window, such as afternoons) → your limits.
 
 ### Why not Claude in the 3-minute loop
 
-About 480 calls a day would cost roughly $300–1,300 a month on the API. An always-running Agent SDK
-service should use an API key, not a subscription. House temperatures respond over tens of minutes
+About 480 calls a day would hit a subscription's session and weekly limits within hours (on a paid
+API key it would be roughly $300–1,300 a month). House temperatures respond over tens of minutes
 to hours, so 480 quick decisions add no control. Opus 5.5 answers aren't guaranteed repeatable. The
 house would have no driver during outages. And a 2026 review of 66 studies found no language-model
-HVAC controller ready for real operation, recommending advisory roles. The layered design costs
-roughly $35–70 a month.
+HVAC controller ready for real operation, recommending advisory roles. The layered design needs
+only a handful of Claude runs a day, which fits a subscription.
 
 ### How Claude speeds up the learning
 
@@ -186,7 +195,8 @@ sanity; shadow days; canary windows; drift watch that triggers a Claude investig
 
 ### Fallbacks
 
-Failed model → last good model. No good model → linked-floors rules. Server down → holds expire
+Failed model → last good model. No good model → linked-floors rules. Claude unavailable (plan limit,
+expired sign-in) → changes awaiting sign-off stay pending, reports catch up later. Server down → holds expire
 within 2 hours, and each ecobee runs its own schedule (Smart Away stays off in settings). Cloud
 down → HomeKit live readings and basic timed holds.
 
@@ -219,23 +229,47 @@ added on top.
 
 ---
 
-## 6. Claude setup
+## 6. Claude setup (on your subscription)
 
-- **Always-on agent: API key** (`ANTHROPIC_API_KEY` from platform.claude.com). Anthropic's terms say
-  Agent SDK services should use API key authentication. About $0.80–1.60 per nightly run; with the
-  weekly report, triggered investigations and Ask Claude questions, roughly $35–70 a month.
-- **You asking questions: your Pro/Max subscription** in Claude Code or Claude Desktop, connected to
-  the app's MCP server. That's ordinary use of Anthropic's own apps. The `claude setup-token` OAuth
-  token is meant for scripts and CI and isn't used for the unattended agent.
+Claude runs through the Claude Agent SDK on the home server, signed in with the owner's Claude plan.
+There is no API key and no per-token bill.
+
+**Setup, once:**
+1. Run `claude setup-token` (browser approval) to get a one-year token.
+2. Set it as `CLAUDE_CODE_OAUTH_TOKEN` in the agent service.
+3. Make sure `ANTHROPIC_API_KEY` is not set anywhere on the server. It would take priority and bill
+   the API.
+4. Never run in `--bare` mode, which ignores subscription sign-in. Anthropic recommends bare for
+   scripts and plans to make it the default for `-p`.
+5. Pin the SDK version and check sign-in at startup.
+
+**Footprint:**
+- About one run a night, one a week, ≤ 3 triggered runs a day (coalesced), plus questions.
+- Runs happen at night. Plan session, weekly and Opus limits are shared with the owner's own use.
+- Tools return summaries and turns are capped.
+- On a usage-limit error, reschedule after the reset. If only the Opus limit is hit, rerun on
+  Sonnet 5.5.
+- Warn 30 days before the token expires and immediately on any sign-in failure.
+
+**Terms:** Anthropic's support article "Use the Claude Agent SDK with your Claude plan" (updated
+2026-06-16) says Agent SDK and `claude -p` usage "still draw from your subscription's usage limits".
+It also says Anthropic is reworking how subscriptions cover SDK use, so re-check it periodically.
+The legal page asks developers building products for other people to use API keys; this is a
+personal tool signed in as the owner. Claude is never in the control path, so any change can only
+pause reports and tuning. Switching to an API key later is one environment variable.
+
+**Alternatives checked:** Claude Code routines run in Anthropic's cloud and can't reach the home
+LAN. Claude Desktop scheduled tasks need the desktop app open on an awake computer.
 
 Tools: read (`get_house_status`, `query_runtime`, `query_sensors`, `get_weather`, `baseline_report`,
 `coupling_report`, `drift_report`, `natural_experiment_report`, `explain_action`), compute
-(`refit_model`, `run_backtest`, `simulate_plan`, `estimate_power`), gated (`propose_policy_change`,
-`propose_experiment`, `publish_report`). No tool talks to a thermostat.
+(`refit_model`, `run_backtest`, `simulate_plan`, `estimate_power`), gated (`review_pending_changes`,
+`sign_off_change`, `propose_policy_change`, `propose_experiment`, `publish_report`). No tool talks to a thermostat.
 
 ```python
 options = ClaudeAgentOptions(
     model="claude-opus-5-5",
+    fallback_model="claude-sonnet-5-5",    # used if Opus is overloaded
     effort="medium",                       # "high" for the weekly report
     system_prompt=open("agent/prompts/nightly.md").read(),
     mcp_servers={"house": house},
@@ -245,12 +279,13 @@ options = ClaudeAgentOptions(
                       "NotebookEdit", "WebFetch", "WebSearch"],
     permission_mode="dontAsk",
     cwd="/srv/climate/agent-empty",        # empty directory: no secrets within reach
-    max_turns=40,
-    max_budget_usd=3.00,                   # client-side estimate; last request can overshoot
+    max_turns=30,
 )
+# Signed in via CLAUDE_CODE_OAUTH_TOKEN; assert ANTHROPIC_API_KEY is not in the environment.
 # Check ResultMessage.terminal_reason == "completed" before trusting a digest: an API failure on
 # the final request can still report subtype "success". query() then raises ResultError after the
-# error result (turn cap, budget cap, API error), so wrap the loop in try/except ResultError.
+# error result (turn cap, usage limit, sign-in failure), so wrap the loop in try/except ResultError
+# and, on a usage-limit error (429), reschedule after the reset.
 ```
 
 ---
@@ -354,7 +389,7 @@ Phase 4.
 | 0 | this week | ecobee sign-in, HomeKit pairing, Phase 0 tests, order Toy Room + stairwell sensors | all 7 points stream live; tests answered |
 | 1 | weeks 1–2 | backfill, Live/Rooms/Runtime screens, daily digest | runtime per unit matches ecobee within 1% |
 | 2 | weeks 2–4 | baselines, attribution, history study, occupancy v1 (3 states) | baselines pass checks; a week of room states spot-checked |
-| 3 | weeks 3–5 | Claude analyst (read-only, API key), weekly report, MCP server | the weekly report says something new |
+| 3 | weeks 3–5 | Claude analyst on your subscription (read-only tools + sign-off of model changes), weekly report, MCP server | the weekly report says something new |
 | 4 | weeks 5–8 | controller in Suggest mode, timed holds with read-back, Linked floors checked against the weather baseline then its offset tuned with one pre-planned switchback | upstairs maxed-out minutes near zero; total-house savings with a 90% interval |
 | 5 | week 8 on | house model, pre-cooling, automatic tuning (only if they beat the rule), predicted arrivals, heating season | experiments stop finding gains larger than their uncertainty |
 
@@ -370,3 +405,4 @@ Phase 4.
 8. Weather point (ZIP), and flat or time-of-use electricity rate?
 9. Bedtimes, school hours, office hours.
 10. Comfort bands per floor and time.
+11. Which Claude plan (Pro or Max)? It sets how much room the nightly runs have.
