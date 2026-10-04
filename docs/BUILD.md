@@ -165,7 +165,7 @@ lists capped) so turns stay cheap. None can reach a thermostat.
 |---|---|
 | Read | `get_house_status`, `query_runtime` (daily, N days), `query_room` (history summary), `get_weather`, `baseline_report`, `savings_report`, `waterfall_report`, `coupling_report`, `comfort_report`, `drift_report`, `natural_experiment_report`, `list_actions` / `explain_action`, `list_reports`, `get_settings` |
 | Compute | `run_backtest`, `simulate_plan`, `estimate_power`, `request_refit` |
-| Gated | `review_pending_changes`, `sign_off_change` (approve / hold / reject with a reason), `propose_policy_change`, `propose_experiment`, `publish_report` |
+| Gated | `review_pending_changes`, `sign_off_change` (approve or hold, with a reason; only the owner rejects), `propose_policy_change`, `propose_experiment`, `publish_report` |
 
 ## Web
 
