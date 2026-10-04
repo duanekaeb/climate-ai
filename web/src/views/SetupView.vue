@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // Setup (owner onboarding): location, data source, ecobee sign-in, thermostat and sensor
-// mapping, and HomeKit pairing. Polls /setup every 2 s while a HomeKit pairing is in progress.
+// mapping (with each thermostat's utility enrollment), HomeKit pairing, and "Hand back to
+// ecobee". Polls /setup every 2 s while a HomeKit pairing is in progress.
 import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { onEvent } from '@/api/ws'
 import AsyncState from '@/components/AsyncState.vue'
 import Icon from '@/components/Icon.vue'
 import SetupEcobee from '@/components/setup/SetupEcobee.vue'
+import SetupHandback from '@/components/setup/SetupHandback.vue'
 import SetupHomekit from '@/components/setup/SetupHomekit.vue'
 import SetupLocation from '@/components/setup/SetupLocation.vue'
 import SetupSensors from '@/components/setup/SetupSensors.vue'
@@ -22,6 +24,7 @@ const SECTIONS = [
   { id: 'setup-thermostats', label: 'Thermostats' },
   { id: 'setup-sensors', label: 'Sensors' },
   { id: 'setup-homekit', label: 'HomeKit' },
+  { id: 'setup-handback', label: 'Hand back' },
 ]
 
 function jump(id: string) {
@@ -87,6 +90,9 @@ onBeforeUnmount(() => {
         </div>
         <div id="setup-homekit" tabindex="-1" class="scroll-mt-20 outline-none">
           <SetupHomekit :homekit="setup.data.homekit" :units="setup.data.units" :rooms="setup.data.rooms" :secrets-ok="setup.data.secrets_ok" />
+        </div>
+        <div id="setup-handback" tabindex="-1" class="scroll-mt-20 outline-none">
+          <SetupHandback :units="setup.data.units" :sensors="setup.data.sensors" />
         </div>
       </div>
     </AsyncState>

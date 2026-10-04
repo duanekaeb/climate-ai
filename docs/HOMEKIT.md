@@ -159,6 +159,8 @@ low latency.
 | Sensor status, low battery, battery level | sensors | pushed + polled |
 | Seconds since last occupancy / motion (`VENDOR_ECOBEE_*_LAST_ACTIVATION`, -1 = never) | sensors, thermostats | **polled only** |
 | Equipment running, current mode, hold end time (`VENDOR_ECOBEE_*`) | thermostats | **polled only** |
+| System mode, active heat/cool setpoints (`HEATING_COOLING_TARGET`, `TEMPERATURE_*_THRESHOLD`) | thermostats | **polled only**, never written |
+| Each comfort setting's own targets (`VENDOR_ECOBEE_HOME/SLEEP/AWAY_TARGET_HEAT/COOL`) | thermostats | **polled only**, never written |
 
 On current firmware (4.7 / 4.8 fixtures) **every ecobee vendor characteristic is readable but
 has no `ev` permission**: it cannot be subscribed, it changes only by polling, and subscribing
@@ -182,7 +184,8 @@ Behaviour you may notice (verified in the library):
 ## 7. Writes (controller only, from Phase 4)
 
 Claude never writes to a thermostat; only the controller process does, after the guardrails.
-Over HomeKit the only write is a **timed hold**:
+Over HomeKit the controller writes only a **timed hold** of one comfort setting (and, to resume
+the schedule, `VENDOR_ECOBEE_CLEAR_HOLD`):
 
 1. Read `VENDOR_ECOBEE_TIMESTAMP` to learn this unit's suffix (`T`, `Q` and `R` have all been
    seen; none on 4.2 firmware).
@@ -206,7 +209,75 @@ minutes and a request stuck "sent" (service restarted mid-write) is failed after
 cloud is down the service also writes a HomeKit-based snapshot of each unit, so the Live page
 and the controller keep current temperatures.
 
-## 8. Unpair or reset
+## 8. While the ecobee cloud is down: what HomeKit can and can't see
+
+HomeKit is a narrower window onto the thermostat than the ecobee cloud.
+
+**It shows:** room temperatures, humidity, occupancy and motion; whether the system is heating
+or cooling; the system mode; the active heat/cool setpoints; which comfort setting is in force
+(Home, Sleep, Away, or a temperature hold); each comfort setting's own targets; and the time of
+the next schedule change (or the end of a hold).
+
+**It does not show:**
+- **ecobee holds as such.** No hold type ("2 hours", "until the next change", "until I change
+  it"), no start time and no hint of who set it. A HomeKit snapshot reports a hold only when it
+  is our own HomeKit hold, a hold the cloud reported before it went down that the thermostat
+  still shows, or a temperature hold it can see.
+- **Utility (demand-response) events.** None is announced, started or ended over HomeKit, and
+  the HomeKit snapshot lists no events and no utility. An event the cloud announced before it
+  went down still makes the controller stand aside during its scheduled window. An event
+  announced while the cloud is down is unknown to the app until the cloud is back.
+- **Vacations and the other ecobee events** (Smart Away/Home, Quick Save, and so on).
+- Utility enrollment, alerts, settings and the schedule itself.
+
+**A utility event can't be skipped over HomeKit.** Skipping is an opt-out ecobee records and
+reports to the utility, and it goes through the ecobee cloud. HomeKit has no such command, so a
+skip you ask for waits until the cloud is back (the app tells you once).
+
+### Changes made by hand during an outage
+
+While the cloud circuit is open and HomeKit is writing the unit's live snapshot (the cloud's is
+more than 10 minutes old), the service compares every poll with what the app knows it put on
+the thermostat. It treats either of these as someone's hand change:
+
+- **A comfort setting picked by hand.** One of our HomeKit holds is running, but the thermostat
+  shows another comfort setting or a temperature hold.
+- **A temperature set by hand.** The setpoints the thermostat acts on (heat, cool, or both in
+  auto) are more than 0.5°F from the targets of the comfort setting in force. When the
+  thermostat shows a temperature hold, they match none of the comfort settings' targets.
+
+It logs **one** action-log entry per change, for example "Someone picked Away by hand on the
+upstairs thermostat (seen over HomeKit while the ecobee cloud is down); the controller stands
+aside until the cloud is back." That entry is your hold for that unit, "until you change it",
+because HomeKit cannot show when it ends. The controller writes nothing to that unit until
+the cloud is back. Then the real ecobee hold state decides: a hold still running stays your
+hold, and one that has ended frees the unit. A HomeKit hold the controller had queued before
+the change is not sent; it is logged as "Not sent: someone changed the thermostat by hand".
+The same change is not logged again while it stays on the thermostat. A different change gets a
+new entry.
+
+What it cannot catch, or may get wrong:
+- With no hold of ours running, a comfort setting picked by hand looks exactly like the
+  schedule, so it is invisible. Picking the comfort setting our hold already holds is invisible
+  too.
+- A temperature set by hand is visible only while the thermostat answers for the comfort
+  settings' targets, and only when it is more than 0.5°F from them. A temperature hold at
+  exactly one comfort setting's setpoints looks like that setting.
+- Pressing Resume during our hold looks like picking whatever the schedule shows, so it is
+  logged as a hand change as well. The controller then stands aside, which is the safe
+  direction.
+- Nothing is read as a hand change while a utility event is in its window or the cloud's last
+  snapshot showed a vacation or an unrecognised ecobee event: their setpoints are not a
+  person's. A vacation or utility event that **starts** during the outage without the app
+  knowing about it can be mistaken for a hand change.
+- **Not checked on a real ecobee.** Two things are unverified: whether a temperature set at the
+  wall reads as "temperature hold" in the current-mode characteristic, and whether the active
+  setpoints ever drift from a comfort setting's targets on their own (Smart Recovery, eco+).
+  If they do drift, the service reads it as a hand change and the controller stands aside until
+  the cloud is back. That is the safe direction, at the cost of less automation during an
+  outage.
+
+## 9. Unpair or reset
 
 **Normal way:** Setup → HomeKit → **Unpair**. The thermostat must be reachable: the service
 removes the pairing on the thermostat itself, then deletes the stored keys. If the thermostat
@@ -222,7 +293,7 @@ forgets the pairing here; choose Disconnect from HomeKit on the thermostat befor
 
 To pair it again later, the thermostat must show ready to pair (step 2).
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---|---|

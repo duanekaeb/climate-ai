@@ -10,7 +10,7 @@ import pytest
 from climate.sources import ecobee as ecobee_src
 from climate.store import secrets
 from climate.store.db import session_scope
-from climate.store.orm import EcobeeThermostat, HomekitDevice
+from climate.store.orm import EcobeeThermostat, HomekitDevice, UtilityEvent
 from climate.timeutil import utcnow
 
 PAIR_CODE = "123-45-678"
@@ -123,6 +123,26 @@ def test_ecobee_signout_forgets_the_token_even_if_the_adapter_fails(owner, monke
     r = owner.post("/api/setup/ecobee/signout")
     assert r.status_code == 200
     assert r.json()["ecobee"]["signed_in"] is False
+
+
+def test_thermostat_utility_enrollment(owner):
+    now = utcnow()
+    with session_scope() as s:
+        s.add(EcobeeThermostat(identifier="311000000001", name="Hallway", model_number="nikeSmart", last_seen_at=now,
+                               unit_key="main", settings={"drAccept": "askMe", "utility": {
+                                   "name": "Example Power", "phone": "555-0100", "email": None, "web": "example.com"}}))
+        s.add(EcobeeThermostat(identifier="311000000002", name="Toy Room", model_number="attisRetail", last_seen_at=now,
+                               unit_key="up", settings={"drAccept": "always", "utility": None}))
+        s.add(EcobeeThermostat(identifier="311000000003", name="Bedroom", model_number="nikeSmart", last_seen_at=now,
+                               unit_key="bed", settings={"utility": {"name": ""}}))
+        s.flush()
+        s.add(UtilityEvent(unit_key="up", event_key="link:x", status="ended", first_seen_at=now, last_seen_at=now))
+    tstats = {t["identifier"]: t for t in owner.get("/api/setup").json()["ecobee"]["thermostats"]}
+    hallway, toy, bedroom = tstats["311000000001"], tstats["311000000002"], tstats["311000000003"]
+    assert hallway["utility"] == {"name": "Example Power", "phone": "555-0100", "email": None, "web": "example.com"}
+    assert (hallway["dr_accept"], hallway["enrolled"]) == ("askMe", True)
+    assert (toy["utility"], toy["dr_accept"], toy["enrolled"]) == (None, "always", True)  # an event was seen there
+    assert (bedroom["utility"], bedroom["dr_accept"], bedroom["enrolled"]) == (None, None, None)  # unknown, not "no"
 
 
 def test_ecobee_map(owner):

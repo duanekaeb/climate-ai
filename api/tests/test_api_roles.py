@@ -1,6 +1,6 @@
 """The role matrix from docs/BUILD.md: every route is public, reader, writer, owner or agent.
 
-The agent may never call /control/* writes, /setup/*, /agent/ask|run,
+The agent may never call /control/* writes, /utility-events/* skips, /setup/*, /agent/ask|run,
 /experiments/{id}/decision or /alerts/*/resolve. Readers need a session or a token.
 """
 
@@ -32,6 +32,8 @@ READER = [
     ("GET", "/api/control/settings"),
     ("GET", "/api/control/plan"),
     ("GET", "/api/control/actions"),
+    ("GET", "/api/control/handback"),
+    ("GET", "/api/utility-events"),
     ("GET", "/api/changes"),
     ("GET", "/api/experiments"),
     ("GET", "/api/experiments/power"),
@@ -62,7 +64,11 @@ OWNER_ONLY = [
     ("POST", "/api/control/mode"),
     ("POST", "/api/control/hold"),
     ("POST", "/api/control/resume"),
+    ("POST", "/api/control/automatic"),
     ("POST", "/api/control/presence"),
+    ("POST", "/api/control/handback"),
+    ("POST", "/api/utility-events/{event_id}/skip"),
+    ("POST", "/api/utility-events/{event_id}/unskip"),
     ("POST", "/api/experiments/{experiment_id}/decision"),
     ("POST", "/api/alerts/{alert_id}/resolve"),
     ("POST", "/api/agent/ask"),
@@ -87,7 +93,7 @@ AGENT_ONLY = [
 ]
 
 SAMPLE = {"room_key": "hallway", "experiment_id": "1", "job_id": "1", "report_id": "1", "run_id": "1",
-          "change_id": "1", "alert_id": "1"}
+          "change_id": "1", "alert_id": "1", "event_id": "1"}
 
 
 def concrete(path: str) -> str:

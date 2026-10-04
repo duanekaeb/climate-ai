@@ -171,7 +171,7 @@ async def test_renews_our_hold_before_it_ends(db):
     show_hold(t1)
     state = load_house_state(db, t1)
     assert state.units["up"].snapshot.hold.set_by_us is True
-    assert state.units["up"].manual_override_until is None
+    assert state.units["up"].person_hold is None and state.units["up"].resume_backoff_until is None
     await controller.tick(src, t1)
     assert len(src.holds) == 1  # hold matches and ends in 80 min: nothing to do
 
@@ -204,7 +204,7 @@ async def test_resumes_program_when_schedule_matches(db):
     assert row.status == "verified" and "Resuming" in row.reason
 
 
-async def test_manual_hold_starts_backoff(db):
+async def test_a_persons_hold_wins_for_as_long_as_it_runs(db):
     setup_house(db, act_units=["up"])
     put_snapshot(db, "up", NOW - timedelta(minutes=1), heat=70.0, cool=74.0,
                  hold=HoldInfo(heat_f=70.0, cool_f=74.0, hold_type="indefinite"))
@@ -212,22 +212,20 @@ async def test_manual_hold_starts_backoff(db):
     src = FakeSource()
     await controller.tick(src, NOW)
     assert src.holds == []
-    skipped = actions(db, unit_key="up", status="skipped")
-    assert len(skipped) == 1 and "by hand" in skipped[0].reason and "6:00 PM" in skipped[0].reason
+    (skipped,) = actions(db, unit_key="up", status="skipped")
+    assert skipped.reason == ("Someone set a hold on the upstairs thermostat (70–74°F, until you change it); the "
+                              "controller waits until it ends or you choose Back to automatic.")
+    assert skipped.request["kind"] == "manual_hold_detected" and skipped.request["until"] is None
     state = load_house_state(db, NOW + timedelta(minutes=5))
-    assert state.units["up"].manual_override_until == NOW + timedelta(hours=4)
+    ph = state.units["up"].person_hold
+    assert ph is not None and ph.until is None and ph.by == "thermostat" and ph.detection_id == skipped.id
+    assert state.units["up"].resume_backoff_until is None
 
-    later = NOW + timedelta(minutes=10)
-    put_snapshot(db, "up", later, heat=70.0, cool=74.0, hold=HoldInfo(heat_f=70.0, cool_f=74.0))
-    refresh_sensors(db, later)
-    await controller.tick(src, later)
-    assert src.holds == [] and len(actions(db, unit_key="up", status="skipped")) == 1
-
-    after = NOW + timedelta(hours=4, minutes=5)
-    put_snapshot(db, "up", after, heat=70.0, cool=74.0, hold=HoldInfo(heat_f=70.0, cool_f=74.0))
-    refresh_sensors(db, after)
-    await controller.tick(src, after)
-    assert len(src.holds) == 1  # back-off over: the plan takes the thermostat back
+    for later in (NOW + timedelta(minutes=10), NOW + timedelta(hours=4, minutes=5)):  # no time limit
+        put_snapshot(db, "up", later, heat=70.0, cool=74.0, hold=HoldInfo(heat_f=70.0, cool_f=74.0))
+        refresh_sensors(db, later)
+        await controller.tick(src, later)
+        assert src.holds == [] and len(actions(db, unit_key="up", status="skipped")) == 1
 
 
 async def test_circuit_open_queues_homekit_climate_hold(db):
@@ -282,17 +280,20 @@ async def test_execute_queued_owner_hold(db):
     src = FakeSource()
     handled = await controller.execute_queued(src, NOW)
     assert len(handled) == 2
-    assert [(h.unit_key, h.heat_f, h.cool_f, h.hours) for h in src.holds] == [("up", 68.0, 74.0, 1)]  # 2°F step
+    # exactly what was typed: no 2°F step limit for the owner (bug 4)
+    assert [(h.unit_key, h.heat_f, h.cool_f, h.hours) for h in src.holds] == [("up", 68.0, 72.0, 1)]
     assert src.resumes == ["bed"]
     hold = actions(db, actor="owner", unit_key="up")[0]
-    assert hold.status == "verified" and hold.request["cool_f"] == 74.0
-    assert hold.request["requested"]["cool_f"] == 72.0
+    assert hold.status == "verified" and hold.request["cool_f"] == 72.0 and "requested" not in hold.request
     assert actions(db, channel="homekit")[0].status == "queued"
-    # the owner's hold now backs the controller off
-    put_snapshot(db, "up", NOW, heat=68.0, cool=74.0, hold=HoldInfo(heat_f=68.0, cool_f=74.0))
+    # the owner's hold is a person's hold (from the app): the controller waits until it ends
+    put_snapshot(db, "up", NOW, heat=68.0, cool=72.0,
+                 hold=HoldInfo(heat_f=68.0, cool_f=72.0, start=NOW, end=NOW + timedelta(hours=1)))
     db.commit()
     state = load_house_state(db, NOW + timedelta(minutes=1))
-    assert state.units["up"].manual_override_until is not None
+    ph = state.units["up"].person_hold
+    assert ph is not None and ph.by == "app" and ph.until == NOW + timedelta(hours=1)
+    assert state.units["up"].snapshot.hold.set_by_us is False
 
 
 async def test_execute_queued_rejects_stale_unit(db):

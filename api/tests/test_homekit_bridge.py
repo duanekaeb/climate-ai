@@ -79,8 +79,11 @@ def test_type_constants_match_aiohomekit():
     }
     # the comfort targets are read-only: every one of them is write-forbidden
     assert {t for pair in hk.COMFORT_TARGET_TYPES.values() for t in pair} == hk.FORBIDDEN_WRITE_TYPES
-    read_only = {"HEATING_COOLING_TARGET", "TEMPERATURE_HEATING_THRESHOLD", "TEMPERATURE_COOLING_THRESHOLD"}
+    read_only = {"HEATING_COOLING_TARGET", "TEMPERATURE_HEATING_THRESHOLD", "TEMPERATURE_COOLING_THRESHOLD",
+                 *(k for pair in hk.COMFORT_TARGET_KEYS.values() for k in pair)}
     assert read_only <= set(hk.CHAR_TYPES) and not (read_only & (hk.ALLOWED_WRITE_KEYS | hk.PUSH_KEYS))
+    # the polled comfort-target keys are exactly the write-forbidden types
+    assert {hk.CHAR_TYPES[k] for pair in hk.COMFORT_TARGET_KEYS.values() for k in pair} == hk.FORBIDDEN_WRITE_TYPES
 
 
 async def test_start_creates_private_state_dir_and_no_pairing_file(tmp_path):
@@ -166,7 +169,8 @@ async def test_inventory_indexes_thermostat_and_sensors(tmp_path):
     assert tstat["chars"]["TEMPERATURE_CURRENT"]["iid"] == dev.iids[(1, "TEMPERATURE_CURRENT")]
     assert tstat["chars"]["VENDOR_ECOBEE_TIMESTAMP"]["perms"] == ["pr", "pw"]
     assert "VENDOR_ECOBEE_SET_HOLD_SCHEDULE" in tstat["chars"]
-    assert all(c["type"] != HOME_TARGET_HEAT for c in tstat["chars"].values())
+    # the comfort targets are indexed (polled, read only: test_never_writes_home_sleep_away_targets)
+    assert tstat["chars"]["VENDOR_ECOBEE_HOME_TARGET_HEAT"]["type"] == HOME_TARGET_HEAT
     assert (sensor["name"], sensor["model"]) == ("Kitchen", "EBRSE4")
     assert set(sensor["chars"]) >= {"TEMPERATURE_CURRENT", "OCCUPANCY_DETECTED", "MOTION_DETECTED",
                                     "VENDOR_ECOBEE_OCCUPANCY_LAST_ACTIVATION", "BATTERY_LEVEL", "STATUS_LO_BATT"}
@@ -181,8 +185,8 @@ async def test_read_polls_in_batches_of_49_one_request_at_a_time(tmp_path):
     a, b = await asyncio.gather(bridge.read("hallway"), bridge.read("hallway"))
     assert a.ok and b.ok
     gets = [payload for kind, payload in p.calls if kind == "get"]
-    readable = 8 * 12 + 11  # 8 readable per sensor, 11 on the thermostat (write-only ones and the
-    # comfort targets, read only before a climate hold, are skipped)
+    readable = 8 * 12 + 17  # 8 readable per sensor, 17 on the thermostat (the write-only ones are
+    # skipped; the six comfort targets are polled, read only)
     assert all(len(g) <= 49 for g in gets)
     assert len(gets) == 2 * -(-readable // 49)
     assert sum(len(g) for g in gets) == 2 * readable

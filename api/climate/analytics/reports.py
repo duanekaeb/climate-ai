@@ -9,12 +9,14 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from climate.analytics import exclusions
 from climate.analytics.baseline import (
     TRAIN_DAYS,
     BaselineFit,
     expected_covered_seconds,
     involved_modes,
     plain,
+    pre_period_excluded,
     pre_period_fits,
     residual_stats,
 )
@@ -82,7 +84,12 @@ def build_daily_report(session: Session, day: date) -> int:
     never grades itself) with a 90% prediction interval for a single day,
     t(n - p, 0.95) * sigma_day * sqrt(1 + 1/n) (``ResidualStats.day_halfwidth``; sigma_day
     follows the day's level when the residuals scale with runtime). The multi-day G14 form
-    is for savings periods; at m = 1 it would cover about 99% of days, not 90%."""
+    is for savings periods; at m = 1 it would cover about 99% of days, not 90%.
+
+    On a day with a utility event (or the pre-cooling before one) the house total is not graded
+    against the weather: the utility set the thermostats, and such days are left out of every
+    weather analysis (``exclusions``). The baselines' training days leave them out too, and the
+    report says how many."""
     tz = house_tz(session)
     t0, t1 = day_bounds_utc(day, tz)
     fits = pre_period_fits(session, day, tz)
@@ -90,6 +97,8 @@ def build_daily_report(session: Session, day: date) -> int:
     by_unit = {r.unit_key: r for r in rows}
     involved = involved_modes(rows, fits)
     weights = unit_weights(session)
+    event = exclusions.event_days(session, day, day, tz).get(day)
+    train_left = pre_period_excluded(session, day, tz)
 
     units = [_unit_line(by_unit.get(u.key), fits, involved, u.key) for u in UNITS]
     names = {u.key: u.name for u in UNITS}
@@ -143,7 +152,10 @@ def build_daily_report(session: Session, day: date) -> int:
             maxed = "–" if u["actual_min"] is None else f"{u['maxed_min']:.0f} min"
             md.append(f"| {names[u['unit_key']]} | {_fmt_min(u['actual_min'])} | {exp_s} | {maxed} |")
         md.append("")
-        if house["baseline_ok"] and house["expected_min"] is not None and house["ci90_min"] is not None:
+        if event is not None:
+            md += [(f"House: {_fmt_min(house['actual_min'])} min, not graded against the weather: this is a "
+                    f"{exclusions.day_noun(event)}, which savings, baselines and experiments leave out."), ""]
+        elif house["baseline_ok"] and house["expected_min"] is not None and house["ci90_min"] is not None:
             lo, hi = house["ci90_min"]
             verdict = ("inside the range the weather explains" if lo <= house["actual_min"] <= hi else
                        "below the weather-expected range" if house["actual_min"] < lo else
@@ -153,6 +165,9 @@ def build_daily_report(session: Session, day: date) -> int:
         else:
             md += [(f"House: {_fmt_min(house['actual_min'])} min; no weather-normalized comparison today (baselines "
                     f"come from the {TRAIN_DAYS} days before and need to pass their checks)."), ""]
+        if train_left:
+            md += [f"The baselines leave out {exclusions.days_phrase(train_left)} from their {TRAIN_DAYS} training days.",
+                   ""]
 
     if misses:
         parts = []
@@ -199,6 +214,8 @@ def build_daily_report(session: Session, day: date) -> int:
         "open_meteo": open_meteo,
         "attribution": OPEN_METEO_ATTRIBUTION if open_meteo else None,
         "baseline": f"the {TRAIN_DAYS} days before {day.isoformat()}",
+        "excluded": event,  # why this day is left out of the weather analyses, if it is
+        "baseline_excluded": exclusions.counts(train_left),  # {reason: days} left out of the training days
     }
 
     existing = session.execute(

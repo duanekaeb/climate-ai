@@ -6,10 +6,12 @@ CV(RMSE) <= 20% and |NMBE| <= 0.5% (ASHRAE Guideline 14 daily). Needs >= 21 days
 
 Details that matter for honesty:
 
-- Only complete days are fitted (``daily.is_complete``: >= 90% of slots and outdoor hours) and
-  days with the system switched off for over half the day are left out. A >= 90% day is scaled
-  up to its full length (``daily.full_day_seconds``); DST days keep their 23/25 hours on both
-  sides (runtime and degree-hours), so no other normalization is needed.
+- Only complete days are fitted (``daily.is_complete``: >= 90% of slots and outdoor hours);
+  days with the system switched off for over half the day, a running experiment's treatment
+  days, and days with a utility event or the pre-cooling before one (``exclusions``) are left
+  out. A >= 90% day is scaled up to its full length (``daily.full_day_seconds``); DST days
+  keep their 23/25 hours on both sides (runtime and degree-hours), so no other normalization
+  is needed.
 - A mode needs >= 10 days with runtime in that mode, otherwise there is nothing to model.
 - The intercept is constrained to >= 0 (the constrained optimum then lies on intercept = 0)
   and the slope must be positive.
@@ -41,6 +43,7 @@ from scipy import stats as sstats
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
+from climate.analytics import exclusions
 from climate.analytics.daily import (
     DayRow,
     daily_rows,
@@ -419,24 +422,34 @@ def treatment_days(session: Session, start: date, end: date) -> set[date]:
 
 def fit_window(
     session: Session, start: date, end: date, tz: str | None = None, unit_keys: list[str] | None = None,
-    rows: list[DayRow] | None = None,
+    rows: list[DayRow] | None = None, excluded: dict[date, str] | None = None,
 ) -> dict[tuple[str, str], BaselineFit]:
-    """Fit every unit x mode on the local days [start, end] (treatment-arm days excluded).
-    Not stored. ``rows`` may be passed when the caller already has them."""
+    """Fit every unit x mode on the local days [start, end], leaving out treatment-arm days
+    and utility-event / pre-cooling days (``exclusions.event_days``; a fit's notes say how many
+    of its unit's days that dropped). Not stored. ``rows`` and ``excluded`` may be passed when
+    the caller already has them."""
     if end < start:
         return {}
     tz = tz or house_tz(session)
     rows = rows if rows is not None else daily_rows(session, start, end, tz, unit_keys)
     skip = treatment_days(session, start, end)
+    events = excluded if excluded is not None else exclusions.event_days(session, start, end, tz)
     by_unit: dict[str, list[DayRow]] = defaultdict(list)
+    left_out: dict[str, dict[date, str]] = defaultdict(dict)
     for r in rows:
-        if start <= r.day <= end and r.day not in skip:
-            by_unit[r.unit_key].append(r)
+        if not start <= r.day <= end or r.day in skip:
+            continue
+        if r.day in events:
+            left_out[r.unit_key][r.day] = events[r.day]
+            continue
+        by_unit[r.unit_key].append(r)
     out: dict[tuple[str, str], BaselineFit] = {}
     for unit in sorted(by_unit, key=unit_order):
         for mode in MODES:
             fit = fit_baseline(by_unit[unit], mode)
             if fit is not None:
+                if left_out[unit]:
+                    fit.notes = f"{fit.notes}; {exclusions.days_phrase(left_out[unit])} left out"
                 out[(unit, mode)] = fit
     return out
 
@@ -447,6 +460,13 @@ def pre_period_fits(session: Session, before: date, tz: str | None = None, train
     period never trains its own baseline)."""
     end = before - timedelta(days=1)
     return fit_window(session, end - timedelta(days=train_days - 1), end, tz)
+
+
+def pre_period_excluded(session: Session, before: date, tz: str, train_days: int = TRAIN_DAYS) -> dict[date, str]:
+    """The utility-event / pre-cooling days ``pre_period_fits`` leaves out of its training
+    window (for the reports' notes)."""
+    end = before - timedelta(days=1)
+    return exclusions.event_days(session, end - timedelta(days=train_days - 1), end, tz)
 
 
 def _r(x: float, nd: int = 4) -> float:
@@ -477,8 +497,8 @@ def plain(obj: Any) -> Any:
 
 def refit_all(session: Session, now: datetime, train_days: int = 90) -> list[int]:
     """Fit every unit x mode with enough data on the last train_days (excluding days used by a
-    running experiment's treatment arm), store model_fits (kind='baseline') as 'active',
-    retiring the previous active fit. Returns new ids."""
+    running experiment's treatment arm and utility-event / pre-cooling days), store model_fits
+    (kind='baseline') as 'active', retiring the previous active fit. Returns new ids."""
     tz = house_tz(session)
     end = local_date(now, tz) - timedelta(days=1)  # the last finished local day
     fits = fit_window(session, end - timedelta(days=train_days - 1), end, tz)

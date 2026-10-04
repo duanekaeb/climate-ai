@@ -1,11 +1,15 @@
 """Admin CLI: ``python -m climate.cli <command>``.
 
-Commands: migrate | seed | backfill --days N | gen-key | set-password | doctor
+Commands: migrate | seed | backfill --days N | gen-key | set-password | doctor | sim-event
 (doctor checks DB, secrets key, source sign-in, HomeKit heartbeat, agent heartbeat).
 
 ``backfill`` runs in this process with the configured source, except when the source is
 ecobee and the worker is running: only the worker may refresh ecobee tokens, so the request
 is queued as a 'backfill' job for it instead.
+
+``sim-event`` puts a utility (demand-response) event on the simulated house. The simulator
+lives in the worker's memory, so the event goes into app_settings['sim_events'], which the
+worker's simulator re-reads every simulated minute (``climate.sources.simulator``).
 """
 
 from __future__ import annotations
@@ -125,6 +129,83 @@ def cmd_backfill(args: argparse.Namespace) -> int:
 
     result = asyncio.run(run())
     _print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+# ---------------------------------------------------------------------------------------
+# sim-event
+# ---------------------------------------------------------------------------------------
+
+
+def _sim_units(value: str | None) -> list[str]:
+    from climate.sources.simulator import UNIT_KEYS as SIM_UNITS
+
+    if not value or value.strip().lower() == "all":
+        return list(SIM_UNITS)
+    return [u.strip() for u in value.split(",") if u.strip()]
+
+
+def cmd_sim_event(args: argparse.Namespace) -> int:
+    """Inject a utility event into the simulator (or ``--clear`` the injected ones)."""
+    from climate.sources.base import ThermostatEvent
+    from climate.sources.simulator import add_sim_event, remove_sim_events
+    from climate.store.app_settings import LocationSettings, SourceSettings, get_setting
+    from climate.store.db import session_scope
+    from climate.timeutil import to_local, utcnow
+    from climate.utility.events import change_label
+
+    now = utcnow().replace(second=0, microsecond=0)
+    with session_scope() as s:
+        if get_setting(s, "source", SourceSettings).kind != "simulator":
+            _print("The data source is not the simulator; sim-event only works with the simulated house.")
+            return 1
+        tz = get_setting(s, "location", LocationSettings).tz
+    units = _sim_units(args.unit)
+    unknown = [u for u in units if u not in _sim_units("all")]
+    if unknown or not units:
+        _print(f"Unknown unit(s): {', '.join(unknown) or args.unit!r}; use main, up, bed, a comma-separated "
+               f"list, or all.")
+        return 1
+    if args.clear:
+        with session_scope() as s:
+            removed = remove_sim_events(s, now, units)
+        _print(f"Removed {removed} injected event(s) from {', '.join(units)}.")
+        return 0
+    if not args.unit:
+        _print("--unit is required (main, up, bed, a comma-separated list, or all).")
+        return 1
+    relative = args.cool_offset is not None or args.heat_offset is not None
+    absolute = args.cool is not None or args.heat is not None
+    if relative == absolute:
+        _print("Give offsets (--cool-offset / --heat-offset) or setpoints (--cool / --heat), not both and "
+               "not neither.")
+        return 1
+    if args.hours <= 0:
+        _print("--hours must be above 0.")
+        return 1
+    start = now + timedelta(minutes=args.in_min)
+    event = ThermostatEvent(
+        event_type="demandResponse", name=args.name, start=start, end=start + timedelta(hours=args.hours),
+        heat_f=args.heat, cool_f=args.cool, is_relative=relative, heat_offset_f=args.heat_offset,
+        cool_offset_f=args.cool_offset, is_optional=not args.mandatory,
+    )
+    try:
+        with session_scope() as s:
+            stored = add_sim_event(s, units, event, now)
+    except ValueError as exc:
+        _print(f"Not injected: {exc}")
+        return 1
+    assert stored.start is not None and stored.end is not None
+    window = f"{to_local(stored.start, tz):%a %I:%M %p} to {to_local(stored.end, tz):%a %I:%M %p}"
+    change = change_label(heat_f=stored.heat_f, cool_f=stored.cool_f, is_relative=stored.is_relative,
+                          heat_offset_f=stored.heat_offset_f, cool_offset_f=stored.cool_offset_f)
+    kind = "mandatory" if stored.is_optional is False else "optional"
+    _print(f"Injected {kind} utility event {stored.name or '(no name)'!r} on {', '.join(units)}: {window} "
+           f"({tz}), {change}. id {stored.link_ref}")
+    if not _worker_fresh(utcnow()):
+        _print("The worker is not running; the event takes effect once it is.")
+    else:
+        _print("The worker's simulator picks it up on its next poll (every minute by default).")
     return 0
 
 
@@ -303,6 +384,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("gen-key", help="print a new CLIMATE_SECRET_KEY and CLIMATE_SESSION_SECRET").set_defaults(func=cmd_gen_key)
     sub.add_parser("set-password", help="set the owner's web password").set_defaults(func=cmd_set_password)
     sub.add_parser("doctor", help="check the installation; exit 1 on any problem").set_defaults(func=cmd_doctor)
+    e = sub.add_parser("sim-event", help="put a utility (demand-response) event on the simulated house")
+    e.add_argument("--unit", help="main, up, bed, a comma-separated list, or all (the same event on each)")
+    e.add_argument("--in-min", type=int, default=30, help="minutes from now until it starts (default 30)")
+    e.add_argument("--hours", type=float, default=2.0, help="how long it runs (default 2)")
+    e.add_argument("--cool-offset", type=float, help="raise cooling by this many °F (e.g. 2)")
+    e.add_argument("--heat-offset", type=float, help="lower heating by this many °F (negative, e.g. -2)")
+    e.add_argument("--cool", type=float, help="absolute cooling setpoint °F (e.g. 78)")
+    e.add_argument("--heat", type=float, help="absolute heating setpoint °F (e.g. 64)")
+    e.add_argument("--name", default="Peak Saver", help="event name shown in the app (default 'Peak Saver')")
+    e.add_argument("--mandatory", action="store_true", help="the utility allows no opt-out")
+    e.add_argument("--clear", action="store_true", help="remove injected events (of --unit, default all)")
+    e.set_defaults(func=cmd_sim_event)
     return p
 
 

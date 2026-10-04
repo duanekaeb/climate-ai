@@ -13,7 +13,15 @@ from climate.occupancy.priors import fit_priors, occupancy_probability
 from climate.sources.base import UnitSnapshot
 from climate.state import load_house_state
 from climate.store.app_settings import OccupancySettings, put_setting
-from climate.store.orm import ControlAction, LiveSensor, LiveUnit, ModelFit, RoomStateRow, WeatherHour
+from climate.store.orm import (
+    ControlAction,
+    LiveSensor,
+    LiveUnit,
+    ModelFit,
+    RoomStateRow,
+    UtilityEvent,
+    WeatherHour,
+)
 
 TZ = "America/Chicago"
 NOW = datetime(2026, 7, 15, 10, 0, tzinfo=ZoneInfo(TZ)).astimezone(UTC)  # Wednesday morning
@@ -134,6 +142,30 @@ def test_experiment_arm_overlay_and_failure(db, monkeypatch):
     monkeypatch.setattr(sb, "active_arm", boom)
     st = load_house_state(db, NOW)
     assert st.policy.linked_offset_f == 1.0 and st.policy_version_id is not None
+
+
+def test_utility_events_and_settings(db, monkeypatch):
+    db.add(UtilityEvent(unit_key="up", event_key="link:e1", name="Peak saver", status="announced",
+                        start_at=NOW + timedelta(hours=3), end_at=NOW + timedelta(hours=6),
+                        first_seen_at=NOW - timedelta(hours=1), last_seen_at=NOW, is_relative=True,
+                        cool_offset_f=2.0, detail={}))
+    db.add(UtilityEvent(unit_key="main", event_key="link:e0", status="ended", start_at=NOW - timedelta(days=2),
+                        end_at=NOW - timedelta(days=2) + timedelta(hours=3), first_seen_at=NOW - timedelta(days=3),
+                        last_seen_at=NOW - timedelta(days=2), ended_at=NOW - timedelta(days=2), detail={}))
+    put_setting(db, "utility_events", {"precondition_degrees_f": 9})  # outside 0.5-3: does not parse
+    db.commit()
+    st = load_house_state(db, NOW)
+    assert [(e.unit_key, e.status, e.cool_offset_f) for e in st.utility_events] == [("up", "announced", 2.0)]
+    assert st.utility.precondition is False and st.utility.precondition_degrees_f == 2.0  # bad row: defaults
+
+    from climate.utility import events
+
+    def boom(*a, **k):
+        raise RuntimeError("table missing")
+
+    monkeypatch.setattr(events, "load_active", boom)
+    st = load_house_state(db, NOW)
+    assert st.utility_events == [] and len(st.units) == 3  # the house state still loads
 
 
 def test_since_comes_from_room_state_history(db):

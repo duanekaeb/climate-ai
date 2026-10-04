@@ -1,7 +1,9 @@
 <script setup lang="ts">
 // Live (home screen): the whole house right now, refreshed by websocket events and every 60 s.
-import { computed, onMounted } from 'vue'
+// Utility events are refetched whenever the status is (the same websocket events and poll).
+import { computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
+import type { UtilityEventOut } from '@/api/types'
 import AsyncState from '@/components/AsyncState.vue'
 import Card from '@/components/Card.vue'
 import Icon from '@/components/Icon.vue'
@@ -9,15 +11,33 @@ import AlertList from '@/components/live/AlertList.vue'
 import LiveHeader from '@/components/live/LiveHeader.vue'
 import RoomChips from '@/components/live/RoomChips.vue'
 import UnitCard from '@/components/live/UnitCard.vue'
+import UtilityEventCard from '@/components/live/UtilityEventCard.vue'
+import { groupEvents } from '@/components/live/events'
 import { localTime } from '@/lib/format'
 import { useAuth } from '@/stores/auth'
+import { useControl } from '@/stores/control'
 import { sortUnitKeys } from '@/stores/runtime'
 import { useStatus } from '@/stores/status'
+import { useUtilityEvents } from '@/stores/utilityEvents'
 
 const status = useStatus()
 const auth = useAuth()
+const control = useControl()
+const utilityEvents = useUtilityEvents()
 
-onMounted(() => status.start())
+onMounted(() => {
+  status.start()
+  // "Resume schedule" says how long the ecobee schedule runs first (control.resume_backoff_hours).
+  void control.ensureSettings()
+})
+// Each status refresh (websocket status / action / alert events, the 60 s poll) reloads the events.
+watch(
+  () => status.data?.now,
+  (now) => {
+    if (now) void utilityEvents.load()
+  },
+  { immediate: true },
+)
 
 const data = computed(() => status.data)
 const units = computed(() => {
@@ -27,6 +47,14 @@ const units = computed(() => {
 })
 const openAlerts = computed(() => (data.value?.alerts ?? []).filter((a) => a.resolved_at === null).length)
 const isOwner = computed(() => auth.state?.role === 'owner')
+const backoffHours = computed(() => control.settings.data?.control.resume_backoff_hours ?? null)
+const eventGroups = computed(() =>
+  groupEvents(
+    units.value.map((u) => u.utility_event).filter((e): e is UtilityEventOut => !!e),
+    utilityEvents.list.data ?? [],
+    units.value.map((u) => u.unit_key),
+  ),
+)
 </script>
 
 <template>
@@ -52,9 +80,15 @@ const isOwner = computed(() => auth.state?.role === 'owner')
 
         <LiveHeader :status="data" />
 
+        <section v-if="eventGroups.length" aria-label="Utility events" class="grid gap-4 lg:grid-cols-2">
+          <UtilityEventCard v-for="g in eventGroups" :key="g.key" :group="g" :tz="data.tz" :now="data.now"
+                            :mode="data.controller.mode" :is-owner="isOwner" @changed="status.load()" />
+        </section>
+
         <section aria-label="Thermostats">
           <div v-if="units.length" class="grid gap-4 lg:grid-cols-3">
-            <UnitCard v-for="u in units" :key="u.unit_key" :unit="u" :rooms="data.rooms" :mode="data.controller.mode" :tz="data.tz" />
+            <UnitCard v-for="u in units" :key="u.unit_key" :unit="u" :rooms="data.rooms" :mode="data.controller.mode" :tz="data.tz"
+                      :now="data.now" :is-owner="isOwner" :resume-backoff-hours="backoffHours" />
           </div>
           <p v-else class="card text-sm text-muted">No thermostat has reported yet.</p>
         </section>

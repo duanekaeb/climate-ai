@@ -641,6 +641,7 @@ export interface ExperimentDayOut {
   day: string
   expected_min: number | null
   included: boolean
+  note: string | null
   residual_min: number | null
 }
 /**

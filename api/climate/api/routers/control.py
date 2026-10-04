@@ -1,13 +1,16 @@
-"""Control routes: owner settings, controller mode, the plan, the action log, owner holds and
-resumes, presence, and the policy change gates (``/changes``).
+"""Control routes: owner settings, controller mode, the plan, the action log, owner holds,
+"Resume schedule" and "Back to automatic", presence, "Hand back to ecobee", and the policy
+change gates (``/changes``).
 
-Owner holds are only *queued* here (``control_actions.status = 'queued'``); the worker runs
-them through the guardrails, writes, reads back and records the result. Nothing in the API
+Owner holds and resumes are only *queued* here (``control_actions.status = 'queued'``); the
+worker runs them through the guardrails, writes, reads back and records the result. The
+hand-back is a ``jobs`` row the worker runs (``controller.hand_back``). Nothing in the API
 process talks to a thermostat.
 
 This module also holds the few helpers the other routers share (``safe``, ``unprocessable``,
-``actor_for``, ``house_tz``, ``active_policy``, ``controller_info`` and the settings checks),
-so the import direction stays one-way: other routers import from here, never the reverse.
+``actor_for``, ``house_tz``, ``active_policy``, ``controller_info``, ``job_out`` and the
+settings checks), so the import direction stays one-way: other routers import from here,
+never the reverse.
 """
 
 from __future__ import annotations
@@ -31,6 +34,9 @@ from climate.api.schemas import (
     ControlActionOut,
     ControllerInfo,
     DecisionBody,
+    HandbackInfo,
+    HandbackStep,
+    JobOut,
     ManualHoldBody,
     ModeBody,
     PlanOut,
@@ -41,7 +47,9 @@ from climate.api.schemas import (
     UnitBody,
 )
 from climate.control import changes, controller
+from climate.control.guardrails import _deadband as thermostat_deadband
 from climate.control.guardrails import round_setpoint
+from climate.control.handback import load_originals
 from climate.control.policy import CLAUDE_SIGNOFF_RANGES, OWNER_ONLY_PARAMS, PolicyParams
 from climate.house import ROOM_BY_KEY, UNIT_KEYS
 from climate.sources.base import HoldRequest
@@ -51,12 +59,13 @@ from climate.store.app_settings import (
     LocationSettings,
     OccupancySettings,
     SourceSettings,
+    UtilityEventSettings,
     get_heartbeat,
     get_setting,
     put_setting,
 )
 from climate.store.db import get_session
-from climate.store.orm import Change, ControlAction, PolicyVersion, Unit
+from climate.store.orm import Change, ControlAction, Job, LiveUnit, PolicyVersion, Unit
 from climate.timeutil import utcnow
 
 log = logging.getLogger(__name__)
@@ -67,6 +76,12 @@ SessionDep = Depends(get_session)  # module-level, like auth.OwnerDep
 ChangeStatus = Literal[
     "rejected", "backtest", "shadow", "awaiting_signoff", "held", "trial", "active", "retired", "cancelled"
 ]
+# control_actions.request.kind of the owner's two resumes (climate.state reads them):
+# "Resume schedule" starts the resume back-off; "Back to automatic" cancels it.
+RESUME_SCHEDULE = "resume_schedule"
+AUTOMATIC = "automatic"
+HANDBACK_JOB = "handback"
+FINISHED = ("done", "failed")  # jobs.status of a job the worker is through with
 
 # ---------------------------------------------------------------------------------------
 # shared helpers
@@ -144,6 +159,10 @@ def parse_dt(value: object) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def job_out(job: Job) -> JobOut:
+    return JobOut.model_validate(job, from_attributes=True)
 
 
 def controller_info(session: Session) -> ControllerInfo:
@@ -238,6 +257,7 @@ def settings_out(session: Session) -> SettingsOut:
         occupancy=get_setting(session, "occupancy", OccupancySettings),
         location=get_setting(session, "location", LocationSettings),
         agent=get_setting(session, "agent", AgentSettings),
+        utility_events=get_setting(session, "utility_events", UtilityEventSettings),
         policy=policy,
         policy_version_id=policy_id,
         signoff_ranges={k: (float(lo), float(hi)) for k, (lo, hi) in CLAUDE_SIGNOFF_RANGES.items()},
@@ -279,12 +299,14 @@ def put_settings_route(
         violations += location_violations(body.location)
     if violations:
         raise unprocessable(violations)
-    for key, value in (
-        ("control", body.control), ("occupancy", body.occupancy), ("location", body.location), ("agent", body.agent)
-    ):
+    updates = (
+        ("control", body.control), ("occupancy", body.occupancy), ("location", body.location), ("agent", body.agent),
+        ("utility_events", body.utility_events),
+    )
+    for key, value in updates:
         if value is not None:
             put_setting(session, key, value, updated_by="owner")
-    if body.control or body.occupancy or body.location or body.agent:
+    if any(value is not None for _, value in updates):
         events.publish(session, "status")
     out = settings_out(session)
     session.commit()
@@ -351,8 +373,21 @@ def _queue_action(session: Session, unit_key: str, action: str, reason: str, req
     return out
 
 
+def _live_settings(session: Session, unit_key: str) -> dict:
+    """The unit's thermostat settings from its live snapshot (empty when there is none)."""
+    live = session.get(LiveUnit, unit_key)
+    snap = live.snapshot if live is not None and isinstance(live.snapshot, dict) else {}
+    settings = snap.get("settings")
+    return settings if isinstance(settings, dict) else {}
+
+
 @router.post("/control/hold", response_model=ControlActionOut)
 def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+    """Queue the owner's hold: exactly what was typed, checked here against the hard envelope
+    only (min/max heat and cool, the deadband or the thermostat's own heatCoolMinDelta when
+    larger, the 0.5°F grid). No step limit, humidity guard, rate limit or back-off applies to
+    the owner; the worker still refuses it while a utility, vacation or unrecognised ecobee
+    event runs, or with the controller off."""
     require_unit(session, body.unit_key)
     lim = get_setting(session, "control", ControlSettings).limits
     heat, cool = round_setpoint(body.heat_f), round_setpoint(body.cool_f)
@@ -361,8 +396,12 @@ def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = Ses
         violations.append(("heat_f", f"Heat {heat}°F is outside the hard limits {lim.min_heat_f}-{lim.max_heat_f}°F."))
     if not lim.min_cool_f <= cool <= lim.max_cool_f:
         violations.append(("cool_f", f"Cool {cool}°F is outside the hard limits {lim.min_cool_f}-{lim.max_cool_f}°F."))
+    gap = thermostat_deadband(lim, _live_settings(session, body.unit_key))
     if cool - heat < lim.min_deadband_f:
         violations.append(("cool_f", f"Heat must be at least {lim.min_deadband_f}°F below cool."))
+    elif cool - heat < gap:
+        msg = f"Heat must be at least {gap:g}°F below cool (the thermostat's own minimum gap)."
+        violations.append(("cool_f", msg))
     if not lim.min_hold_hours <= body.hours <= lim.max_hold_hours:
         violations.append(("hours", f"Holds last {lim.min_hold_hours}-{lim.max_hold_hours} hours."))
     if violations:
@@ -372,11 +411,35 @@ def manual_hold(body: ManualHoldBody, _: Role = OwnerDep, session: Session = Ses
     return _queue_action(session, body.unit_key, "set_hold", reason, request.model_dump(mode="json"))
 
 
+def _hours(h: float) -> str:
+    return f"{h:g} h"
+
+
 @router.post("/control/resume", response_model=ControlActionOut)
 def resume(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+    """The owner's "Resume schedule": cancel the running plain hold, whoever set it, and let
+    the ecobee schedule run; the controller waits ``resume_backoff_hours`` after the resume is
+    verified."""
     require_unit(session, body.unit_key)
-    reason = "Owner: resume the thermostat's schedule"
-    return _queue_action(session, body.unit_key, "resume_program", reason, {"unit_key": body.unit_key, "reason": reason})
+    wait = get_setting(session, "control", ControlSettings).resume_backoff_hours
+    if wait > 0:
+        reason = f"Owner: resume schedule (the ecobee schedule runs; the controller waits {_hours(wait)})"
+    else:
+        reason = "Owner: resume schedule (no wait after a resume is set, so the controller steers again at once)"
+    request = {"kind": RESUME_SCHEDULE, "unit_key": body.unit_key, "reason": reason}
+    return _queue_action(session, body.unit_key, "resume_program", reason, request)
+
+
+@router.post("/control/automatic", response_model=ControlActionOut)
+def automatic(body: UnitBody, _: Role = OwnerDep, session: Session = SessionDep) -> ControlActionOut:
+    """The owner's "Back to automatic": cancel the running plain hold, whoever set it, and let
+    the controller steer again at once (it also ends a resume back-off). With no hold running
+    it is a verified no-op that still ends the back-off. It does not delay the controller's
+    next write (it is not counted toward the rate limit)."""
+    require_unit(session, body.unit_key)
+    reason = "Owner: back to automatic (the controller steers again now)"
+    request = {"kind": AUTOMATIC, "unit_key": body.unit_key, "reason": reason}
+    return _queue_action(session, body.unit_key, "resume_program", reason, request)
 
 
 @router.post("/control/presence", response_model=SettingsOut)
@@ -387,6 +450,61 @@ def presence(body: PresenceBody, _: Role = OwnerDep, session: Session = SessionD
     put_setting(session, "occupancy", occ, updated_by="owner")
     events.publish(session, "status")
     out = settings_out(session)
+    session.commit()
+    return out
+
+
+# ---------------------------------------------------------------------------------------
+# hand back to ecobee
+# ---------------------------------------------------------------------------------------
+
+
+def _handback_steps(job: Job | None) -> list[HandbackStep]:
+    raw = job.result.get("steps") if job is not None and isinstance(job.result, dict) else None
+    steps: list[HandbackStep] = []
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            steps.append(HandbackStep.model_validate(item))
+        except ValidationError:
+            log.warning("handback job %s has a step that does not parse; leaving it out", job.id if job else None)
+    return steps
+
+
+def _latest_handback(session: Session, statuses: tuple[str, ...] | None = None) -> Job | None:
+    q = select(Job).where(Job.kind == HANDBACK_JOB)
+    if statuses is not None:
+        q = q.where(Job.status.in_(statuses))
+    return session.execute(q.order_by(Job.created_at.desc(), Job.id.desc()).limit(1)).scalar_one_or_none()
+
+
+@router.get("/control/handback", response_model=HandbackInfo)
+def get_handback(_: Role = ReaderDep, session: Session = SessionDep) -> HandbackInfo:
+    """What "Hand back to ecobee" would restore (each unit's ecobee settings as captured before
+    the controller's first change), the controller mode, the latest hand-back job, and the
+    steps of the last one that finished."""
+    last = _latest_handback(session)
+    finished = last if last is not None and last.status in FINISHED else _latest_handback(session, FINISHED)
+    return HandbackInfo(
+        original=load_originals(session),
+        mode=get_setting(session, "control", ControlSettings).mode,
+        last_job=job_out(last) if last is not None else None,
+        steps=_handback_steps(finished),
+    )
+
+
+@router.post("/control/handback", response_model=JobOut)
+def post_handback(_: Role = OwnerDep, session: Session = SessionDep) -> JobOut:
+    """Queue the hand-back for the worker: the controller is switched off first, then our holds
+    are resumed and the Home sensors, Smart Away and Follow Me are put back as captured.
+    People's holds, vacations and utility events are left alone. 409 while one is already
+    queued or running."""
+    pending = _latest_handback(session, ("queued", "running"))
+    if pending is not None:
+        raise HTTPException(http.HTTP_409_CONFLICT, f"A hand-back is already {pending.status} (job {pending.id}).")
+    job = Job(kind=HANDBACK_JOB, status="queued", requested_by="owner", params={})
+    session.add(job)
+    session.flush()
+    out = job_out(job)
     session.commit()
     return out
 

@@ -121,6 +121,9 @@ class UtilityEventState(BaseModel):
     is_optional: bool | None = None
     skip: Literal["requested", "done", "failed", "refused"] | None = None
     skip_by: Literal["owner", "rule"] | None = None
+    # The event turns cooling / heating off (ecobee isCoolOff / isHeatOff; from the row's detail).
+    is_cool_off: bool = False
+    is_heat_off: bool = False
 
     def covers(self, now: datetime) -> bool:
         """The event's own window contains ``now`` (by the clock, whatever the last snapshot
@@ -204,6 +207,8 @@ def plan(state: HouseState) -> list[UnitTarget]:
     4. Pre-cool (only if enabled): hot (forecast_high_f >= threshold) and sunny -> from
        precool_start_hour lower cool_f by precool_degrees_f on occupied floors.
     5. Bed wing: independent (its own comfort) when bed_wing_independent.
+    6. Pre-cool / pre-heat before a utility event (only if ``utility.precondition``): see
+       ``_apply_event_prep``.
     Rooms without a sensor never contribute a temperature; unknown/stale data -> occupied.
 
     Implementation notes (see the helpers below):
@@ -227,6 +232,7 @@ def plan(state: HouseState) -> list[UnitTarget]:
     for unit_key in ctx.planning_order:
         targets[unit_key] = _plan_unit(ctx, unit_key, targets)
     _apply_recovery(ctx, targets)
+    _apply_event_prep(ctx, targets)
     return [_finish(ctx, targets[k]) for k in ctx.unit_keys]
 
 
@@ -544,6 +550,112 @@ def _apply_recovery(ctx: _Ctx, targets: dict[str, UnitTarget]) -> None:
             "reason": (f"House occupied again at {t0}: the main floor recovers first, to "
                        f"{_fmt_band(_round_half(main.heat_f), _round_half(main.cool_f))}; upstairs follows at {t1}."),
         })
+
+
+PREP_LEAD = timedelta(minutes=15)  # the pre-conditioning window opens this long before its hold could start
+PREP_MIN_HOLD = timedelta(hours=1)  # the shortest hold (holdHours 1) must fit before the event
+PREP_END_SLACK = timedelta(minutes=5)  # a running hold of ours that ends this close to end_by is the prep hold
+AUTO_COOLING_OUTDOOR_F = 65.0  # 'auto' mode with no direction from the event: cooling at or above this
+
+
+def _apply_event_prep(ctx: _Ctx, targets: dict[str, UnitTarget]) -> None:
+    """Rule 6, after the normal rules: pre-cool (cooling) or pre-heat (heating) a unit before
+    an announced utility event, so the house starts the event cooler (warmer) while the event
+    itself is applied to the normal setpoint.
+
+    For the unit's announced events with a start and no skip requested or done (earliest
+    first), the first whose window contains now: ``end_by = e.start_at -
+    precondition_end_gap_min``; inside the window
+    ``[end_by - precondition_hours h - 15 min, end_by)`` the target becomes rule 'event_prep',
+    ``desired='hold'``, ``hold_end_by=end_by``, with cool_f lowered (heat_f raised) by
+    ``precondition_degrees_f``. The controller sizes the hold so it ends by ``end_by`` (it
+    lapses on its own, never relied on to be resumed). No prep when a one-hour hold no longer
+    fits before ``end_by``, unless our prep hold is already running (it is then left to lapse,
+    instead of being replaced by a normal hold that would run into the event). A unit whose
+    thermostat is off, or whose direction cannot be told (``_prep_direction``), is left as is."""
+    st = ctx.state
+    cfg = st.utility
+    if not cfg.precondition:
+        return
+    for unit_key, target in list(targets.items()):
+        if target.rule == "hold_off":
+            continue
+        for ev in _prep_events(st, unit_key):
+            end_by = ev.start_at - timedelta(minutes=cfg.precondition_end_gap_min)  # type: ignore[operator]
+            start = end_by - timedelta(hours=cfg.precondition_hours) - PREP_LEAD
+            if not start <= st.now < end_by:
+                continue
+            if end_by - st.now < PREP_MIN_HOLD and not _prep_hold_running(st, unit_key, start, end_by):
+                break
+            direction = _prep_direction(st, unit_key, ev)
+            if direction is None:
+                break
+            deg = cfg.precondition_degrees_f
+            heat, cool = target.heat_f, target.cool_f
+            if direction == "cool":
+                cool -= deg
+            else:
+                heat += deg
+            verb = "Pre-cooling" if direction == "cool" else "Pre-heating"
+            reason = (f"{verb} {deg:g}°F before the utility event at {_clock(ev.start_at, st.tz)}; this hold ends by "  # type: ignore[arg-type]
+                      f"{_clock(end_by, st.tz)}, before the event starts.")
+            targets[unit_key] = target.model_copy(update={
+                "heat_f": heat, "cool_f": cool, "rule": "event_prep", "reason": reason, "desired": "hold",
+                "hold_end_by": end_by,
+            })
+            break
+
+
+def _prep_events(state: HouseState, unit_key: str) -> list[UtilityEventState]:
+    """The unit's announced events that pre-conditioning may run before, earliest start first."""
+    evs = [
+        e for e in state.utility_events
+        if e.unit_key == unit_key and e.status == "announced" and e.start_at is not None
+        and e.skip not in ("requested", "done")
+    ]
+    return sorted(evs, key=lambda e: e.start_at)  # type: ignore[arg-type, return-value]
+
+
+def _prep_hold_running(state: HouseState, unit_key: str, start: datetime, end_by: datetime) -> bool:
+    """Our hold is running and was written for this prep: it started inside the window and
+    ends by ``end_by``."""
+    unit = state.units.get(unit_key)
+    hold = unit.snapshot.hold if unit is not None and unit.snapshot is not None else None
+    if hold is None or not hold.set_by_us or hold.end is None:
+        return False
+    if hold.start is not None and hold.start < start - PREP_END_SLACK:
+        return False
+    return state.now < hold.end <= end_by + PREP_END_SLACK
+
+
+def _prep_direction(state: HouseState, unit_key: str, ev: UtilityEventState) -> Literal["cool", "heat"] | None:
+    """Cooling or heating: the event's own direction (a positive cool offset, a cool
+    setpoint or the AC off -> cooling; a negative heat offset, a heat setpoint or the heat off
+    -> heating), when it names exactly one; else the unit's mode (cool -> cooling; heat /
+    auxHeatOnly -> heating; auto -> cooling at or above 65°F outdoors, heating below); None
+    when nothing tells."""
+    cooling = ev.is_cool_off or (
+        (ev.cool_offset_f or 0) > 0 if ev.is_relative else ev.cool_f is not None
+    )
+    heating = ev.is_heat_off or (
+        (ev.heat_offset_f or 0) < 0 if ev.is_relative else ev.heat_f is not None
+    )
+    if cooling != heating:
+        return "cool" if cooling else "heat"
+    unit = state.units.get(unit_key)
+    snap = unit.snapshot if unit is not None else None
+    mode = snap.hvac_mode if snap is not None else None
+    if mode == "cool":
+        return "cool"
+    if mode in ("heat", "auxHeatOnly"):
+        return "heat"
+    if mode == "auto":
+        outdoor = state.outdoor_temp_f
+        if outdoor is None and snap is not None:
+            outdoor = snap.outdoor_temp_f
+        if outdoor is not None:
+            return "cool" if outdoor >= AUTO_COOLING_OUTDOOR_F else "heat"
+    return None
 
 
 def _presence_start(state: HouseState) -> datetime | None:

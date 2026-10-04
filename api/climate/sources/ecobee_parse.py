@@ -13,17 +13,33 @@ was unreachable; assumptions are marked):
 - Event and report dates/times are THERMOSTAT-LOCAL wall time; ``thermostatTime`` vs
   ``utcTime`` on each thermostat gives the current offset.
 
-``HoldInfo.hold_type`` vocabulary (what overrides the program right now; ``parse_hold``):
+``HoldInfo.hold_type`` vocabulary (what overrides the program right now; ``parse_hold``; the
+tuples live in ``climate.sources.base``):
 
-- A running override EVENT that is not a plain hold carries its ecobee event type verbatim:
+- The first RUNNING event in the thermostat's list is the one in effect (ecobee orders the
+  list by running state and priority), whatever its type.
+- A running EVENT that is not a plain hold carries its ecobee event type verbatim:
   ``vacation``, ``autoAway`` / ``autoHome`` (Smart Home/Away), ``quickSave`` (Smart Away
-  quick save), ``demandResponse`` (utility event). These are never "ours": ``set_by_us`` is
+  quick save), ``demandResponse`` (utility event), or a type this app does not know
+  (``today``, ``sensor``, ``switchOccupancy``, one ecobee adds later): callers treat a type
+  outside ``KNOWN_HOLD_TYPES`` as hands-off. Events are never "ours": ``set_by_us`` is
   always False for them, whatever their setpoints, so callers can tell a Smart Away or a
-  vacation from a hand-set hold and from the controller's own hold (``EVENT_HOLD_TYPES``).
+  vacation from a hand-set hold and from the controller's own hold.
 - A plain ``hold`` event (someone or something set a hold) carries how it was set, inferred
   because ecobee does not echo the request's holdType: ``holdHours``, ``nextTransition``,
   ``indefinite`` or ``dateTime`` (``PLAIN_HOLD_TYPES``). Only these can be ``set_by_us``
   (they match the last hold the controller wrote, ``app_settings['ecobee_holds']``).
+
+Event details (``HoldInfo`` for a running event, ``ThermostatEvent`` from ``parse_events``):
+``name``; ``isTemperatureAbsolute`` + ``heatHoldTemp`` / ``coolHoldTemp`` (absolute setpoints,
+tenths of °F); ``isTemperatureRelative`` + ``heatRelativeTemp`` / ``coolRelativeTemp`` (the
+change from the scheduled comfort setting, tenths of °F); ``isOptional`` (False = a mandatory
+utility event, no opt-out); ``isCoolOff`` / ``isHeatOff``; ``dutyCyclePercentage`` (0..100;
+ecobee sends 255 when unused); ``linkRef`` (stable per event). ASSUMPTION (ecobee's Issue
+Demand Response example sends ``coolRelativeTemp: 40, heatRelativeTemp: 40`` for a 4°F setback
+both ways; the docs site was unreachable to re-check): the relative temperatures are setback
+MAGNITUDES in the energy-saving direction, so they are stored signed as cooling +x°F and
+heating -x°F whatever sign arrives.
 """
 
 from __future__ import annotations
@@ -35,7 +51,18 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
 from climate.house import normalize_name
-from climate.sources.base import HoldInfo, HvacMode, RuntimeInterval, SensorReading
+from climate.sources.base import (
+    AUTO_EVENTS,
+    PERSON_EVENTS,
+    PLAIN_HOLD_TYPES,
+    PROTECTED_EVENTS,
+    HoldInfo,
+    HvacMode,
+    RuntimeInterval,
+    SensorReading,
+    ThermostatEvent,
+    UtilityInfo,
+)
 
 log = logging.getLogger("climate.ecobee")
 
@@ -74,12 +101,14 @@ _EQUIPMENT_FIELDS = {
     "fan": "fan",
 }
 
-# hold_type values (see the module docstring). Event overrides keep their ecobee event type;
-# plain 'hold' events get one of the inferred plain types.
-EVENT_HOLD_TYPES = ("vacation", "autoAway", "autoHome", "quickSave", "demandResponse")
-PLAIN_HOLD_TYPES = ("holdHours", "nextTransition", "indefinite", "dateTime")
-# Events that override the program. The first RUNNING one in the list is in effect.
+# hold_type values (see the module docstring; the vocabulary is ``climate.sources.base``).
+# The event types this app knows by name; a running event of any other type still overrides
+# the program and keeps its type verbatim. ``PLAIN_HOLD_TYPES`` is re-exported from base.
+EVENT_HOLD_TYPES = (*AUTO_EVENTS, *PERSON_EVENTS, *PROTECTED_EVENTS)
 OVERRIDE_EVENT_TYPES = ("hold", *EVENT_HOLD_TYPES)
+# Events listed in UnitSnapshot.events (running or ahead); never 'template' or past ones.
+LISTED_EVENT_TYPES = ("demandResponse", "vacation")
+NOT_AN_OVERRIDE = ("template",)  # ecobee's saved vacation templates are never in effect
 
 _HVAC_MODES: dict[str, HvacMode] = {
     "heat": "heat",
@@ -428,9 +457,11 @@ def climate_sensor_ids(program: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def curated_settings(settings: dict[str, Any]) -> dict[str, object]:
+    """The thermostat settings the app uses. ``drAccept`` is the utility-event enrollment
+    choice (always / askMe / customerSelect / defaultAccept / defaultDecline / never)."""
     out: dict[str, object] = {}
     for key in ("autoAway", "followMeComfort", "hvacMode", "hasHeatPump", "heatStages", "coolStages",
-                "useCelsius", "fanMinOnTime", "holdAction", "smartCirculation"):
+                "useCelsius", "fanMinOnTime", "holdAction", "smartCirculation", "drAccept"):
         if key in settings:
             out[key] = settings[key]
     for key in ("heatCoolMinDelta", "heatRangeHigh", "heatRangeLow", "coolRangeHigh", "coolRangeLow"):
@@ -447,14 +478,130 @@ def outdoor_now(weather: dict[str, Any] | None) -> tuple[float | None, float | N
     return tenths_to_f(first.get("temperature")), num(first.get("relativeHumidity"))
 
 
+def _text(value: Any) -> str | None:
+    s = str(value).strip() if value is not None else ""
+    return s or None
+
+
+def parse_utility(obj: dict[str, Any] | None) -> UtilityInfo | None:
+    """``includeUtility``'s Utility object -> UtilityInfo; None when no utility is named
+    (ecobee returns the object with empty strings for a thermostat with no utility)."""
+    if not isinstance(obj, dict):
+        return None
+    name = _text(obj.get("name"))
+    if name is None:
+        return None
+    return UtilityInfo(name=name, phone=_text(obj.get("phone")), email=_text(obj.get("email")),
+                       web=_text(obj.get("web")))
+
+
 # --- events / holds --------------------------------------------------------------------
 
 
 def running_override(events: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The event in effect: the first RUNNING event of any type (ecobee orders the list by
+    running state and priority), never a vacation template."""
     for ev in events or []:
-        if parse_bool(ev.get("running")) and ev.get("type") in OVERRIDE_EVENT_TYPES:
+        if not isinstance(ev, dict) or str(ev.get("type") or "") in NOT_AN_OVERRIDE:
+            continue
+        if parse_bool(ev.get("running")):
             return ev
     return None
+
+
+def is_event_hold(hold: HoldInfo | None) -> bool:
+    """True when what runs is an event (any type, known or not) rather than a plain hold."""
+    return hold is not None and hold.hold_type not in PLAIN_HOLD_TYPES
+
+
+@dataclass(frozen=True)
+class _EventDetail:
+    """The setpoint change an ecobee event makes (see the module docstring)."""
+
+    heat_f: float | None
+    cool_f: float | None
+    is_relative: bool
+    heat_offset_f: float | None
+    cool_offset_f: float | None
+    is_optional: bool | None
+    is_cool_off: bool
+    is_heat_off: bool
+    duty_cycle_pct: int | None
+    link_ref: str | None
+    name: str | None
+
+
+def _offset(value: Any, sign: float) -> float | None:
+    """A relative temperature (tenths, a setback magnitude) -> signed °F; None for no change."""
+    f = tenths_to_f(value)
+    return None if not f else round(sign * abs(f), 1)
+
+
+def _event_detail(event: dict[str, Any]) -> _EventDetail:
+    relative = parse_bool(event.get("isTemperatureRelative")) is True
+    absolute = parse_bool(event.get("isTemperatureAbsolute"))
+    if absolute is None:
+        absolute = not relative  # a relative event's hold temps are not setpoints
+    duty = num(event.get("dutyCyclePercentage"))
+    return _EventDetail(
+        heat_f=tenths_to_f(event.get("heatHoldTemp")) if absolute else None,
+        cool_f=tenths_to_f(event.get("coolHoldTemp")) if absolute else None,
+        is_relative=relative,
+        heat_offset_f=_offset(event.get("heatRelativeTemp"), -1.0) if relative else None,
+        cool_offset_f=_offset(event.get("coolRelativeTemp"), 1.0) if relative else None,
+        is_optional=parse_bool(event.get("isOptional")),
+        is_cool_off=parse_bool(event.get("isCoolOff")) is True,
+        is_heat_off=parse_bool(event.get("isHeatOff")) is True,
+        duty_cycle_pct=int(duty) if duty is not None and 0 <= duty <= 100 else None,
+        link_ref=_text(event.get("linkRef")),
+        name=_text(event.get("name")),
+    )
+
+
+def _event_time(date_s: Any, time_s: Any, offset: timedelta, tz: tzinfo | None) -> datetime | None:
+    """Thermostat-local event date + time -> UTC: through the thermostat's zone when known (an
+    event weeks ahead may sit across a DST change), else with the current offset."""
+    if tz is not None and date_s and time_s:
+        utc = report_local_to_utc(str(date_s), str(time_s), tz)
+        if utc is not None:
+            return utc
+    return local_to_utc_offset(date_s, time_s, offset)
+
+
+def parse_events(
+    events: list[dict[str, Any]] | None, offset: timedelta | None, now: datetime | None = None,
+    tz: tzinfo | None = None,
+) -> list[ThermostatEvent]:
+    """Demand-response and vacation events that are running or still ahead -> ThermostatEvent,
+    in ecobee's order. Times go to UTC through ``tz`` (the thermostat's location.timeZone)
+    when given, else the current ``offset``. Templates, other types and events whose end has
+    passed (``now``: the thermostat's own utcTime; default the current time) are left out. An
+    event with no end is kept while running or not started."""
+    off = offset or timedelta(0)
+    now = now or datetime.now(UTC)
+    out: list[ThermostatEvent] = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        etype = str(ev.get("type") or "")
+        if etype not in LISTED_EVENT_TYPES:
+            continue
+        running = parse_bool(ev.get("running")) is True
+        start = _event_time(ev.get("startDate"), ev.get("startTime"), off, tz)
+        end = _event_time(ev.get("endDate"), ev.get("endTime"), off, tz)
+        if not running:
+            if end is not None and end <= now:
+                continue  # over
+            if end is None and (start is None or start <= now):
+                continue  # no end and not ahead: nothing to show
+        d = _event_detail(ev)
+        out.append(ThermostatEvent(
+            event_type=etype, name=d.name, running=running, start=start, end=end, heat_f=d.heat_f,
+            cool_f=d.cool_f, is_relative=d.is_relative, heat_offset_f=d.heat_offset_f,
+            cool_offset_f=d.cool_offset_f, is_optional=d.is_optional, is_cool_off=d.is_cool_off,
+            is_heat_off=d.is_heat_off, duty_cycle_pct=d.duty_cycle_pct, link_ref=d.link_ref,
+        ))
+    return out
 
 
 def next_transition_local(program: dict[str, Any], after_local: datetime) -> datetime | None:
@@ -500,20 +647,27 @@ def parse_hold(
     current offset). ``hold_type`` for a 'hold' event is inferred, because ecobee does not echo
     the holdType: ends in 2035+ -> indefinite; matches our last write -> holdHours; ends on the
     next program transition after it started -> nextTransition; a whole number of hours ->
-    holdHours; otherwise dateTime. Other running overrides report their event type
-    (vacation / autoAway / autoHome / quickSave / demandResponse) and are never ``set_by_us``."""
+    holdHours; otherwise dateTime. Any other running event reports its ecobee type verbatim
+    (vacation / autoAway / autoHome / quickSave / demandResponse, or an unknown one), is never
+    ``set_by_us``, and carries the event details (name, relative offsets, isOptional, linkRef);
+    its absolute setpoints are filled only when the event is absolute."""
     off = offset or timedelta(0)
     start = local_to_utc_offset(event.get("startDate"), event.get("startTime"), off)
     end = local_to_utc_offset(event.get("endDate"), event.get("endTime"), off)
-    absolute = parse_bool(event.get("isTemperatureAbsolute"))
-    heat = tenths_to_f(event.get("heatHoldTemp")) if absolute is not False else None
-    cool = tenths_to_f(event.get("coolHoldTemp")) if absolute is not False else None
     ref = str(event.get("holdClimateRef") or "") or None
     etype = str(event.get("type") or "hold")
-    hold = HoldInfo(kind="climate" if ref else "temperature", heat_f=heat, cool_f=cool, climate_ref=ref,
-                    start=start, end=end, hold_type=etype, set_by_us=False)
+    d = _event_detail(event)
+    hold = HoldInfo(kind="climate" if ref else "temperature", heat_f=d.heat_f, cool_f=d.cool_f,
+                    climate_ref=ref, start=start, end=end, hold_type=etype, set_by_us=False)
     if etype != "hold":
-        return hold  # an event override, never ours (even if its setpoints equal our last hold)
+        # an event, never ours (even if its setpoints equal our last hold)
+        hold.event_name = d.name
+        hold.is_relative = d.is_relative
+        hold.heat_offset_f = d.heat_offset_f
+        hold.cool_offset_f = d.cool_offset_f
+        hold.is_optional = d.is_optional
+        hold.link_ref = d.link_ref
+        return hold
     hold.set_by_us = hold_matches_ours(hold, ours)
     end_local = parse_ecobee_dt(f"{event.get('endDate')} {event.get('endTime')}")
     start_local = parse_ecobee_dt(f"{event.get('startDate')} {event.get('startTime')}")

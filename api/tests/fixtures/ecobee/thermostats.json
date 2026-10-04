@@ -195,7 +195,8 @@
     "coolRangeLow": 650,
     "holdAction": "useEndTime2hour",
     "stage1CoolingDifferentialTemp": 5,
-    "stage1HeatingDifferentialTemp": 5
+    "stage1HeatingDifferentialTemp": 5,
+    "drAccept": "customerSelect"
    },
    "location": {
     "timeZoneOffsetMinutes": -360,
@@ -842,7 +843,13 @@
      "linkRef": "",
      "holdClimateRef": ""
     }
-   ]
+   ],
+   "utility": {
+    "name": "Example Electric Co-op",
+    "phone": "800-555-0100",
+    "email": "",
+    "web": "https://example.com/peak-saver"
+   }
   },
   {
    "identifier": "422222222222",
@@ -1033,7 +1040,8 @@
     "coolRangeLow": 650,
     "holdAction": "useEndTime2hour",
     "stage1CoolingDifferentialTemp": 5,
-    "stage1HeatingDifferentialTemp": 5
+    "stage1HeatingDifferentialTemp": 5,
+    "drAccept": "askMe"
    },
    "location": {
     "timeZoneOffsetMinutes": -360,
@@ -1572,7 +1580,13 @@
     ],
     "currentClimateRef": "home"
    },
-   "events": []
+   "events": [],
+   "utility": {
+    "name": "",
+    "phone": "",
+    "email": "",
+    "web": ""
+   }
   },
   {
    "identifier": "433333333333",

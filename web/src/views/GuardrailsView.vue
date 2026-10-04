@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Guardrails: controller mode, the current plan and manual holds; the change gates and the
-// policy with Claude's sign-off ranges; the owner's hard limits, comfort bands, sleep windows
-// and schedule; and the action log with read-back.
+// policy with Claude's sign-off ranges; the owner's hard limits, comfort bands, sleep windows,
+// schedule and what to do around utility events; and the action log with read-back.
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { onEvent } from '@/api/ws'
@@ -18,6 +18,7 @@ import PolicyParamsCard from '@/components/control/PolicyParamsCard.vue'
 import ProposeChangeForm from '@/components/control/ProposeChangeForm.vue'
 import ScheduleForm from '@/components/control/ScheduleForm.vue'
 import SleepWindowsForm from '@/components/control/SleepWindowsForm.vue'
+import UtilityEventsForm from '@/components/control/UtilityEventsForm.vue'
 import { unitKeys } from '@/components/control/units'
 import { useAuth } from '@/stores/auth'
 import { useControl } from '@/stores/control'
@@ -119,6 +120,7 @@ onBeforeUnmount(() => unsubscribe?.())
           </div>
           <ComfortForm :settings="settings" :is-owner="isOwner" />
           <SleepWindowsForm :settings="settings" :rooms="rooms" :is-owner="isOwner" />
+          <UtilityEventsForm :settings="settings" :is-owner="isOwner" />
         </div>
 
         <!-- Log -->

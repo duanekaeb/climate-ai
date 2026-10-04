@@ -9,6 +9,7 @@ import Icon from '@/components/Icon.vue'
 import { dateTime } from '@/components/analysis/stats'
 import { temp } from '@/lib/format'
 import { ACTIONS_LIMIT, useControl } from '@/stores/control'
+import { actionText, actorText, ruleText } from './actionText'
 import { unitName } from './units'
 
 const props = defineProps<{ units: string[]; tz?: string }>()
@@ -56,6 +57,8 @@ function brief(r: Record<string, unknown> | null): string {
   if (typeof c === 'number') parts.push(`cool ${temp(c)}`)
   const hrs = r.hours ?? r.hold_hours
   if (typeof hrs === 'number') parts.push(`${hrs} h`)
+  // Pre-cooling holds must end before the utility event starts.
+  if (typeof r.hold_end_by === 'string') parts.push(`ends by ${dateTime(r.hold_end_by, props.tz)}`)
   return parts.join(' · ')
 }
 
@@ -95,7 +98,7 @@ function json(v: unknown): string {
         Actor
         <select v-model="actor" class="input mt-1">
           <option value="">All</option>
-          <option v-for="a in actors" :key="a" :value="a">{{ a }}</option>
+          <option v-for="a in actors" :key="a" :value="a">{{ actorText(a) }}</option>
         </select>
       </label>
       <label class="text-xs text-muted">
@@ -121,12 +124,12 @@ function json(v: unknown): string {
                 <span class="h-2 w-2 rounded-full" :style="{ background: `var(--color-unit-${a.unit_key})` }" />
                 {{ unitName(a.unit_key) }}
               </span>
-              <span class="text-sm">{{ a.action.replace(/_/g, ' ') }}</span>
+              <span class="text-sm">{{ actionText(a) }}</span>
               <span class="chip" :class="STATUS_CHIP[a.status] ?? 'bg-surface-2 text-ink'">{{ a.status }}</span>
               <span class="ml-auto text-xs" :class="readback(a).cls">{{ readback(a).label }}</span>
             </div>
             <p class="mt-0.5 text-xs text-muted break-words">
-              {{ a.actor }} · {{ a.mode }} · {{ a.channel }}<template v-if="a.rule"> · {{ a.rule.replace(/_/g, ' ') }}</template>
+              {{ actorText(a.actor) }} · {{ a.mode }} · {{ a.channel }}<template v-if="a.rule"> · {{ ruleText(a.rule) }}</template>
               <template v-if="brief(a.request)"> · <span class="num text-ink">{{ brief(a.request) }}</span></template>
             </p>
             <p class="mt-0.5 text-sm break-words">{{ a.reason }}</p>

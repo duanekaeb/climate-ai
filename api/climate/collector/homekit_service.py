@@ -6,8 +6,10 @@ save pairing encrypted -> paired; unpair_requested -> remove pairing); for each 
 populate accessories, map aids to sensors (by name), subscribe 'ev' characteristics, poll
 every 60 s in batches of <= 49, push readings via collector.ingest.ingest_live_readings;
 while a unit's live_units snapshot is more than 10 minutes old (ecobee cloud down) write a
-HomeKit-derived snapshot there instead (never over a newer one); execute queued
-control_actions with channel 'homekit' (and fail 'sent' rows a crashed run left behind);
+HomeKit-derived snapshot there instead (never over a newer one) and, while the cloud circuit
+is open, log a change someone made at the thermostat that HomeKit can see (a person's hold:
+the controller stands aside); execute queued control_actions with channel 'homekit' (fail
+'sent' rows a crashed run left behind, and controller rows queued before such a change);
 heartbeat 'homekit' every loop.
 
 Runs only while ``SourceSettings.homekit_enabled`` (otherwise it re-checks every 60 s). One
@@ -30,29 +32,35 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import ValidationError
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from climate import events, notify
 from climate.collector import ingest
-from climate.sources.base import SensorReading, UnitSnapshot, WriteResult
+from climate.sources.base import KNOWN_HOLD_TYPES, PROTECTED_EVENTS, SensorReading, UnitSnapshot, WriteResult
 from climate.sources.homekit import (
     BAD_CODE_FORMAT_MSG,
     CLIMATE_CODES,
     CODE_RE,
     NO_PENDING_MSG,
     REPAIR_MSG,
+    THERMOSTAT_AID,
     DiscoveredDevice,
+    HandChange,
     HomekitBridge,
     HomekitError,
+    KnownHolds,
     ReadResult,
     SensorRef,
     build_aid_map,
+    comfort_targets_from_values,
+    detect_hand_change,
     hold_window,
     readings_from_values,
     snapshot_from_values,
 )
+from climate.state import MANUAL_KIND
 from climate.store import secrets
 from climate.store.app_settings import (
     ControlSettings,
@@ -65,6 +73,7 @@ from climate.store.app_settings import (
 from climate.store.db import session_scope
 from climate.store.orm import ControlAction, HomekitDevice, LiveUnit, Room, Sensor, Unit
 from climate.timeutil import utcnow
+from climate.utility.events import load_active
 
 log = logging.getLogger("climate.homekit")
 
@@ -75,6 +84,17 @@ CLOUD_STALE_AFTER = timedelta(minutes=10)  # live snapshot older than this: Home
 # Queued kinds (control_actions.request.kind) that resume the schedule; 'resume_program' is
 # the controller's name for it (older rows), 'clear_hold' the documented one.
 CLEAR_HOLD_KINDS = ("clear_hold", "resume_program")
+# A person's change seen over HomeKit is logged as a control_actions row by this actor, with
+# request.kind MANUAL_KIND (state.py turns it into the unit's person hold) and this source.
+HAND_ACTOR = "homekit_service"
+HAND_SOURCE = "homekit"
+HAND_HOLD_TYPE = "homekit_manual"
+NOT_SENT_MSG = "Not sent: someone changed the thermostat by hand"
+HOLD_ACTIONS = ("set_hold", "resume_program")  # thermostat writes (as in climate.state)
+LANDED = ("verified", "sent")  # a write that reached (or is reaching) the thermostat
+# Our HomeKit hold counts as running until this long before its end (the thermostat's clock
+# may switch back to the schedule a little early).
+OUR_END_SLACK = timedelta(minutes=5)
 KEYS_MISSING_MSG = (
     "The saved pairing keys are missing from the database. Choose Disconnect from HomeKit on the thermostat, "
     "then pair again."
@@ -343,7 +363,9 @@ class ActionJob:
 
 
 def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) -> list[ActionJob]:
-    """Claim channel='homekit' rows in status 'queued' (-> 'sent'); expire stale ones."""
+    """Claim channel='homekit' rows in status 'queued' (-> 'sent'); expire stale ones, and
+    fail any row not queued by the owner when someone changed the thermostat by hand after it
+    was queued (``hand_change_after``): the controller decided it before it knew."""
     rows = (
         session.execute(
             select(ControlAction)
@@ -360,11 +382,55 @@ def claim_queued_actions(session: Session, now: datetime, max_age: timedelta) ->
             r.status = "failed"
             r.error = f"expired: not executed within {int(max_age.total_seconds() // 60)} minutes of being queued"
             r.completed_at = now
+        elif r.actor != "owner" and (hand := hand_change_after(session, r)) is not None:
+            r.status = "failed"
+            r.error = (f"{NOT_SENT_MSG} after this was queued (seen over HomeKit, action {hand.id}); the "
+                       "controller stands aside until the ecobee cloud is back.")
+            r.completed_at = now
         else:
             r.status = "sent"
             jobs.append(ActionJob(r.id, r.unit_key, r.action, dict(r.request or {})))
         events.publish(session, "action", r.id)
     return jobs
+
+
+def _latest_hand_change(unit_key: str) -> Select[tuple[ControlAction]]:
+    """SELECT of this service's newest hand-change row for the unit."""
+    return (
+        select(ControlAction)
+        .where(
+            ControlAction.unit_key == unit_key,
+            ControlAction.channel == "homekit",
+            ControlAction.status == "skipped",
+            ControlAction.request["kind"].astext == MANUAL_KIND,
+            ControlAction.request["source"].astext == HAND_SOURCE,
+        )
+        .order_by(ControlAction.id.desc())
+        .limit(1)
+    )
+
+
+def _written_since(session: Session, unit_key: str, row_id: int) -> bool:
+    """Did a hold write or resume reach the unit's thermostat after control_actions row ``row_id``?"""
+    return session.execute(
+        select(ControlAction.id).where(
+            ControlAction.unit_key == unit_key, ControlAction.id > row_id, ControlAction.status.in_(LANDED),
+            ControlAction.action.in_(HOLD_ACTIONS), ControlAction.channel != "none",
+        ).limit(1)
+    ).scalar_one_or_none() is not None
+
+
+def hand_change_after(session: Session, queued: ControlAction) -> ControlAction | None:
+    """The newest hand-change row for ``queued``'s unit logged after that row was queued (by
+    id, or by time: a controller tick that started before the change was logged), while it
+    is still the latest word on the unit (nothing was written to the thermostat since)."""
+    after = ControlAction.id > queued.id
+    if queued.ts is not None:
+        after = or_(after, ControlAction.ts > queued.ts)
+    hand = session.execute(_latest_hand_change(queued.unit_key).where(after)).scalar_one_or_none()
+    if hand is None or _written_since(session, queued.unit_key, hand.id):
+        return None
+    return hand
 
 
 def expire_stuck_actions(session: Session, now: datetime, max_age: timedelta = SENT_MAX_AGE) -> int:
@@ -413,33 +479,35 @@ def _our_climate_hold(session: Session, unit_key: str, now: datetime) -> tuple[s
     return (str(req["climate"]), until) if until is not None and until > now else None
 
 
-def write_homekit_snapshot(
-    session: Session,
-    unit_key: str,
-    values: dict[int, dict[str, Any]],
-    aid_map: dict[int, str],
-    now: datetime,
-    stale_after: timedelta = CLOUD_STALE_AFTER,
-) -> bool:
-    """Write a HomeKit-derived snapshot into live_units when the unit's live snapshot is older
-    than ``stale_after`` (the ecobee cloud is down) or is already HomeKit's. Only in ecobee
-    source mode. Never overwrites a NEWER snapshot or a current cloud one: the row is locked and
-    the upsert re-checks both in SQL. Returns True when written."""
-    if get_setting(session, "source", SourceSettings).kind != "ecobee":
-        return False
+@dataclass(frozen=True)
+class _SnapshotWrite:
+    written: bool
+    previous: UnitSnapshot | None = None  # the live snapshot this one replaced
+    previous_source: str | None = None
+    circuit_open: bool = False  # the ecobee cloud circuit breaker is open
+
+
+def _write_snapshot(
+    session: Session, unit_key: str, values: dict[int, dict[str, Any]], aid_map: dict[int, str], now: datetime,
+    stale_after: timedelta,
+) -> _SnapshotWrite:
+    src = get_setting(session, "source", SourceSettings)
+    if src.kind != "ecobee":
+        return _SnapshotWrite(False)
     if session.get(Unit, unit_key) is None:
-        return False
+        return _SnapshotWrite(False)
     row = session.execute(select(LiveUnit).where(LiveUnit.unit_key == unit_key).with_for_update()).scalar_one_or_none()
     previous: UnitSnapshot | None = None
     if row is not None:
         if row.ts > now:
-            return False  # a newer snapshot is already there
+            return _SnapshotWrite(False)  # a newer snapshot is already there
         if row.source != "homekit" and now - row.ts <= stale_after:
-            return False  # the cloud is current
+            return _SnapshotWrite(False)  # the cloud is current
         try:
             previous = UnitSnapshot.model_validate(row.snapshot)
         except ValidationError:
             previous = None
+    previous_source = row.source if row is not None else None
     tz = get_setting(session, "location", LocationSettings).tz
     snap = snapshot_from_values(unit_key, values, aid_map, now, tz, previous=previous,
                                 our_hold=_our_climate_hold(session, unit_key, now))
@@ -454,7 +522,182 @@ def write_homekit_snapshot(
     written = session.execute(stmt.execution_options(preserve_rowcount=True)).rowcount > 0  # type: ignore[attr-defined]
     if written:
         events.publish(session, "status")
-    return written
+    circuit_open = src.cloud_circuit_open_until is not None and src.cloud_circuit_open_until > now
+    return _SnapshotWrite(written, previous, previous_source, circuit_open)
+
+
+def write_homekit_snapshot(
+    session: Session,
+    unit_key: str,
+    values: dict[int, dict[str, Any]],
+    aid_map: dict[int, str],
+    now: datetime,
+    stale_after: timedelta = CLOUD_STALE_AFTER,
+) -> bool:
+    """Write a HomeKit-derived snapshot into live_units when the unit's live snapshot is older
+    than ``stale_after`` (the ecobee cloud is down) or is already HomeKit's. Only in ecobee
+    source mode. Never overwrites a NEWER snapshot or a current cloud one: the row is locked and
+    the upsert re-checks both in SQL. Returns True when written."""
+    return _write_snapshot(session, unit_key, values, aid_map, now, stale_after).written
+
+
+@dataclass(frozen=True)
+class FallbackResult:
+    written: bool  # a HomeKit snapshot is now the unit's live snapshot
+    hand_change_id: int | None = None  # the control_actions row logging a person's change
+
+
+def homekit_fallback(
+    session: Session,
+    unit_key: str,
+    values: dict[int, dict[str, Any]],
+    aid_map: dict[int, str],
+    now: datetime,
+    stale_after: timedelta = CLOUD_STALE_AFTER,
+) -> FallbackResult:
+    """``write_homekit_snapshot``, then, when that snapshot was written while the ecobee cloud
+    circuit is open (HomeKit is the live data path), ``record_hand_change``. A failure in the
+    detection never loses the snapshot."""
+    res = _write_snapshot(session, unit_key, values, aid_map, now, stale_after)
+    if not res.written or not res.circuit_open:
+        return FallbackResult(res.written)
+    try:
+        with session.begin_nested():
+            hand_id = record_hand_change(session, unit_key, values, now, previous=res.previous,
+                                         continuing=res.previous_source == "homekit")
+    except Exception as exc:  # noqa: BLE001 - the snapshot stays; the next poll looks again
+        log.warning("homekit: hand-change check for unit %s failed: %s", unit_key, _short(exc))
+        hand_id = None
+    return FallbackResult(True, hand_id)
+
+
+def _hold_hours(session: Session) -> float:
+    try:
+        return float(get_setting(session, "control", ControlSettings).hold_hours)
+    except ValidationError:
+        return float(ControlSettings().hold_hours)
+
+
+def _number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _our_recent_holds(
+    session: Session, unit_key: str, now: datetime,
+) -> tuple[str | None, frozenset[str], list[tuple[float | None, float | None]]]:
+    """What our own writes may have put on the thermostat: (the climate of our verified
+    HomeKit climate hold still running, climates of newer HomeKit holds that may have landed,
+    setpoints of our temperature holds still running). Reads the unit's hold writes and
+    resumes (any channel, any actor of ours) from the newest back to the newest verified one,
+    which replaced everything older. A failed row counts as maybe-landed only when it was
+    read back (the write went out); rows failed before sending never reached the thermostat."""
+    # (readback is JSONB: a write that never went out stores JSON null, not SQL NULL)
+    went_out = or_(ControlAction.status.in_(LANDED),
+                   (ControlAction.status == "failed") & (func.jsonb_typeof(ControlAction.readback) == "object"))
+    rows = session.execute(
+        select(ControlAction)
+        .where(ControlAction.unit_key == unit_key, ControlAction.action.in_(HOLD_ACTIONS),
+               ControlAction.channel != "none", went_out)
+        .order_by(ControlAction.id.desc())
+        .limit(20)
+    ).scalars().all()
+    hours = _hold_hours(session)
+    climate: str | None = None
+    maybe: set[str] = set()
+    temps: list[tuple[float | None, float | None]] = []
+    for r in rows:
+        req = r.request if isinstance(r.request, dict) else {}
+        if r.action == "set_hold" and req.get("kind") == "climate_hold" and req.get("climate") in CLIMATE_CODES:
+            until = _parse_until(req.get("until"))
+            if until is not None and r.status == "verified" and until - OUR_END_SLACK > now:
+                climate = str(req["climate"])
+            elif until is not None and until > now and r.status != "verified":
+                maybe.add(str(req["climate"]))
+        elif r.action == "set_hold":
+            heat, cool = req.get("heat_f"), req.get("cool_f")
+            if _number(heat) and _number(cool):
+                h = req.get("hours")
+                end = _parse_until(req.get("until")) or (r.completed_at or r.ts) + timedelta(
+                    hours=float(h) if _number(h) and float(h) > 0 else hours)
+                if end > now:
+                    temps.append((float(heat), float(cool)))
+        if r.status == "verified":
+            break
+    return climate, frozenset(maybe), temps
+
+
+def known_holds(session: Session, unit_key: str, previous: UnitSnapshot | None, now: datetime) -> KnownHolds:
+    """What may be on the unit's thermostat that is not a new change by a person: our own
+    holds (``_our_recent_holds``); an ecobee event in force (a utility event whose clock
+    window covers now, or a vacation / utility / unrecognised event the last live snapshot
+    still carries); a temperature hold the last live snapshot carries that came from the
+    cloud (ours, or a person's the controller already logged). A temperature hold HomeKit
+    itself reported (start unknown, not ours) is not known: it is what this check is for."""
+    climate, maybe, temps = _our_recent_holds(session, unit_key, now)
+    event = any(e.unit_key == unit_key and e.covers(now) for e in load_active(session, now))
+    hold = previous.hold if previous is not None else None
+    if hold is not None and (hold.end is None or hold.end > now):
+        unknown_event = hold.hold_type is not None and hold.hold_type not in KNOWN_HOLD_TYPES
+        if hold.hold_type in PROTECTED_EVENTS or unknown_event:
+            event = True
+        elif hold.kind == "temperature" and (
+            previous is not None and (previous.source != "homekit" or hold.start is not None or hold.set_by_us)
+        ):
+            temps.append((hold.heat_f, hold.cool_f))
+    return KnownHolds(climate=climate, maybe_climates=maybe, temps=tuple(temps), event=event)
+
+
+def hand_change_reason(change: HandChange, unit_name: str) -> str:
+    where = f"on the {unit_name.lower()} thermostat (seen over HomeKit while the ecobee cloud is down)"
+    tail = "the controller stands aside until the cloud is back."
+    if change.kind == "comfort" and change.climate_ref:
+        return f"Someone picked {change.climate_ref.capitalize()} by hand {where}; {tail}"
+    temps = ", ".join(f"{side} {v:g}°F" for side, v in (("heat", change.heat_f), ("cool", change.cool_f))
+                      if v is not None)
+    held = f"a temperature hold ({temps})" if temps else "a temperature hold"
+    return f"Someone set {held} by hand {where}; {tail}"
+
+
+def record_hand_change(
+    session: Session,
+    unit_key: str,
+    values: dict[int, dict[str, Any]],
+    now: datetime,
+    *,
+    previous: UnitSnapshot | None,
+    continuing: bool,
+) -> int | None:
+    """Log a person's change HomeKit shows (``detect_hand_change``) as ONE control_actions row
+    (actor 'homekit_service', status 'skipped', rule 'hold_off', request.kind MANUAL_KIND,
+    source 'homekit', until None): ``climate.state`` makes it the unit's person hold, so the
+    controller stands aside until the cloud is back and shows the real hold state. Not logged
+    again while the same change persists: while HomeKit stays the live path (``continuing``:
+    the snapshot it replaced was HomeKit's too) and nothing was written to the thermostat
+    since the last such row, an identical change is that row's. Returns the new row's id."""
+    change = detect_hand_change(values, known_holds(session, unit_key, previous, now))
+    if change is None:
+        return None
+    last = session.execute(_latest_hand_change(unit_key)).scalar_one_or_none()
+    if (continuing and last is not None and change.same_as(last.request)
+            and not _written_since(session, unit_key, last.id)):
+        return None  # the same change, still showing: already logged
+    unit = session.get(Unit, unit_key)
+    tstat = values.get(THERMOSTAT_AID, {})
+    targets = {c: t for c, t in comfort_targets_from_values(tstat).items() if any(v is not None for v in t.values())}
+    row = ControlAction(
+        ts=now, unit_key=unit_key, actor=HAND_ACTOR, mode="act", channel="homekit", action="set_hold",
+        status="skipped", rule="hold_off", reason=hand_change_reason(change, unit.name if unit else unit_key),
+        before={"current_mode": change.current_mode, "heat_sp_f": change.heat_f, "cool_sp_f": change.cool_f,
+                "comfort_targets": targets},
+        request={"kind": MANUAL_KIND, "source": HAND_SOURCE, "climate_ref": change.climate_ref,
+                 "heat_f": change.heat_f, "cool_f": change.cool_f, "hold_type": HAND_HOLD_TYPE,
+                 "start": now.isoformat(), "until": None},
+        completed_at=now,
+    )
+    session.add(row)
+    session.flush()
+    events.publish(session, "action", row.id)
+    return row.id
 
 
 def comfort_violation(climate: str, targets: dict[str, float | None], limits: HardLimits) -> str | None:
@@ -873,12 +1116,17 @@ class HomekitService:
                 await self._fallback_snapshot(st, res, now)
 
     async def _fallback_snapshot(self, st: _AliasState, res: ReadResult, now: datetime) -> None:
-        """Keep the unit's live snapshot fresh from HomeKit while the cloud's is stale."""
+        """Keep the unit's live snapshot fresh from HomeKit while the cloud's is stale, and log
+        a person's change at the thermostat while the cloud circuit is open."""
         try:
-            if await self._db(write_homekit_snapshot, st.unit_key, res.values, st.aid_map, now,
-                              self.cloud_stale_after):
+            done = await self._db(homekit_fallback, st.unit_key, res.values, st.aid_map, now,
+                                  self.cloud_stale_after)
+            if done.written:
                 log.info("homekit %r: cloud snapshot of unit %s is stale; wrote a HomeKit snapshot",
                          st.alias, st.unit_key)
+            if done.hand_change_id is not None:
+                log.info("homekit %r: someone changed unit %s by hand (action %s); the controller stands aside",
+                         st.alias, st.unit_key, done.hand_change_id)
         except Exception as exc:  # noqa: BLE001 - one unit's snapshot never stops the poll
             log.warning("homekit %r: HomeKit snapshot for unit %s failed: %s", st.alias, st.unit_key, _short(exc))
 

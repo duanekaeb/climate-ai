@@ -7,7 +7,9 @@ compared with 95% of the full-day expectation, never the whole of it). Weather i
 removed day by day, and the switchback's randomization handles everything else.
 The effect is reported as the difference in mean residual (treatment arm minus the first,
 control arm) as a percentage of mean expected runtime: negative means the treatment used LESS
-runtime than the control under the same weather.
+runtime than the control under the same weather. A day with a utility event or the pre-cooling
+before one (``analytics.exclusions``) is not part of either arm: the utility, not the arm, set
+the thermostats (``included`` false, the reason in its note, and the analysis counts them).
 
 Each pre-planned checkpoint is judged once, by the nightly run after its last day has left the
 late-data refill window, and its verdict is stored on the experiment (``freeze_checkpoints``);
@@ -17,7 +19,7 @@ late-data refill window, and its verdict is stored on the experiment (``freeze_c
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -28,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from climate.analytics import baseline as baseline_mod
 from climate.analytics import daily as daily_mod
+from climate.analytics import exclusions
 from climate.api.schemas import Checkpoint, ExperimentAnalysis, PowerOut
 from climate.store.app_settings import LocationSettings, get_setting
 from climate.store.orm import Experiment, ExperimentDay, Unit
@@ -102,18 +105,24 @@ def _expected_slots(d: date, tz: str) -> int:
 
 def house_days(session: Session, start: date, end: date, tz: str) -> dict[date, HouseDay]:
     """Weighted house actual / expected stage-1 seconds per local day in [start, end], both
-    over the slots each unit has data for."""
+    over the slots each unit has data for. A utility-event / pre-cooling day is not included
+    (its note says which)."""
     weights = unit_weights(session)
     units = list(weights)
     rows = daily_mod.daily_rows(session, start, end, tz, units)
     fits = baseline_mod.active_fits(session)
+    events = exclusions.event_days(session, start, end, tz)
     by_day: dict[date, dict[str, Any]] = {}
     for r in rows:
         by_day.setdefault(r.day, {})[r.unit_key] = r
     out: dict[date, HouseDay] = {}
     d = start
     while d <= end:
-        out[d] = _house_day(d, by_day.get(d, {}), units, weights, fits, tz)
+        h = _house_day(d, by_day.get(d, {}), units, weights, fits, tz)
+        why = events.get(d)
+        if why is not None:  # the reason comes first; the day's other notes still follow
+            h = HouseDay(d, h.actual_s, h.expected_s, False, f"{why}; {h.note}" if h.note else why)
+        out[d] = h
         d += timedelta(days=1)
     return out
 
@@ -183,9 +192,10 @@ def update_days(session: Session, now: datetime) -> None:
 
     Rows never processed are filled once; the last few finished days are recomputed every
     run so late runtime reports are picked up. ``included`` is False (with a note saying why)
-    when any unit lacks a baseline for the day's mode, has < 90% of the day's data, or the
-    house both heated and cooled that day. Then freezes every checkpoint whose days are all
-    past the refill window (``freeze_checkpoints``)."""
+    when any unit lacks a baseline for the day's mode, has < 90% of the day's data, the house
+    both heated and cooled that day, or the day had a utility event or the pre-cooling before
+    one (the note names it first). Then freezes every checkpoint whose days are all past the
+    refill window (``freeze_checkpoints``)."""
     tz = _tz(session)
     today = local_date(now, tz)
     recent = today - timedelta(days=RECENT_REFILL_DAYS)
@@ -287,12 +297,17 @@ class _Context:
     elapsed: int  # finished days
     rho: float
     deff: float
+    event_days: dict[date, str] = field(default_factory=dict)  # finished days left out for a utility event
 
     @property
     def corr_note(self) -> str:
         if self.deff <= 1.0:
             return ""
         return f" Intervals are widened for day-to-day correlation within blocks (lag-1 ≈ {self.rho:.2f})."
+
+    def event_note(self, cutoff: date | None) -> str:
+        """' 2 days with a utility event were left out.' for the days before ``cutoff``."""
+        return exclusions.left_out_note({d: why for d, why in self.event_days.items() if cutoff is None or d < cutoff})
 
     def _pair(self, arm: str, cutoff: date | None, z_crit: float) -> _Look | None:
         sel = [d for d in self.observed if cutoff is None or d.day < cutoff]
@@ -357,6 +372,8 @@ def _context(session: Session, experiment: Experiment, today: date) -> _Context:
         elapsed=sum(1 for d in days if d.day < today),
         rho=rho,
         deff=_block_design_effect(rho, int(design.get("block_days", 1))),
+        event_days={d.day: why for d in days if d.day < today and not d.included
+                    and (why := exclusions.label_of(d.note)) is not None},
     )
 
 
@@ -406,7 +423,7 @@ def _verdict(ctx: _Context, i: int, cp: Checkpoint, now: datetime) -> dict[str, 
         "usable_days": ctx.usable(cutoff),
         "lag1": round(ctx.rho, 4),
         "design_effect": round(ctx.deff, 4),
-        "note": note + ctx.corr_note + ctx.third_arm_note(cutoff),
+        "note": note + ctx.corr_note + ctx.third_arm_note(cutoff) + ctx.event_note(cutoff),
         "at": now.isoformat(),
     }
 
@@ -564,7 +581,8 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
     if info is None:
         return none(
             decision,
-            f"{lead}Not enough usable days per arm yet for an interval ({n_obs} usable of {ctx.elapsed}).",
+            f"{lead}Not enough usable days per arm yet for an interval ({n_obs} usable of {ctx.elapsed})."
+            f"{ctx.event_note(None)}",
             n_obs,
             last_reached,
         )
@@ -576,7 +594,7 @@ def analyze(session: Session, experiment: Experiment) -> ExperimentAnalysis:
         checkpoint_reached=last_reached,
         decision=decision,  # type: ignore[arg-type]
         note=f"{lead}Informational only, not a decision, do not act on it: {ctx.describe(info)}"
-        f"{ctx.corr_note}{ctx.third_arm_note(None)}",
+        f"{ctx.corr_note}{ctx.third_arm_note(None)}{ctx.event_note(None)}",
     )
 
 

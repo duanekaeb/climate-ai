@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from climate.analytics import baseline as baseline_mod
 from climate.analytics.daily import heat_metrics
+from climate.analytics.exclusions import event_days
 from climate.api.schemas import BacktestOut, SimPoint, SimulateOut
 from climate.control.guardrails import round_setpoint
 from climate.control.policy import PolicyParams
@@ -494,13 +495,20 @@ def backtest(session: Session, params: dict, days: int = 28) -> BacktestOut:
     start, _ = day_bounds_utc(today - timedelta(days=days), env.tz)
     end, _ = day_bounds_utc(today, env.tz)
     s = rc.load_series(session, start - WARMUP_SLOTS * rc.SLOT, end, env.tz)
-    usable = _usable_days(s)
+    # Utility-event days (and pre-cooling before them) are left out: the policy would not have
+    # been in control during the event, so they would skew the comparison.
+    excluded = event_days(session, today - timedelta(days=days), today - timedelta(days=1), env.tz)
+    usable = [d for d in _usable_days(s) if d.day not in excluded]
     sched_cur, sched_cand = schedule(active, env, s), schedule(cand, env, s)
     fits = rc.active_rc(session)
     rc_days = [d for d in usable if d.mode in fits]
     if rc_days and len(rc_days) * 2 >= len(usable):
-        return _rc_backtest(s, env, rc_days, fits, sched_cur, sched_cand, skipped=days - len(rc_days))
-    return _rule_of_thumb(session, s, env, usable, sched_cur, sched_cand)
+        out = _rc_backtest(s, env, rc_days, fits, sched_cur, sched_cand, skipped=days - len(rc_days))
+    else:
+        out = _rule_of_thumb(session, s, env, usable, sched_cur, sched_cand)
+    if excluded:
+        out.note = f"{out.note} {len(excluded)} day(s) around utility events left out.".strip()
+    return out
 
 
 # ---------------------------------------------------------------------------------------

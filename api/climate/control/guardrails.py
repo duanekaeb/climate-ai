@@ -1,9 +1,10 @@
 """Hard limits, enforced in code on every write whoever asked for it (blueprint §2.6).
 
 ``check`` never raises: it clamps what it can and reports violations as sentences, and sets
-``blocked_reason`` when nothing may be written right now (rate limit, manual back-off,
-stale data, humidity guard, mode off, a vacation or demand-response event). Whatever it
-returns with ``ok`` is inside the hard limits, on the 0.5°F grid and keeps the deadband.
+``blocked_reason`` when nothing may be written right now (rate limit, a person's hold, the
+back-off after a Resume, stale data, humidity guard, mode off, a vacation, utility or
+unrecognised ecobee event). Whatever it returns with ``ok`` is inside the hard limits, on the
+0.5°F grid and keeps the deadband.
 """
 
 from __future__ import annotations
@@ -17,10 +18,13 @@ from pydantic import BaseModel, Field, ValidationError
 from climate.control.policy import (
     CLAUDE_SIGNOFF_RANGES,
     OWNER_ONLY_PARAMS,
+    PersonHold,
     PolicyParams,
     UnitStatus,
     UnitTarget,
+    UtilityEventState,
 )
+from climate.sources.base import KNOWN_HOLD_TYPES
 from climate.store.app_settings import HardLimits
 from climate.timeutil import to_local
 
@@ -54,21 +58,33 @@ def check(
     act_units: list[str] | None = None,
     enforce_rate_limit: bool = True,
     enforce_manual_backoff: bool = True,
+    enforce_step: bool = True,
+    enforce_humidity: bool = True,
+    events: list[UtilityEventState] | None = None,
     homekit_data_ok: bool = False,
     tz: str | None = None,
 ) -> GuardResult:
     """Clamp to [min,max] heat/cool, keep cool - heat >= min_deadband_f (and the unit's
     heatCoolMinDelta setting if reported), limit each step to max_step_f from the current
-    setpoint, block if the last write was < min_minutes_between_changes ago, block during
-    manual_override_until, block raising cool_f while zone humidity > max_indoor_rh, block
-    when the snapshot is older than 15 minutes or the unit is disconnected, and block while a
-    vacation or utility demand-response event runs (those are never overridden).
+    setpoint, block if the last write was < min_minutes_between_changes ago, block while a
+    person's hold runs (``unit.person_hold``) and during the back-off after a Resume
+    (``unit.resume_backoff_until``), block raising cool_f while zone humidity > max_indoor_rh,
+    block when the snapshot is older than 15 minutes or the unit is disconnected, and block
+    while a vacation, utility demand-response or unrecognised ecobee event runs (never
+    overridden): by the snapshot's top event, or by the clock for a utility event in
+    ``events`` that covers ``now`` for this unit (the snapshot may lag).
 
     Keyword options (all default to the strictest behaviour except ``mode``):
     - ``mode``: the controller mode; 'off' blocks. With 'act' and ``act_units`` given, a
       unit outside the list is blocked (it stays suggest-only).
-    - ``enforce_rate_limit`` / ``enforce_manual_backoff``: False only for owner holds (the
-      owner is the manual actor).
+    - ``enforce_rate_limit`` / ``enforce_manual_backoff`` / ``enforce_step`` /
+      ``enforce_humidity``: False only for the owner's own actions (the owner is the person;
+      an owner hold gets exactly what was typed within the hard envelope: min/max, deadband,
+      grid). With ``enforce_manual_backoff`` False the event blocks still apply and say to
+      skip the utility event first: an owner hold over a running event would be an opt-out
+      ecobee may not record as one.
+    - ``events``: the house's utility events (``HouseState.utility_events``); rows for other
+      units are ignored.
     - ``homekit_data_ok``: True only while the ecobee cloud circuit is open and HomeKit has
       taken over; otherwise a snapshot that came over HomeKit (no ecobee hold or program
       data) blocks the write.
@@ -85,6 +101,7 @@ def check(
     the grid are tightened to the nearest grid point inside them).
     Clamping is computed even when blocked, so the plan view shows what would be written."""
     name = _unit_name(unit)
+    owner = not enforce_manual_backoff
     violations: list[str] = []
     snap = unit.snapshot
     cur_heat = snap.heat_sp_f if snap is not None else None
@@ -96,6 +113,7 @@ def check(
         blocked.append("The controller is off.")
     elif mode == "act" and act_units is not None and unit.unit_key not in act_units:
         blocked.append(f"The {name} thermostat is suggest-only: it is not in the list of units the controller may write to.")
+    event: str | None = None
     if snap is None:
         blocked.append(f"No live data from the {name} thermostat yet.")
     else:
@@ -111,14 +129,34 @@ def check(
             )
         event = snap.hold.hold_type if snap.hold is not None else None
         if event in PROTECTED_EVENTS:
+            skip = " Skip the event first." if owner and event == "demandResponse" else ""
             blocked.append(
                 f"A {PROTECTED_EVENTS[event]} event is running on the {name} thermostat; the controller never "
-                "overrides it."
+                f"overrides it.{skip}"
             )
-    if enforce_manual_backoff and unit.manual_override_until is not None and unit.manual_override_until > now:
+        elif event is not None and event not in KNOWN_HOLD_TYPES:
+            blocked.append(
+                f"An unrecognised ecobee event ({event}) is running on the {name} thermostat; the app is hands-off "
+                "until it ends."
+            )
+    running = [e for e in events or () if e.unit_key == unit.unit_key and e.covers(now)]
+    if running and event != "demandResponse":
+        ev = running[0]
+        what = f"The utility event{f' {ev.name!r}' if ev.name else ''}"
+        until = f" until {_clock(ev.end_at, tz, now)}" if ev.end_at is not None else ""
+        skip = " Skip the event first." if owner else ""
         blocked.append(
-            f"Someone changed the {name} thermostat by hand; backing off until "
-            f"{_clock(unit.manual_override_until, tz)}."
+            f"{what} is on for the {name} thermostat{until}; the controller stands aside while it runs.{skip}"
+        )
+    if enforce_manual_backoff and unit.person_hold is not None and (
+        unit.person_hold.until is None or unit.person_hold.until > now
+    ):
+        blocked.append(person_hold_sentence(unit.person_hold, tz, now))
+    if enforce_manual_backoff and unit.resume_backoff_until is not None and unit.resume_backoff_until > now:
+        pressed = f" at {_clock(unit.resume_seen_at, tz, now)}" if unit.resume_seen_at is not None else ""
+        blocked.append(
+            f"Resume was pressed{pressed}: the {name} thermostat follows the ecobee schedule until "
+            f"{_clock(unit.resume_backoff_until, tz, now)}, or until you choose Back to automatic."
         )
     if enforce_rate_limit and unit.last_change_at is not None:
         since = now - unit.last_change_at
@@ -140,13 +178,13 @@ def check(
 
     heat, cool = _hard_limits(heat, cool, bounds, violations)
 
-    if cur_heat is not None and abs(heat - cur_heat) > limits.max_step_f + _EPS:
+    if enforce_step and cur_heat is not None and abs(heat - cur_heat) > limits.max_step_f + _EPS:
         stepped = _toward(cur_heat, heat, limits.max_step_f)
         violations.append(
             f"Heat moves at most {limits.max_step_f:g}°F per change: {stepped:g}°F now, on the way to {heat:g}°F."
         )
         heat = stepped
-    if cur_cool is not None and abs(cool - cur_cool) > limits.max_step_f + _EPS:
+    if enforce_step and cur_cool is not None and abs(cool - cur_cool) > limits.max_step_f + _EPS:
         stepped = _toward(cur_cool, cool, limits.max_step_f)
         violations.append(
             f"Cool moves at most {limits.max_step_f:g}°F per change: {stepped:g}°F now, on the way to {cool:g}°F."
@@ -154,7 +192,8 @@ def check(
         cool = stepped
 
     humid = (
-        snap is not None and snap.zone_humidity is not None and snap.zone_humidity > limits.max_indoor_rh
+        enforce_humidity and snap is not None and snap.zone_humidity is not None
+        and snap.zone_humidity > limits.max_indoor_rh
     )
     cool_cap: float | None = None
     if humid and cur_cool is not None:
@@ -267,11 +306,26 @@ def _unit_name(unit: UnitStatus) -> str:
     )
 
 
-def _clock(ts: datetime, tz: str | None) -> str:
+def _clock(ts: datetime, tz: str | None, now: datetime | None = None) -> str:
+    """'2:10 PM' in house time; 'Mon 2:10 PM' when ``now`` is given and the day differs."""
     if tz:
         local = to_local(ts, tz)
-        return f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
-    return ts.strftime("%H:%M UTC")
+        text = f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+        if now is not None and to_local(now, tz).date() != local.date():
+            text = f"{local:%a} {text}"
+        return text
+    text = ts.strftime("%H:%M UTC")
+    return f"{ts:%a} {text}" if now is not None and now.date() != ts.date() else text
+
+
+def person_hold_sentence(hold: PersonHold, tz: str | None, now: datetime | None = None) -> str:
+    """Why the controller waits on a person's hold: "On your hold since 2:10 PM (until you
+    change it); the controller waits until it ends or you choose Back to automatic." ("until
+    4:00 PM" for a timed hold; "your hold from the app" when it came from this app)."""
+    whose = "your hold from the app" if hold.by == "app" else "your hold"
+    since = _clock(hold.since, tz, now)
+    until = f", until {_clock(hold.until, tz, now)}" if hold.until is not None else " (until you change it)"
+    return f"On {whose} since {since}{until}; the controller waits until it ends or you choose Back to automatic."
 
 
 def _toward(current: float, wanted: float, step: float) -> float:

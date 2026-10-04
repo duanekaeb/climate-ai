@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from climate import events
 from climate.api.auth import OwnerDep, ReaderDep, Role, WriterDep
-from climate.api.routers.control import SessionDep, active_policy, actor_for, unprocessable
+from climate.api.routers.control import SessionDep, active_policy, actor_for, job_out, unprocessable
 from climate.api.schemas import (
     ArmIn,
     BacktestBody,
@@ -124,7 +124,7 @@ def experiment_detail(
     schedule = [
         ExperimentDayOut(
             day=d.day, arm=d.arm, actual_min=_min(d.actual_s), expected_min=_min(d.expected_s),
-            residual_min=_min(d.residual_s), included=d.included,
+            residual_min=_min(d.residual_s), included=d.included, note=d.note,
         )
         for d in days
     ]
@@ -185,10 +185,6 @@ def list_models(_: Role = ReaderDep, session: Session = SessionDep) -> list[Mode
         .order_by(ModelFit.kind, ModelFit.unit_key, ModelFit.mode, ModelFit.created_at.desc(), ModelFit.id.desc())
     )
     return [ModelFitOut.model_validate(f, from_attributes=True) for f in session.execute(q).scalars()]
-
-
-def job_out(job: Job) -> JobOut:
-    return JobOut.model_validate(job, from_attributes=True)
 
 
 @router.post("/models/refit", response_model=JobOut)

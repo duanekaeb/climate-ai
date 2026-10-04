@@ -27,6 +27,7 @@ from climate.api.routers import (
     reports,
     setup,
     status,
+    utility_events,
     ws,
 )
 from climate.api.schemas import Health
@@ -76,7 +77,7 @@ def create_app() -> FastAPI:
             db_ok = False
         return Health(ok=db_ok, version=__version__, db=db_ok)
 
-    for module in (auth, status, analytics, control, experiments, reports, agent, setup, ws):
+    for module in (auth, status, analytics, control, utility_events, experiments, reports, agent, setup, ws):
         app.include_router(module.router, prefix="/api")
 
     @app.middleware("http")

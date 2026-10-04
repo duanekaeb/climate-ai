@@ -12,7 +12,9 @@ blocks every claim (baseline_ok = False). Minor runtime in a mode without a base
 left out of both sides and the note says how much.
 
 Days count only when every unit with data in the period has a complete day
-(``daily.is_complete``); a complete day's expectation is scaled to its coverage.
+(``daily.is_complete``); a complete day's expectation is scaled to its coverage. Days with a
+utility event or the pre-cooling before one (``exclusions.event_days``) are left out of both
+the baseline's training days and the period judged, and the note says how many.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
+from climate.analytics import exclusions
 from climate.analytics.baseline import (
     MIN_DAYS,
     MIN_RUNTIME_DAYS,
@@ -33,6 +36,7 @@ from climate.analytics.baseline import (
     ResidualStats,
     expected_covered_seconds,
     involved_modes,
+    pre_period_excluded,
     pre_period_fits,
     residual_stats,
 )
@@ -139,6 +143,17 @@ def _judge(
     return p
 
 
+def _without_event_days(
+    session: Session, rows: list[DayRow], start: date, end: date, tz: str,
+) -> tuple[list[DayRow], dict[date, str]]:
+    """(rows without utility-event / pre-cooling days, {left-out day with data: why})."""
+    ex = exclusions.event_days(session, start, end, tz)
+    if not ex:
+        return rows, {}
+    left = {r.day: ex[r.day] for r in rows if r.day in ex}
+    return [r for r in rows if r.day not in ex], dict(sorted(left.items()))
+
+
 def _stats(p: _Period, fits: dict[tuple[str, str], BaselineFit], weights: dict[str, float]) -> ResidualStats | None:
     return residual_stats((fits[k], weights.get(k[0], 1.0)) for k in sorted(p.involved) if k in fits)
 
@@ -152,7 +167,7 @@ def savings(session: Session, start: date, end: date) -> Savings:
         raise ValueError("end is before start")
     tz = house_tz(session)
     fits = pre_period_fits(session, start, tz)
-    rows = daily_rows(session, start, end, tz)
+    rows, left = _without_event_days(session, daily_rows(session, start, end, tz), start, end, tz)
     weights = unit_weights(session)
     p = _judge(rows, fits, weights, involved_modes(rows, fits))
 
@@ -183,6 +198,7 @@ def savings(session: Session, start: date, end: date) -> Savings:
     base = {"start": start, "end": end, "n_days": n, "actual_min": round(actual_s / 60.0, 1), "by_unit": by_unit,
             "days": days}
     skipped = f" {len(p.skipped_days)} day(s) without complete data for every unit were left out." if p.skipped_days else ""
+    skipped += exclusions.left_out_note(left)
 
     if not p.involved:
         return Savings(**base, expected_min=None, savings_min=None, savings_pct=None, ci90_low_pct=None,
@@ -215,7 +231,9 @@ def savings(session: Session, start: date, end: date) -> Savings:
     else:
         note = (f"Over {n} days runtime was within what the weather explains ({_pct(pct)}, {interval}), so no "
                 f"savings can be claimed.")
-    note += f" Baseline: the {TRAIN_DAYS} days before {start.isoformat()}."
+    train_left = exclusions.days_phrase(pre_period_excluded(session, start, tz))
+    note += f" Baseline: the {TRAIN_DAYS} days before {start.isoformat()}"
+    note += f" ({train_left} left out)." if train_left else "."
     if p.left_out_s > 0:
         note += f" {p.left_out_s / 60.0:.0f} min of minor runtime without a baseline were left out."
     note += skipped
@@ -230,14 +248,18 @@ def waterfall(session: Session, week_start: date) -> Waterfall:
 
     Weeks start on Monday (another date is moved back to its Monday). Both weeks use the
     same baseline, trained on the 90 days before last week. Only weekdays complete in BOTH
-    weeks are compared, so a week in progress is compared with the same days of last week."""
+    weeks are compared, so a week in progress is compared with the same days of last week, and
+    a utility-event / pre-cooling day in either week drops that weekday from both."""
     ws = week_start - timedelta(days=week_start.weekday())
     prev = ws - timedelta(days=7)
     tz = house_tz(session)
     fits = pre_period_fits(session, prev, tz)
     weights = unit_weights(session)
-    rows_this = daily_rows(session, ws, ws + timedelta(days=6), tz)
-    rows_last = daily_rows(session, prev, prev + timedelta(days=6), tz)
+    rows_this, left_this = _without_event_days(session, daily_rows(session, ws, ws + timedelta(days=6), tz), ws,
+                                               ws + timedelta(days=6), tz)
+    rows_last, left_last = _without_event_days(session, daily_rows(session, prev, prev + timedelta(days=6), tz),
+                                               prev, prev + timedelta(days=6), tz)
+    left_out = exclusions.left_out_note({**left_last, **left_this})
     involved = involved_modes(rows_this + rows_last, fits)
     this = _judge(rows_this, fits, weights, involved)
     last = _judge(rows_last, fits, weights, involved)
@@ -248,13 +270,14 @@ def waterfall(session: Session, week_start: date) -> Waterfall:
     a_this, a_last = sum(this.actual.values()) / 60.0, sum(last.actual.values()) / 60.0
     m = len(offsets)
     partial = "" if m == 7 else f" Compared on the {m} weekday(s) with complete data in both weeks."
+    partial += left_out
     totals_only = [
         WaterfallItem(label="Last week", minutes=round(a_last, 1), kind="total"),
         WaterfallItem(label="This week", minutes=round(a_this, 1), kind="total"),
     ]
     if m == 0:
         return Waterfall(week_start=ws, prev_week_start=prev, items=totals_only, strategy_ci90_min=None,
-                         note="Not enough data: no weekday has complete data for every unit in both weeks.")
+                         note="Not enough data: no weekday has complete data for every unit in both weeks." + left_out)
     problems = list(dict.fromkeys(this.problems + last.problems))
     if problems or not involved:
         why = "; ".join(problems) if problems else "no heating or cooling runtime in either week"

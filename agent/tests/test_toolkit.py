@@ -27,7 +27,7 @@ def test_house_status_summary(make_api):
     assert not res.is_error
     text = res.text
     assert "Main floor [main]: cool, 76.2°F" in text
-    assert "until 15:30 (ours)" in text  # 20:30Z shown in the house's time zone (CDT)
+    assert "hold 68.0°F/75.0°F [controller]: Our hold until 3:30 PM" in text
     assert "Twins' Room no sensor (temp unknown)" in text
     assert "Toy Room* 77.2°F occupied" in text
     assert "maxed 45 min" in text
@@ -35,6 +35,50 @@ def test_house_status_summary(make_api):
     assert "Upstairs at 100% duty" in text
     assert router.paths() == ["GET /api/status"]  # tz came from the status itself
     assert len(text) < 2000
+
+
+def test_house_status_holds_backoffs_and_utility_events(make_api):
+    api, _ = make_api({("GET", "/api/status"): STATUS})
+    text = call(api, "get_house_status").text
+    assert "[person]: On your hold since 2:10 PM (until you change it) (a person's hold: the controller writes nothing" in text
+    assert "after a Resume the ecobee schedule runs until Sat 18:10 (controller waits)" in text  # 23:10Z in CDT
+    # one line per event, however many thermostats it reaches
+    assert text.count("Peak saver announced") == 1
+    assert ("- Peak saver announced, Sun 10-04 15:00–18:00 on Main floor, Upstairs: cooling +2°F; "
+            "skip requested by owner (Skipped from the app)") in text
+    assert "Grid emergency skipped (opted out), Sat 10-03 12:00–16:00 on Bed / Office wing: AC off; " \
+        "skip done by rule (Office reached 80°F)" in text
+    assert "Ahead: vacation on Main floor Sat 10-10 08:00–Mon 10-12 09:00" in text
+    assert "mandatory" not in text
+    assert len(text) < 3000
+
+    bed = STATUS["units"][2]
+    mandatory = {**bed, "utility_event": {**bed["utility_event"], "status": "running", "is_optional": False,
+                                          "skip": None, "skip_by": None, "skip_reason": None}}
+    api, _ = make_api({("GET", "/api/status"): {**STATUS, "units": [mandatory]}})
+    assert "Grid emergency running, Sat 10-03 12:00–16:00 on Bed / Office wing: AC off; mandatory (cannot be skipped)" \
+        in call(api, "get_house_status").text
+
+
+def test_house_status_from_an_api_without_hold_labels(make_api):
+    old_main = {k: v for k, v in STATUS["units"][0].items() if k not in ("hold_owner", "hold_label")}
+    api, _ = make_api({("GET", "/api/status"): {**STATUS, "units": [old_main]}})
+    assert "until 15:30 (ours)" in call(api, "get_house_status").text  # 20:30Z in the house's time zone (CDT)
+
+
+def test_settings_summary(make_api):
+    api, _ = make_api({("GET", "/api/control/settings"): SETTINGS})
+    text = call(api, "get_settings").text
+    assert "A person's hold always wins, however long it runs; after someone presses Resume the controller waits 4.0 h" in text
+    assert "hold reminder after 3.0 h" in text
+    assert ("Utility events: alerts on; automatic skip on (someone asleep, a room ≥ 79.5°F cooling); "
+            "pre-cool/pre-heat on: 2.0°F for up to 2 h, ending 10 min before the start.") in text
+    legacy = {**SETTINGS, "control": {**{k: v for k, v in SETTINGS["control"].items() if k != "resume_backoff_hours"},
+                                      "manual_backoff_hours": 6.0, "manual_hold_reminder_hours": 0}}
+    legacy.pop("utility_events")
+    api, _ = make_api({("GET", "/api/control/settings"): legacy})
+    text = call(api, "get_settings").text
+    assert "the controller waits 6.0 h; hold reminder off." in text and "Utility events" not in text
 
 
 def test_savings_with_interval(make_api):

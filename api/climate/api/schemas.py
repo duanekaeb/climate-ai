@@ -12,7 +12,7 @@ from datetime import date as Date
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from climate.control.guardrails import GuardResult
 from climate.control.policy import PersonHold, PolicyParams, RoomStatus, UnitTarget
@@ -142,7 +142,9 @@ class UnitLive(BaseModel):
     person_hold: PersonHold | None = None  # set while a person's hold runs (it always wins)
     # After someone pressed Resume: the ecobee schedule runs until then.
     resume_backoff_until: datetime | None = None
-    utility_event: UtilityEventOut | None = None  # running, else the next announced one
+    # Running, else the next announced one, else one over within the last 2 hours (``status``
+    # and ``skip`` say which: the card keeps showing "skipped" / "ended" for a while).
+    utility_event: UtilityEventOut | None = None
     upcoming_events: list[ThermostatEvent] = Field(default_factory=list)  # vacations / events ahead
     target: UnitTarget | None = None  # what the policy wants right now
     age_s: float | None = None
@@ -494,6 +496,21 @@ class SettingsUpdate(BaseModel):
     agent: AgentSettings | None = None
     utility_events: UtilityEventSettings | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_backoff(cls, data: Any) -> Any:
+        """Clients from before the rename send ``control.manual_backoff_hours``. An old web
+        bundle spreads the settings it read (which now carry ``resume_backoff_hours``) and sets
+        ``manual_backoff_hours`` to the owner's edit, so when the old name is present it is the
+        value the owner meant (``ControlSettings`` alone would prefer the new name)."""
+        if isinstance(data, dict) and isinstance(data.get("control"), dict) and "manual_backoff_hours" in data["control"]:
+            control = dict(data["control"])
+            legacy = control.pop("manual_backoff_hours")
+            if legacy is not None:
+                control["resume_backoff_hours"] = legacy
+            data = {**data, "control": control}
+        return data
+
 
 class SkipEventBody(BaseModel):
     # Skip this event on every thermostat it reaches (the same event_key), or only this one.
@@ -601,6 +618,7 @@ class ExperimentDayOut(BaseModel):
     expected_min: float | None
     residual_min: float | None
     included: bool
+    note: str | None = None  # why a day is left out, e.g. "utility event"
 
 
 class ExperimentAnalysis(BaseModel):

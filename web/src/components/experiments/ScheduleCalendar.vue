@@ -49,7 +49,7 @@ function title(c: Cell): string {
   if (!c.entry) return dayLabelLong(c.day)
   const e = c.entry
   const parts = [dayLabelLong(c.day), `arm ${armLabel.value.get(e.arm) ?? e.arm}`]
-  if (!e.included) parts.push('excluded from the analysis')
+  if (!e.included) parts.push(e.note ? `excluded from the analysis (${e.note})` : 'excluded from the analysis')
   if (e.actual_min !== null) parts.push(`ran ${minutes(e.actual_min)}`)
   if (e.expected_min !== null) parts.push(`expected ${minutes(e.expected_min)}`)
   if (e.residual_min !== null) parts.push(`residual ${signedMinutes(e.residual_min)}`)

@@ -4,6 +4,8 @@ runtime, weather.
 ``/status`` is assembled from several services; each part runs in its own SAVEPOINT through
 ``safe`` so a failing service degrades its part (a target of None, no weather, a fallback
 room list) instead of failing the whole page. Rooms without a sensor never get a temperature.
+Each unit card says whose hold runs (``climate.api.labels``), a person's hold, a resume
+back-off and the unit's utility event.
 """
 
 from __future__ import annotations
@@ -11,20 +13,23 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi import status as http
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from climate import state
 from climate.analytics import baseline, daily, metrics
 from climate.api.auth import ReaderDep, Role
+from climate.api.labels import hold_label
 from climate.api.routers.agent import agent_info
 from climate.api.routers.control import SessionDep, controller_info, house_tz, parse_dt, safe
+from climate.api.routers.utility_events import event_out, prep_labels
 from climate.api.schemas import (
     AgentInfo,
     AlertOut,
@@ -36,19 +41,21 @@ from climate.api.schemas import (
     IntradayPoint,
     IntradayUnit,
     OutdoorPoint,
+    PlanRow,
     RoomHistory,
     RoomPoint,
     SetpointPoint,
     SourceInfo,
     UnitLive,
+    UtilityEventOut,
     WeatherNow,
     WeatherOut,
     WeatherPoint,
 )
 from climate.control import controller
-from climate.control.policy import PolicyParams, RoomStatus, UnitStatus, UnitTarget
+from climate.control.policy import PolicyParams, RoomStatus, UnitStatus, UnitTarget, UtilityEventState
 from climate.house import ROOMS, UNIT_KEYS
-from climate.sources.base import UnitSnapshot
+from climate.sources.base import ThermostatEvent, UnitSnapshot
 from climate.store.app_settings import (
     AgentSettings,
     ControlSettings,
@@ -70,9 +77,11 @@ from climate.store.orm import (
     SecretRow,
     Sensor,
     Unit,
+    UtilityEvent,
     WeatherHour,
 )
 from climate.timeutil import day_bounds_utc, floor_slot, local_date, utcnow
+from climate.utility.events import RECENT, to_state
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["status"])
@@ -206,9 +215,60 @@ def fallback_rooms(session: Session, now: datetime) -> list[RoomStatus]:
     return out
 
 
-def unit_live(us: UnitStatus, target: UnitTarget | None, today: dict[str, float | None], now: datetime) -> UnitLive:
+@dataclass
+class UnitEvents:
+    """One unit's utility events for its card: the rows (for the labels, as the policy sees
+    them) and the one the card shows."""
+
+    states: list[UtilityEventState] = field(default_factory=list)
+    shown: UtilityEventOut | None = None
+
+
+def unit_events(session: Session, now: datetime, plan_rows: list[PlanRow]) -> dict[str, UnitEvents]:
+    """Per unit: its open utility events and those over within ``RECENT`` (2 h); the card
+    shows the running one, else the next announced one, else the one that ended last."""
+    rows = session.execute(
+        select(UtilityEvent)
+        .where(or_(UtilityEvent.status.in_(("announced", "running")), UtilityEvent.ended_at >= now - RECENT))
+        .order_by(UtilityEvent.start_at.asc().nulls_last(), UtilityEvent.id)
+    ).scalars().all()
+    preps = prep_labels(rows, plan_rows, now)
+    out: dict[str, UnitEvents] = defaultdict(UnitEvents)
+    by_unit: dict[str, list[UtilityEvent]] = defaultdict(list)
+    for row in rows:
+        by_unit[row.unit_key].append(row)
+        try:
+            out[row.unit_key].states.append(to_state(row))
+        except ValidationError:
+            log.warning("utility event %s does not parse; leaving it out of the labels", row.id)
+    for unit_key, mine in by_unit.items():
+        running = [r for r in mine if r.status == "running"]
+        announced = [r for r in mine if r.status == "announced"]
+        over = sorted((r for r in mine if r.status not in ("announced", "running")),
+                      key=lambda r: (r.ended_at or now, r.id), reverse=True)
+        shown = running or announced or over
+        if shown:
+            out[unit_key].shown = event_out(shown[0], now, preps.get(shown[0].id))
+    return dict(out)
+
+
+def upcoming(snap: UnitSnapshot | None, now: datetime) -> list[ThermostatEvent]:
+    """The snapshot's vacations and utility events that have not started and are not over."""
+    if snap is None:
+        return []
+    ahead = [e for e in snap.events if not e.running and (e.end is None or e.end > now)]
+    return sorted(ahead, key=lambda e: (e.start is None, e.start or now))
+
+
+def unit_live(
+    us: UnitStatus, target: UnitTarget | None, today: dict[str, float | None], now: datetime, tz: str = "UTC",
+    events: UnitEvents | None = None,
+) -> UnitLive:
     snap = us.snapshot
     age = us.age_s if us.age_s is not None else ((now - snap.ts).total_seconds() if snap else None)
+    events = events or UnitEvents()
+    owner, label = hold_label(us, events.states, tz, now)
+    backoff = us.resume_backoff_until
     return UnitLive(
         unit_key=us.unit_key,
         name=us.name,
@@ -221,6 +281,12 @@ def unit_live(us: UnitStatus, target: UnitTarget | None, today: dict[str, float 
         cool_sp_f=snap.cool_sp_f if snap else None,
         climate_ref=snap.climate_ref if snap else None,
         hold=snap.hold if snap else None,
+        hold_owner=owner,
+        hold_label=label,
+        person_hold=us.person_hold,
+        resume_backoff_until=backoff if backoff is not None and backoff > now else None,
+        utility_event=events.shown,
+        upcoming_events=upcoming(snap, now),
         target=target,
         age_s=_r(age, 0),
         connected=bool(snap and snap.connected and age is not None and age <= STALE_S),
@@ -363,7 +429,11 @@ def get_status(_: Role = ReaderDep, session: Session = SessionDep) -> HouseStatu
     plan_rows = safe(session, "controller.current_plan", lambda: controller.current_plan(session, now), [])
     targets = {row.target.unit_key: row.target for row in plan_rows}
     today = safe(session, "metrics.unit_today", lambda: metrics.unit_today(session, now, tz), {})
-    units = [unit_live(us, targets.get(us.unit_key), today.get(us.unit_key, {}), now) for us in unit_statuses]
+    unit_evs = safe(session, "utility events", lambda: unit_events(session, now, plan_rows), {})
+    units = [
+        unit_live(us, targets.get(us.unit_key), today.get(us.unit_key, {}), now, tz, unit_evs.get(us.unit_key))
+        for us in unit_statuses
+    ]
 
     mode = get_setting(session, "control", ControlSettings).mode
     source_kind = get_setting(session, "source", SourceSettings).kind

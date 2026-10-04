@@ -1,6 +1,7 @@
 // Guardrails: controller settings (owner), the current plan, the change gates and the
 // action log. Writes to a thermostat only ever happen in the worker; the owner's manual
-// hold / resume here are queued actions that the worker executes and reads back.
+// hold, "Resume schedule" and "Back to automatic" here are queued actions that the worker
+// executes and reads back, and "Hand back to ecobee" is a queued job.
 import { defineStore } from 'pinia'
 import { api } from '@/api/client'
 import type {
@@ -8,6 +9,8 @@ import type {
   ControlActionOut,
   ControllerInfo,
   DecisionBody,
+  HandbackInfo,
+  JobOut,
   ManualHoldBody,
   ModeBody,
   PlanOut,
@@ -25,6 +28,7 @@ export const useControl = defineStore('control', () => {
   const plan = resource<PlanOut>()
   const changes = resource<ChangeOut[]>()
   const actions = resource<ControlActionOut[]>()
+  const handback = resource<HandbackInfo>()
 
   function loadSettings() {
     return loadInto(settings, 'current', () => api.get<SettingsOut>('/control/settings'))
@@ -79,11 +83,34 @@ export const useControl = defineStore('control', () => {
     return a
   }
 
+  /** "Resume schedule": cancel the running hold; the ecobee schedule runs for
+   *  `resume_backoff_hours` before the controller steers again. */
   async function resume(unitKey: string): Promise<ControlActionOut> {
     const body: UnitBody = { unit_key: unitKey }
     const a = await api.post<ControlActionOut>('/control/resume', body)
     upsertAction(a)
     return a
+  }
+
+  /** "Back to automatic": cancel the running hold (and any wait after a Resume); the
+   *  controller steers again at once. */
+  async function automatic(unitKey: string): Promise<ControlActionOut> {
+    const body: UnitBody = { unit_key: unitKey }
+    const a = await api.post<ControlActionOut>('/control/automatic', body)
+    upsertAction(a)
+    return a
+  }
+
+  /** What "Hand back to ecobee" restores, the latest hand-back job and its steps. */
+  function loadHandback() {
+    return loadInto(handback, 'current', () => api.get<HandbackInfo>('/control/handback'))
+  }
+
+  /** Queue the hand-back job (409 while one is queued or running). */
+  async function startHandback(): Promise<JobOut> {
+    const job = await api.post<JobOut>('/control/handback')
+    if (handback.data) handback.data = { ...handback.data, last_job: job }
+    return job
   }
 
   function upsertChange(c: ChangeOut) {
@@ -111,6 +138,7 @@ export const useControl = defineStore('control', () => {
     plan,
     changes,
     actions,
+    handback,
     loadSettings,
     ensureSettings,
     loadPlan,
@@ -120,6 +148,9 @@ export const useControl = defineStore('control', () => {
     setMode,
     hold,
     resume,
+    automatic,
+    loadHandback,
+    startHandback,
     decideChange,
     proposeChange,
   }

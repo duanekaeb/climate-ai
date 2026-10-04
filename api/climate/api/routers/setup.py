@@ -1,5 +1,6 @@
 """Setup / onboarding (owner only): data source, location, ecobee account sign-in with MFA,
-thermostat -> unit and sensor mapping, and the HomeKit pairing handshake.
+thermostat -> unit and sensor mapping (with each thermostat's utility enrollment), and the
+HomeKit pairing handshake.
 
 HomeKit pairing is DB-mediated: the web UI moves ``homekit_devices.pairing_state``
 (requested -> [service] awaiting_code -> code_submitted -> [service] paired) and the
@@ -47,10 +48,11 @@ from climate.api.schemas import (
 )
 from climate.config import get_settings
 from climate.sources import ecobee as ecobee_src
+from climate.sources.base import UtilityInfo
 from climate.store import secrets
 from climate.store.app_settings import LocationSettings, SourceSettings, get_raw, get_setting, put_setting
 from climate.store.db import session_scope
-from climate.store.orm import EcobeeThermostat, HomekitDevice, Room, Sensor, Unit
+from climate.store.orm import EcobeeThermostat, HomekitDevice, Room, Sensor, Unit, UtilityEvent
 from climate.timeutil import utcnow
 
 log = logging.getLogger(__name__)
@@ -92,6 +94,35 @@ def _mfa_pending() -> tuple[bool, str | None]:
         return False, None
 
 
+def thermostat_out(t: EcobeeThermostat, units_with_events: set[str]) -> EcobeeThermostatOut:
+    """A discovered thermostat with its utility enrollment: the utility ecobee lists for it
+    (``settings['utility']``, stored by the ecobee adapter) and its demand-response acceptance
+    (``settings['drAccept']``). ``enrolled`` is True when a utility is listed or a utility
+    event was ever seen on its unit, else None (unknown: ecobee may list no utility for an
+    enrolled thermostat until its first event)."""
+    settings = t.settings if isinstance(t.settings, dict) else {}
+    utility: UtilityInfo | None = None
+    raw = settings.get("utility")
+    if isinstance(raw, dict) and raw.get("name"):
+        try:
+            utility = UtilityInfo.model_validate(raw)
+        except ValidationError:
+            log.warning("ecobee thermostat %s has a utility that does not parse", t.identifier)
+    accept = settings.get("drAccept")
+    enrolled = True if utility is not None or (t.unit_key is not None and t.unit_key in units_with_events) else None
+    return EcobeeThermostatOut(
+        identifier=t.identifier,
+        name=t.name,
+        model_number=t.model_number,
+        unit_key=t.unit_key,
+        sensors=[s for s in (t.sensors or []) if isinstance(s, dict)],
+        last_seen_at=t.last_seen_at,
+        utility=utility,
+        dr_accept=accept if isinstance(accept, str) and accept else None,
+        enrolled=enrolled,
+    )
+
+
 def _ecobee_setup(session: Session) -> EcobeeSetup:
     pending, mfa_type = _mfa_pending()
     status_raw = get_raw(session, "ecobee_status")
@@ -99,15 +130,9 @@ def _ecobee_setup(session: Session) -> EcobeeSetup:
     if isinstance(status_raw, dict):
         err = status_raw.get("last_error") or status_raw.get("error")
         last_error = str(err) if err else None
+    seen_events = set(session.execute(select(UtilityEvent.unit_key).distinct()).scalars())
     thermostats = [
-        EcobeeThermostatOut(
-            identifier=t.identifier,
-            name=t.name,
-            model_number=t.model_number,
-            unit_key=t.unit_key,
-            sensors=[s for s in (t.sensors or []) if isinstance(s, dict)],
-            last_seen_at=t.last_seen_at,
-        )
+        thermostat_out(t, seen_events)
         for t in session.execute(select(EcobeeThermostat).order_by(EcobeeThermostat.name)).scalars()
     ]
     return EcobeeSetup(

@@ -5,7 +5,9 @@ only for login; token refresh is a direct refresh-token grant against auth.ecobe
 data call is made here with the bearer token: /1/thermostatSummary (every >= 3 min),
 /1/thermostat (on revision change), /1/runtimeReport (<= 31 days per call, one at a time), and
 setHold/resumeProgram/settings/program writes, each read back (the library swallows HTTP
-errors, so it is never used for data or writes). Rules:
+errors, so it is never used for data or writes). ``resumeProgram`` cancels a plain hold
+(``resume_program``) or, with a utility event on top, opts out of it (``opt_out_event``); each
+refuses the other's case. Rules:
 - The web client id comes from settings (``CLIMATE_ECOBEE_WEB_CLIENT_ID``) and is patched into
   pyecobee before use (its functions read the module global ``pyecobee.ECOBEE_WEB_CLIENT_ID`` at
   call time); the account route is unofficial and has changed before.
@@ -77,8 +79,10 @@ HTTP_TIMEOUT_S = 30.0
 DETAIL_CACHE_S = 300.0  # a write's "before" may come from a detail fetched this recently
 HOLD_END_SLACK = timedelta(minutes=15)  # a verified hold ends no later than now + hours + this
 RENEWAL_SLACK = timedelta(minutes=10)  # ...and no earlier than (sent, thermostat clock) + hours - this
+OPT_OUT_END_GUARD = timedelta(minutes=2)  # no opt-out this close to an event's end (see opt_out_event)
 NOT_OURS_ERROR = "the running hold was not set by the controller; not cancelled"
 WANTED_SETTINGS: dict[str, bool] = {"autoAway": False, "followMeComfort": False}
+SETTABLE_SETTINGS = tuple(WANTED_SETTINGS)  # the only settings apply_settings writes
 ENSURE_SETTINGS_REASON = "daily check: Smart Home/Away and Follow Me stay off (the controller owns occupancy)"
 
 SUMMARY_SELECTION: dict[str, Any] = {
@@ -96,6 +100,7 @@ DETAIL_INCLUDES: dict[str, bool] = {
     "includeEquipmentStatus": True,
     "includeWeather": True,
     "includeLocation": True,  # only location.timeZone is kept (runtimeReport rows are local time)
+    "includeUtility": True,  # the utility the thermostat is enrolled with (Setup shows it)
 }
 READBACK_INCLUDES: dict[str, bool] = {
     "includeRuntime": True,
@@ -397,6 +402,7 @@ def _snapshot_from(
     revision = P.revision_token(t.get("thermostatRev"), runtime.get("runtimeRev"))
     model = t.get("modelNumber") or None
     name = str(t.get("name") or t.get("identifier"))
+    utility = P.parse_utility(t.get("utility"))
     snap = UnitSnapshot(
         unit_key=unit_key,
         ts=ts,
@@ -418,10 +424,15 @@ def _snapshot_from(
         sensor_sets=P.parse_sensor_sets(program, sp.id_to_key),
         settings=snap_settings,
         connected=P.parse_bool(runtime.get("connected")) is not False,
+        events=P.parse_events(t.get("events"), offset, now=ts, tz=_zone(tz_name)),
+        utility=utility,
     )
+    # ecobee_thermostats.settings also keeps the utility (or null) for Setup's enrollment view;
+    # drAccept is already among the curated settings.
+    stored = {**snap_settings, "utility": utility.model_dump() if utility is not None else None}
     upd = _DetailUpdate(
         identifier=str(t.get("identifier")), unit_key=unit_key, name=name, model_number=model,
-        sensors_meta=sp.meta, settings=dict(snap_settings), revision=revision, new_mappings=sp.new_mappings,
+        sensors_meta=sp.meta, settings=stored, revision=revision, new_mappings=sp.new_mappings,
     )
     return snap, upd
 
@@ -437,7 +448,7 @@ def _check_hold(hold: HoldInfo | None, heat: float, cool: float, now: datetime, 
     setpoints and little time left (a renewal that never reached ecobee) is not this write."""
     if hold is None:
         return "no running hold after setHold"
-    if hold.hold_type in P.EVENT_HOLD_TYPES:
+    if P.is_event_hold(hold):
         return f"a running {hold.hold_type} event overrides the hold"
     if hold.kind != "temperature" or hold.heat_f is None or hold.cool_f is None:
         return "the running hold is not a temperature hold"
@@ -450,6 +461,21 @@ def _check_hold(hold: HoldInfo | None, heat: float, cool: float, now: datetime, 
         return (f"the running hold ends in {left} min, not {hours} h after this write: it is an older hold "
                 "with the same setpoints, so this write did not land")
     return None
+
+
+def _dr_running(t: dict[str, Any]) -> bool:
+    """Any demandResponse event running on this thermostat (the opt-out read-back)."""
+    return any(isinstance(e, dict) and e.get("type") == "demandResponse" and P.parse_bool(e.get("running"))
+               for e in t.get("events") or [])
+
+
+def _settings_of(t: dict[str, Any]) -> dict[str, object]:
+    """Smart Away and Follow Me as the thermostat reports them (WriteResult before / readback)."""
+    return {k: (t.get("settings") or {}).get(k) for k in SETTABLE_SETTINGS}
+
+
+def _settings_match(values: dict[str, object], wanted: dict[str, bool]) -> bool:
+    return all(P.parse_bool(values.get(k)) is v for k, v in wanted.items())
 
 
 def _unit_order(unit_key: str) -> tuple[int, str]:
@@ -834,8 +860,9 @@ class EcobeeCloud:
 
         Decided on a fresh GET. Without ``force`` only the controller's own hold (it matches the
         ``ecobee_holds`` record: ``set_by_us``) is cancelled; a hand-set hold is refused. ``force``
-        (an owner's explicit resume) cancels any plain hold. A running event override (vacation,
-        demand response, Smart Home/Away, quick save) is never cancelled from here."""
+        (an owner's explicit resume) cancels any plain hold. A running event (vacation, demand
+        response, Smart Home/Away, quick save, or a type this app does not know) is never
+        cancelled from here: opting out of a utility event is ``opt_out_event``'s job."""
         request: dict[str, object] = {"unit_key": unit_key, "reason": reason, "force": force}
         before: dict[str, object] = {}
         try:
@@ -852,7 +879,7 @@ class EcobeeCloud:
                 await _db(_record_hold, unit_key, None)
                 return WriteResult(ok=True, channel="ecobee", before=before, request={**request, "noop": True},
                                    readback=before)
-            if current.hold_type in P.EVENT_HOLD_TYPES:
+            if P.is_event_hold(current):
                 return WriteResult(ok=False, channel="ecobee", before=before, request=request,
                                    error=f"a running {current.hold_type} event is in effect; not resuming")
             if not force and not current.set_by_us:
@@ -872,6 +899,130 @@ class EcobeeCloud:
         except (EcobeeApiError, EcobeeAuthError) as exc:
             return WriteResult(ok=False, channel="ecobee", before=before, request=request, error=str(exc))
 
+    async def opt_out_event(self, unit_key: str, reason: str) -> WriteResult:
+        """Opt out of the RUNNING utility (demand-response) event: ``resumeProgram``
+        (resumeAll=false) with that event on top, ecobee's documented cancel for an event that
+        is not mandatory, which ecobee records and reports to the utility.
+
+        Decided on a fresh GET. Refused before anything is sent (``request['refused']``) when
+        the top running event is not demandResponse (a plain hold or another event on top is
+        never touched), when the event is mandatory (``isOptional`` false;
+        ``request['mandatory']`` True), or when it ends within ``OPT_OUT_END_GUARD`` (the
+        resumeProgram could land after it ended and cancel whatever runs underneath). Then reads
+        back, up to twice ``readback_delay_s`` apart, that no demandResponse event runs: ok only
+        then. A POST that fails in transit may still have landed, so the read-back decides, as
+        for holds. Whatever runs underneath (a plain hold, the schedule) is left as ecobee
+        resumes it."""
+        request: dict[str, object] = {"unit_key": unit_key, "reason": reason}
+        before: dict[str, object] = {}
+        try:
+            inv = await _db(_load_inventory)
+            ident = inv.ident_by_unit.get(unit_key)
+            if not ident:
+                return WriteResult(ok=False, channel="ecobee", request=request,
+                                   error=f"unit {unit_key!r} is not mapped to an ecobee thermostat")
+            request["identifier"] = ident
+            ours = inv.our_holds.get(unit_key)
+            t_before = await self._get_one(ident, READBACK_INCLUDES)
+            before = {**_write_state(t_before, ours), "demand_response_running": _dr_running(t_before)}
+            current = _hold_of(t_before, ours)
+            if current is None or current.hold_type != "demandResponse":
+                on_top = ("nothing is running" if current is None
+                          else f"a {current.hold_type} event is on top" if P.is_event_hold(current)
+                          else "a hold is on top")
+                return WriteResult(ok=False, channel="ecobee", before=before,
+                                   request={**request, "refused": True, "mandatory": False},
+                                   error=f"no utility event to opt out of ({on_top}); nothing sent")
+            label = f" {current.event_name!r}" if current.event_name else ""
+            request.update(event_name=current.event_name, link_ref=current.link_ref)
+            if current.is_optional is False:
+                return WriteResult(ok=False, channel="ecobee", before=before,
+                                   request={**request, "refused": True, "mandatory": True},
+                                   error=f"the utility event{label} is mandatory: ecobee does not allow "
+                                         f"opting out of it; nothing sent")
+            t_now = P.parse_utc(t_before.get("utcTime")) or utcnow()
+            if current.end is not None and current.end - t_now <= OPT_OUT_END_GUARD:
+                guard_min = int(OPT_OUT_END_GUARD.total_seconds() // 60)
+                return WriteResult(ok=False, channel="ecobee", before=before,
+                                   request={**request, "refused": True, "mandatory": False},
+                                   error=f"the utility event{label} ends within {guard_min} minutes; nothing "
+                                         f"sent (a late resumeProgram could cancel what runs underneath)")
+            function = {"type": "resumeProgram", "params": {"resumeAll": False}}
+            request["function"] = function
+            post_error: str | None = None
+            try:
+                await self._post(ident, {"functions": [function]})
+            except EcobeeApiError as exc:
+                if not exc.transport:
+                    return WriteResult(ok=False, channel="ecobee", before=before, request=request,
+                                       error=str(exc))
+                post_error = str(exc)  # may have landed: the read-back decides
+            readback: dict[str, object] = {}
+            why: str | None = "no read-back"
+            for attempt in range(2):
+                if attempt:
+                    await asyncio.sleep(self._readback_delay_s)
+                t_after = await self._get_one(ident, READBACK_INCLUDES)
+                running = _dr_running(t_after)
+                readback = {**_write_state(t_after, ours), "demand_response_running": running}
+                why = "the utility event is still running after resumeProgram" if running else None
+                if why is None:
+                    break
+            if why is not None and post_error:
+                why = f"{post_error}; {why}"
+            return WriteResult(ok=why is None, channel="ecobee", before=before, request=request,
+                               readback=readback, error=why)
+        except (EcobeeApiError, EcobeeAuthError) as exc:
+            return WriteResult(ok=False, channel="ecobee", before=before, request=request, error=str(exc))
+
+    async def apply_settings(self, unit_key: str, settings: dict[str, bool], reason: str) -> WriteResult:
+        """Write Smart Away (``autoAway``) and/or Follow Me (``followMeComfort``) on ONE
+        thermostat and read them back (used by "Hand back to ecobee"). Same updateThermostat
+        shape as ``ensure_settings``; any other key or a non-boolean value is refused before
+        anything is sent. ``request`` {unit_key, identifier, settings, reason} (+ ``noop``
+        when the thermostat already reads the asked values), ``before`` / ``readback`` both
+        settings as read. A POST that fails in transit may still have landed: the read-back
+        decides."""
+        wanted = dict(settings)
+        request: dict[str, object] = {"unit_key": unit_key, "settings": wanted, "reason": reason}
+        bad = sorted(k for k in wanted if k not in SETTABLE_SETTINGS)
+        if not wanted or bad or any(not isinstance(v, bool) for v in wanted.values()):
+            what = f"unsupported setting(s) {', '.join(bad)}" if bad else "no settings" if not wanted else \
+                "values must be true or false"
+            return WriteResult(ok=False, channel="ecobee", request=request,
+                               error=f"{what}; only {' and '.join(SETTABLE_SETTINGS)} can be written; "
+                                     f"nothing sent")
+        before: dict[str, object] = {}
+        try:
+            inv = await _db(_load_inventory)
+            ident = inv.ident_by_unit.get(unit_key)
+            if not ident:
+                return WriteResult(ok=False, channel="ecobee", request=request,
+                                   error=f"unit {unit_key!r} is not mapped to an ecobee thermostat")
+            request["identifier"] = ident
+            before = _settings_of(await self._get_one(ident, {"includeSettings": True}))
+            if _settings_match(before, wanted):
+                return WriteResult(ok=True, channel="ecobee", before=before,
+                                   request={**request, "noop": True}, readback=dict(before))
+            post_error: str | None = None
+            try:
+                await self._post(ident, {"thermostat": {"settings": wanted}})
+            except EcobeeApiError as exc:
+                if not exc.transport:
+                    return WriteResult(ok=False, channel="ecobee", before=before, request=request,
+                                       error=str(exc))
+                post_error = str(exc)  # may have landed: the read-back decides
+            readback = _settings_of(await self._get_one(ident, {"includeSettings": True}))
+            ok = _settings_match(readback, wanted)
+            error = None if ok else "settings did not read back as " + ", ".join(
+                f"{k}={str(v).lower()}" for k, v in wanted.items())
+            if error and post_error:
+                error = f"{post_error}; {error}"
+            return WriteResult(ok=ok, channel="ecobee", before=before, request=request, readback=readback,
+                               error=error)
+        except (EcobeeApiError, EcobeeAuthError) as exc:
+            return WriteResult(ok=False, channel="ecobee", before=before, request=request, error=str(exc))
+
     async def ensure_settings(self, reason: str = ENSURE_SETTINGS_REASON) -> list[WriteResult]:
         """autoAway=false and followMeComfort=false on every mapped unit (checked daily).
 
@@ -887,11 +1038,8 @@ class EcobeeCloud:
         def request_for(unit: str, ident: str) -> dict[str, object]:
             return {"unit_key": unit, "identifier": ident, "settings": dict(WANTED_SETTINGS), "reason": reason}
 
-        def settings_of(t: dict[str, Any]) -> dict[str, object]:
-            return {k: (t.get("settings") or {}).get(k) for k in WANTED_SETTINGS}
-
         def all_off(values: dict[str, object]) -> bool:
-            return all(P.parse_bool(v) is False for v in values.values())
+            return _settings_match(values, WANTED_SETTINGS)
 
         results: dict[str, WriteResult] = {}
         try:
@@ -908,7 +1056,7 @@ class EcobeeCloud:
                 results[unit] = WriteResult(ok=False, channel="ecobee", request=request,
                                             error="thermostat not returned by ecobee; not written")
                 continue
-            current = settings_of(t)
+            current = _settings_of(t)
             if all_off(current):
                 results[unit] = WriteResult(ok=True, channel="ecobee", before=current,
                                             request={**request, "noop": True}, readback=dict(current))
@@ -935,7 +1083,7 @@ class EcobeeCloud:
                     if after:
                         res.error = "sent, but the thermostat was not returned in the read-back"
                     continue
-                readback = settings_of(t)
+                readback = _settings_of(t)
                 res.readback = readback
                 res.ok = all_off(readback)
                 res.error = None if res.ok else "settings did not read back as autoAway=false, followMeComfort=false"

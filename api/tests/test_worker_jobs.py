@@ -307,3 +307,112 @@ async def test_daily_step_runs_nightly_once_per_local_day(db, monkeypatch):
     clock["now"] = datetime(2026, 10, 5, 7, 31, tzinfo=UTC)
     await w2.daily_step()
     assert len(ran) == 2
+
+
+# --- hand back and the utility-event step ---------------------------------------------------
+
+STEPS = [{"unit_key": None, "what": "Controller off", "ok": True, "detail": "Was act."},
+         {"unit_key": "up", "what": "Resumed our hold", "ok": False, "detail": "Skipped: no thermostat source."}]
+
+
+async def test_handback_job_runs_controller_hand_back(db, monkeypatch):
+    from climate.control import controller
+
+    seen: dict = {}
+
+    async def hand_back(source, now):
+        seen.update(source=source, now=now)
+        return list(STEPS)
+
+    monkeypatch.setattr(controller, "hand_back", hand_back, raising=False)
+    w = wmod.Worker()
+    w.source, w.source_kind = wmod.LockedSource(FakeSim()), "simulator"
+    jid = add_job(db, "handback")
+    now = datetime(2026, 10, 4, 12, tzinfo=UTC)
+    assert await w.process_jobs(now) == [jid]
+    j = job(db, jid)
+    assert j.status == "done" and j.result == {"steps": STEPS} and j.error is None
+    assert seen == {"source": w.source, "now": now}
+
+
+async def test_handback_job_runs_without_a_source(db, monkeypatch):
+    import climate.sources
+    from climate.control import controller
+
+    seen: dict = {}
+
+    async def hand_back(source, now):
+        seen["source"] = source
+        return [STEPS[0]]
+
+    def no_source(kind):
+        raise RuntimeError("not signed in")
+
+    monkeypatch.setattr(climate.sources, "get_source", no_source)
+    monkeypatch.setattr(controller, "hand_back", hand_back, raising=False)
+    jid = add_job(db, "handback")
+    await wmod.Worker().process_jobs()
+    j = job(db, jid)
+    assert j.status == "done" and j.result == {"steps": [STEPS[0]]} and seen == {"source": None}
+
+
+async def test_handback_job_that_raises_fails_with_its_error(db, monkeypatch):
+    from climate.control import controller
+
+    async def hand_back(source, now):
+        raise RuntimeError("could not switch the controller off")
+
+    monkeypatch.setattr(controller, "hand_back", hand_back, raising=False)
+    w = wmod.Worker()
+    w.source, w.source_kind = wmod.LockedSource(FakeSim()), "simulator"
+    jid = add_job(db, "handback")
+    await w.process_jobs()
+    j = job(db, jid)
+    assert j.status == "failed" and "could not switch the controller off" in j.error and j.result is None
+
+
+async def test_tick_step_sweeps_and_runs_skips_even_when_the_tick_fails(db, monkeypatch):
+    from climate.control import controller
+    from climate.utility import events, skips
+
+    calls: list[str] = []
+
+    async def tick(source, now):
+        calls.append("tick")
+        raise RuntimeError("tick broke")
+
+    def sweep(session, now):
+        calls.append("sweep")
+        raise RuntimeError("sweep broke")
+
+    async def run(source, now):
+        calls.append("skips")
+        return [7]
+
+    monkeypatch.setattr(controller, "tick", tick)
+    monkeypatch.setattr(events, "sweep", sweep)
+    monkeypatch.setattr(skips, "run", run)
+    w = wmod.Worker()
+    with pytest.raises(RuntimeError, match="tick broke"):
+        await w.tick_step()
+    assert calls == ["tick", "sweep", "skips"] and w.last_tick_at is None
+
+
+async def test_tick_step_runs_the_real_sweep_after_a_good_tick(db, monkeypatch):
+    from climate.control import controller
+    from climate.store.orm import UtilityEvent
+
+    async def tick(source, now):
+        return []
+
+    monkeypatch.setattr(controller, "tick", tick)
+    past = datetime.now(UTC) - timedelta(hours=3)
+    db.add(UtilityEvent(unit_key="up", event_key="link:x", status="running", start_at=past - timedelta(hours=2),
+                        end_at=past, first_seen_at=past - timedelta(hours=3), last_seen_at=past, started_at=past,
+                        detail={}))
+    db.commit()
+    w = wmod.Worker()
+    await w.tick_step()
+    db.expire_all()
+    assert w.last_tick_at is not None
+    assert db.execute(select(UtilityEvent.status)).scalar_one() == "ended"

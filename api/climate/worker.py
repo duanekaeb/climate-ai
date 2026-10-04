@@ -1,12 +1,14 @@
 """The worker process: ``python -m climate.worker``.
 
 Owns the ThermostatSource (simulator or ecobee) and runs, with independent cadences:
-poll (summary/detail), runtime pulls, weather sync (hourly), controller tick (every 3 min),
-queued owner actions (every 10 s), ecobee settings (Smart Away / Follow Me kept off: at start,
-then once a local day), change gates (every 15 min), nightly jobs (baselines,
-room offsets, RC fit, experiment days, daily report, agent schedule), the jobs table (refit /
-backtest / backfill requests), anomaly triggers for Claude (drift, sensor offline, upstairs
-maxed out), and a heartbeat. Switching app_settings['source'] swaps the source live.
+poll (summary/detail; it also records the utility events the snapshots list), runtime pulls,
+weather sync (hourly), controller tick (every 3 min) followed by the utility-event clock sweep,
+skip rules and opt-outs, queued owner actions (every 10 s), ecobee settings (Smart Away / Follow
+Me kept off: at start, then once a local day), change gates (every 15 min), nightly jobs
+(baselines, room offsets, RC fit, experiment days, daily report, agent schedule), the jobs table
+(refit / report / backfill / handback requests), anomaly triggers for Claude (drift, sensor
+offline, upstairs maxed out), and a heartbeat. Switching app_settings['source'] swaps the source
+live.
 
 Every loop is wrapped: a failure is logged (redacted) and retried with backoff; it never
 kills the process or the other loops. Other modules are imported when a loop runs, so an
@@ -375,6 +377,11 @@ def _advance_changes(now: datetime) -> Any:
         return importlib.import_module("climate.control.changes").advance(s, now)
 
 
+def _sweep_utility_events(now: datetime) -> list[int]:
+    with session_scope() as s:
+        return importlib.import_module("climate.utility.events").sweep(s, now)
+
+
 def _prepare_db() -> None:
     if os.environ.get("CLIMATE_MIGRATE_ON_START", "1") == "1":
         from climate.house import seed
@@ -644,11 +651,38 @@ class Worker:
         await weather.sync_weather(utcnow())
 
     async def tick_step(self) -> None:
+        """The controller tick, then ``utility_step``, which runs even when the tick failed (the
+        tick's error is raised after it, so the loop still logs it and backs off). Not when the
+        worker is stopping: a cancelled tick ends the step at once."""
         from climate.control import controller
 
         now = utcnow()
-        await controller.tick(self.source, now)
-        self.last_tick_at = now
+        error: Exception | None = None
+        try:
+            await controller.tick(self.source, now)
+            self.last_tick_at = now
+        except Exception as exc:  # noqa: BLE001 - re-raised below, after the utility step
+            error = exc
+        await self.utility_step(now)
+        if error is not None:
+            raise error
+
+    async def utility_step(self, now: datetime) -> None:
+        """After every controller tick: the utility-event clock sweep (``utility.events.sweep``),
+        then skip rules and requested opt-outs (``utility.skips.run``). Each part logs its own
+        failure and never stops the other or the tick loop."""
+        try:
+            await asyncio.to_thread(_sweep_utility_events, now)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("utility event sweep failed: %s", safe_error(exc))
+        try:
+            from climate.utility import skips
+
+            ids = await skips.run(self.source, now)
+            if ids:
+                log.info("utility event opt-out(s): control action(s) %s", ids)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("utility event skips failed: %s", safe_error(exc))
 
     async def execute_step(self) -> None:
         from climate.control import controller
@@ -751,7 +785,26 @@ class Worker:
             if not out.get("ok"):
                 raise RuntimeError(str(out.get("error")))
             return out["result"]
+        if kind == "handback":
+            return await self.hand_back(now)
         raise ValueError(f"unknown job kind {kind!r}")
+
+    async def hand_back(self, now: datetime) -> dict[str, Any]:
+        """The 'handback' job (POST /api/control/handback): ``controller.hand_back`` switches the
+        controller off and restores what it changed on the thermostats. It runs without a
+        source too (no thermostat to reach: those steps come back as skipped, not failed).
+        Result ``{"steps": [HandbackStep...]}``; an exception fails the job with its error."""
+        from climate.control import controller
+
+        src = self.source
+        if src is None:
+            try:
+                src = await self.ensure_source()
+            except Exception as exc:  # noqa: BLE001 - hand back without one
+                log.warning("hand back: no data source (%s)", safe_error(exc))
+                src = None
+        steps = await controller.hand_back(src, now)
+        return {"steps": list(steps)}
 
 
 def main() -> None:

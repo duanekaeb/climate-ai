@@ -1,13 +1,29 @@
 <script setup lang="ts">
-// One thermostat on the Live screen: zone temperature, setpoints, what it's doing, the hold,
-// the policy's target and reason, and today's runtime / duty / maxed-out minutes.
-import { computed } from 'vue'
-import type { ControllerInfo, RoomStatus, UnitLive } from '@/api/types'
+// One thermostat on the Live screen: zone temperature, setpoints, what it's doing, whose hold
+// is running (a hold a person set always wins), the policy's target and reason, and today's
+// runtime / duty / maxed-out minutes. On a person's hold the owner can choose "Back to
+// automatic" or "Resume schedule"; both are queued and the worker sends them.
+import { computed, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
+import type { ControlActionOut, ControllerInfo, RoomStatus, UnitLive } from '@/api/types'
 import Icon from '@/components/Icon.vue'
+import { dateTime, errorText } from '@/components/analysis/stats'
 import { UNIT_COLORS, localTime, minutes, pct, temp } from '@/lib/format'
-import { CALL_INFO, RULE_LABELS, equipment } from './labels'
+import { useControl } from '@/stores/control'
+import { when } from './events'
+import { CALL_INFO, HOLD_BADGES, equipment, ruleLabel } from './labels'
 
-const props = defineProps<{ unit: UnitLive; rooms: RoomStatus[]; mode: ControllerInfo['mode']; tz: string }>()
+const props = defineProps<{
+  unit: UnitLive
+  rooms: RoomStatus[]
+  mode: ControllerInfo['mode']
+  tz: string
+  now: string
+  isOwner: boolean
+  /** control.resume_backoff_hours (null until the settings load) */
+  resumeBackoffHours: number | null
+}>()
+const control = useControl()
 
 const color = computed(() => UNIT_COLORS[props.unit.unit_key] ?? 'var(--color-accent)')
 const call = computed(() => CALL_INFO[props.unit.call])
@@ -29,14 +45,94 @@ const meta = computed(() => {
 })
 const stale = computed(() => props.unit.age_s !== null && props.unit.age_s > 15 * 60)
 
-const hold = computed(() => {
-  const h = props.unit.hold
+// Whose hold is running, as the API labels it ("On your hold since 2:10 PM (until you change
+// it)", "Utility event until 6:00 PM (cooling +2°F)", "Our hold until 3:40 PM", ...).
+const holdLine = computed(() => {
+  const u = props.unit
+  if (u.hold_label) {
+    // Smart Away / Smart Home: the label is the badge.
+    if (u.hold_owner === 'ecobee_auto') return { badge: { ...HOLD_BADGES.ecobee_auto, label: u.hold_label }, label: null }
+    return { badge: u.hold_owner ? HOLD_BADGES[u.hold_owner] : null, label: u.hold_label }
+  }
+  const h = u.hold
   if (!h) return null
+  // An older API without hold labels: say what the hold is, not whose.
   const what =
     h.kind === 'temperature' ? `Hold ${temp(h.heat_f)}–${temp(h.cool_f)}` : `Hold: ${h.climate_ref ?? 'comfort setting'}`
-  const until = h.end ? `until ${localTime(h.end, props.tz)}` : 'until changed'
-  return { what, until, byUs: h.set_by_us }
+  return { badge: null, label: `${what} ${h.end ? `until ${localTime(h.end, props.tz)}` : 'until changed'}` }
 })
+
+const personHold = computed(
+  () => !!props.unit.person_hold || props.unit.hold_owner === 'person' || props.unit.hold_owner === 'app',
+)
+// After someone pressed Resume, the ecobee schedule runs until then (a person's hold wins over it).
+const backoffUntil = computed(() => {
+  const t = props.unit.resume_backoff_until
+  if (!t || personHold.value || Date.parse(t) <= Date.parse(props.now)) return null
+  return when(t, props.tz, props.now)
+})
+
+/** Why the controller leaves this unit alone right now, if it does. */
+const standAside = computed(() => {
+  const owner = props.unit.hold_owner
+  if (personHold.value) return 'The app writes nothing to this unit while the hold runs.'
+  if (owner === 'utility') return 'The app stands aside during the utility event.'
+  if (owner === 'vacation') return 'The app stands aside during the vacation.'
+  if (owner === 'unknown_event') return 'The app is hands-off until this ecobee event ends.'
+  if (backoffUntil.value) return `The app waits until ${backoffUntil.value}, then ${props.mode === 'act' ? 'steers' : 'plans'} again.`
+  return null
+})
+
+// Vacations ahead (utility events have their own card).
+const nextVacation = computed(() => {
+  const v = (props.unit.upcoming_events ?? []).find((e) => e.event_type === 'vacation' && !e.running && e.start)
+  if (!v?.start) return null
+  return `Vacation ahead: ${dateTime(v.start, props.tz)}${v.end ? ` – ${dateTime(v.end, props.tz)}` : ''}`
+})
+
+// "Back to automatic" / "Resume schedule" (owner; refused while the controller is off).
+const canAct = computed(() => props.isOwner && props.mode !== 'off')
+const busy = ref<'automatic' | 'resume' | null>(null)
+const actionError = ref('')
+const result = ref<{ label: string; action: ControlActionOut } | null>(null)
+
+function hoursText(h: number): string {
+  return `${Number.isInteger(h) ? h : h.toFixed(1)} h`
+}
+
+const choiceText = computed(() => {
+  const steer =
+    props.mode === 'act' ? 'the app steers again now' : 'your hold ends now and the app plans again (Suggest mode writes nothing)'
+  const h = props.resumeBackoffHours
+  const resume =
+    h === null
+      ? 'your ecobee schedule runs for a while first'
+      : h > 0
+        ? `your ecobee schedule runs for ${hoursText(h)} first`
+        : 'the app takes over again at once too (no wait after Resume is set)'
+  return `Back to automatic: ${steer}. Resume schedule: ${resume}.`
+})
+
+// Once the hold or the wait changes, the card itself shows the outcome: drop the queued note.
+watch(
+  () => `${props.unit.hold_owner}|${props.unit.person_hold?.detection_id}|${props.unit.resume_backoff_until}`,
+  () => (result.value = null),
+)
+
+async function act(kind: 'automatic' | 'resume') {
+  if (busy.value) return
+  busy.value = kind
+  actionError.value = ''
+  result.value = null
+  try {
+    const a = kind === 'automatic' ? await control.automatic(props.unit.unit_key) : await control.resume(props.unit.unit_key)
+    result.value = { label: kind === 'automatic' ? 'Back to automatic' : 'Resume schedule', action: a }
+  } catch (e) {
+    actionError.value = errorText(e)
+  } finally {
+    busy.value = null
+  }
+}
 
 const targetLabel = computed(() =>
   props.mode === 'act' ? 'Target' : props.mode === 'suggest' ? 'Suggested target' : 'Policy target (controller off)',
@@ -89,30 +185,62 @@ const maxedAlarm = computed(() => props.unit.unit_key === 'up' && props.unit.max
       <p v-else class="text-xs text-muted">No equipment running.</p>
     </div>
 
-    <p class="mt-2 text-sm">
-      <template v-if="hold">
-        <span class="num font-medium">{{ hold.what }}</span> <span class="text-muted">{{ hold.until }} ·</span>
-        <span :class="hold.byUs ? 'text-muted' : 'font-medium text-warn'">{{ hold.byUs ? 'set by Climate AI' : 'set by hand' }}</span>
-      </template>
-      <template v-else>
+    <div class="mt-2 text-sm">
+      <p v-if="holdLine" class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span v-if="holdLine.badge" class="chip" :class="holdLine.badge.cls">{{ holdLine.badge.label }}</span>
+        <span v-if="holdLine.label" class="num font-medium">{{ holdLine.label }}</span>
+      </p>
+      <p v-if="backoffUntil" class="flex flex-wrap items-center gap-x-2 gap-y-1" :class="holdLine && 'mt-1'">
+        <span class="chip bg-surface-2 text-ink">Schedule</span>
+        <span class="font-medium">Following your ecobee schedule until {{ backoffUntil }}</span>
+      </p>
+      <p v-if="!holdLine && !backoffUntil">
         <span class="text-muted">Following its schedule</span><template v-if="unit.climate_ref"> · {{ unit.climate_ref }}</template>
-      </template>
-    </p>
+      </p>
+      <p v-if="nextVacation" class="mt-1 text-xs text-muted">{{ nextVacation }}</p>
+
+      <div v-if="canAct && (personHold || backoffUntil)" class="mt-2">
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="btn btn-primary !py-1.5" :disabled="busy !== null" @click="act('automatic')">
+            {{ busy === 'automatic' ? 'Queuing…' : 'Back to automatic' }}
+          </button>
+          <button v-if="personHold" type="button" class="btn !py-1.5" :disabled="busy !== null" @click="act('resume')">
+            {{ busy === 'resume' ? 'Queuing…' : 'Resume schedule' }}
+          </button>
+        </div>
+        <p v-if="personHold" class="mt-1 text-xs text-muted">{{ choiceText }}</p>
+        <p v-else class="mt-1 text-xs text-muted">
+          Back to automatic: the wait ends and the app {{ mode === 'act' ? 'steers' : 'plans' }} again now.
+        </p>
+      </div>
+      <p v-if="actionError" role="alert" class="mt-1 text-xs text-bad">{{ actionError }}</p>
+      <p v-if="result" class="mt-1 text-xs" aria-live="polite">
+        {{ result.label }}: <span class="font-medium">{{ result.action.status }}</span>.
+        <span class="text-muted">
+          The worker sends it within seconds and reads it back; the outcome is in the
+          <RouterLink to="/guardrails?tab=log" class="underline">action log</RouterLink>.
+        </span>
+      </p>
+    </div>
 
     <div class="mt-3 rounded-xl bg-surface-2 p-3">
       <template v-if="unit.target">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-xs font-semibold tracking-wide text-muted uppercase">{{ targetLabel }}</h3>
-          <span class="chip border border-line bg-surface text-muted">{{ RULE_LABELS[unit.target.rule] }}</span>
+          <span class="chip border border-line bg-surface text-muted">{{ ruleLabel(unit.target) }}</span>
         </div>
         <p class="num mt-1 font-semibold">
           Heat {{ temp(unit.target.heat_f) }} · Cool {{ temp(unit.target.cool_f) }}
-          <span v-if="unit.target.desired === 'program'" class="text-xs font-normal text-muted">· schedule already matches</span>
+          <span v-if="unit.target.desired === 'program' && !standAside" class="text-xs font-normal text-muted">· schedule already matches</span>
         </p>
+        <p v-if="standAside" class="mt-1 text-sm font-medium">{{ standAside }}</p>
         <p class="mt-1 text-sm text-muted">{{ unit.target.reason }}</p>
         <p v-if="priorityRoom" class="mt-1 text-xs text-muted">Priority room: {{ priorityRoom }}</p>
       </template>
-      <p v-else class="text-sm text-muted">No policy target right now.</p>
+      <template v-else>
+        <p class="text-sm text-muted">No policy target right now.</p>
+        <p v-if="standAside" class="mt-1 text-sm font-medium">{{ standAside }}</p>
+      </template>
     </div>
 
     <dl class="mt-3 grid grid-cols-3 gap-2 text-center">

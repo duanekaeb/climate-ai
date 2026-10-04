@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Controller mode (off / suggest / act) and how it behaves when it acts. Switching to Act asks
-// for confirmation, because from then on the controller writes holds to the thermostats.
+// for confirmation, because from then on the controller writes holds to the thermostats. A
+// hold someone sets always wins; the wait after Resume and the hold reminder are set here.
 import { computed, ref } from 'vue'
 import type { ControlSettings, ModeBody, SettingsOut } from '@/api/types'
 import Card from '@/components/Card.vue'
@@ -47,11 +48,12 @@ async function choose(m: Mode) {
 }
 
 // Behavior when acting
-type Behavior = Pick<ControlSettings, 'act_units' | 'hold_hours' | 'manual_backoff_hours'>
+type Behavior = Pick<ControlSettings, 'act_units' | 'hold_hours' | 'resume_backoff_hours' | 'manual_hold_reminder_hours'>
 const { draft, dirty, reset } = useDraft<Behavior>(() => ({
   act_units: [...props.settings.control.act_units],
   hold_hours: props.settings.control.hold_hours,
-  manual_backoff_hours: props.settings.control.manual_backoff_hours,
+  resume_backoff_hours: props.settings.control.resume_backoff_hours,
+  manual_hold_reminder_hours: props.settings.control.manual_hold_reminder_hours,
 }))
 const saver = useSaver()
 const units = computed(() => unitKeys(props.settings))
@@ -61,8 +63,10 @@ const problems = computed(() => {
   const out: string[] = []
   const d = draft.value
   if (![1, 2].includes(d.hold_hours)) out.push('Hold length is 1 or 2 hours.')
-  if (!(typeof d.manual_backoff_hours === 'number' && d.manual_backoff_hours >= 0 && d.manual_backoff_hours <= 24))
-    out.push('Back-off is 0 to 24 hours.')
+  if (!(typeof d.resume_backoff_hours === 'number' && d.resume_backoff_hours >= 0 && d.resume_backoff_hours <= 24))
+    out.push('Wait after Resume is 0 to 24 hours.')
+  const r = d.manual_hold_reminder_hours
+  if (!(typeof r === 'number' && r >= 0 && r <= 72)) out.push('The hold reminder is 0 to 72 hours (0 = never).')
   return out
 })
 
@@ -111,7 +115,8 @@ async function save() {
       <p class="mt-1 text-sm">
         In Act mode it writes timed holds ({{ settings.control.hold_hours }} h, renewed while healthy) to
         {{ actUnitsText }}, never outside your hard limits, at most one change per unit every
-        {{ settings.control.limits.min_minutes_between_changes }} minutes. Holds expire on their own if the server stops.
+        {{ settings.control.limits.min_minutes_between_changes }} minutes. Holds expire on their own if the server stops. It
+        leaves a hold someone sets alone and stands aside during utility events.
       </p>
       <div class="mt-2 flex flex-wrap gap-2">
         <button type="button" class="btn btn-primary" @click="choose('act')">Switch to Act</button>
@@ -136,18 +141,31 @@ async function save() {
           <p class="mt-1 text-xs text-muted">Unchecked units stay suggest-only.</p>
         </div>
         <div class="grid grid-cols-2 gap-2">
-          <label class="text-xs text-muted">
+          <label class="flex flex-col justify-end text-xs text-muted">
             Hold length
             <select v-model.number="draft.hold_hours" class="input num mt-1">
               <option :value="1">1 hour</option>
               <option :value="2">2 hours</option>
             </select>
           </label>
-          <label class="text-xs text-muted">
-            Back off after a hand change (h)
-            <input v-model.number="draft.manual_backoff_hours" type="number" min="0" max="24" step="0.5" class="input num mt-1" />
+          <label class="flex flex-col justify-end text-xs text-muted">
+            Wait after Resume (h)
+            <input v-model.number="draft.resume_backoff_hours" type="number" min="0" max="24" step="0.5" class="input num mt-1" />
           </label>
         </div>
+        <p class="text-xs text-muted">
+          After someone presses Resume, your ecobee schedule runs this long before the app steers again. A hold someone
+          sets always wins until it ends.
+        </p>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="flex flex-col justify-end text-xs text-muted">
+            Remind me about a hold after (h)
+            <input v-model.number="draft.manual_hold_reminder_hours" type="number" min="0" max="72" step="0.5" class="input num mt-1" />
+          </label>
+        </div>
+        <p class="text-xs text-muted">
+          0 = never. The reminder only tells you; the hold keeps running until it ends or you choose Back to automatic.
+        </p>
       </div>
       <ul v-if="problems.length" class="mt-2 text-xs text-bad">
         <li v-for="p in problems" :key="p">{{ p }}</li>

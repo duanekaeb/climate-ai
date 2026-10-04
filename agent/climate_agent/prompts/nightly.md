@@ -4,7 +4,8 @@ Goal: verify yesterday, clear the sign-off queue, flag drift, and publish a shor
 report. Aim for about 10-15 tool calls.
 
 1. **State of the house.** `get_house_status`. Note disconnected units, stale sensors, open
-   alerts, holds that are not ours.
+   alerts, people's holds and resume back-offs (the controller stands aside for them), and
+   utility events (announced, running or skipped).
 2. **Yesterday's decisions vs plan.** `list_actions` (about 50): did writes read back
    correctly, were any blocked by guardrails, did anything happen that the rule does not
    explain? Use `explain_action` only for the odd ones. `query_runtime` (days 3) for

@@ -11,8 +11,10 @@ Vendor characteristics on current firmware are 'pr' without 'ev': poll them. Sub
 'ev' characteristics; check ``supports_subscribe``. put_characteristics: an entry is a
 failure only when status != 0. Writes: TIMESTAMP (reuse the unit's suffix) in its own put,
 then SET_HOLD_SCHEDULE in a separate put, then read back. Never write HOME/SLEEP/AWAY targets
-(they are only ever READ, before a climate hold, to check what that hold would hold).
-``snapshot_from_values`` turns a poll into a UnitSnapshot for when the ecobee cloud is down.
+(they are only ever READ: polled, and read again just before a climate hold to check what
+that hold would hold). ``snapshot_from_values`` turns a poll into a UnitSnapshot for when the
+ecobee cloud is down; ``detect_hand_change`` spots a change someone made at the thermostat
+that HomeKit can see (a comfort setting picked by hand, a temperature set by hand).
 
 This module is a pure adapter: no database access. aiohomekit is imported lazily so the rest
 of the stack (which does not install the ``homekit`` extra) can import these helpers.
@@ -80,6 +82,14 @@ CHAR_TYPES: dict[str, str] = {
     "VENDOR_ECOBEE_TIMESTAMP": "1621F556-1367-443C-AF19-82AF018E99DE",
     "VENDOR_ECOBEE_SET_HOLD_SCHEDULE": "1B300BC2-CFFC-47FF-89F9-BD6CCF5F2853",
     "VENDOR_ECOBEE_CLEAR_HOLD": "FA128DE6-9D7D-49A4-B6D8-4E4E234DEE38",
+    # Each comfort setting's own targets, °C. Polled READ ONLY (they tell a temperature set by
+    # hand from the comfort setting in force); FORBIDDEN_WRITE_TYPES keeps them unwritable.
+    "VENDOR_ECOBEE_HOME_TARGET_HEAT": "E4489BBC-5227-4569-93E5-B345E3E5508F",
+    "VENDOR_ECOBEE_HOME_TARGET_COOL": "7D381BAA-20F9-40E5-9BE9-AEB92D4BECEF",
+    "VENDOR_ECOBEE_SLEEP_TARGET_HEAT": "05B97374-6DC0-439B-A0FA-CA33F612D425",
+    "VENDOR_ECOBEE_SLEEP_TARGET_COOL": "A251F6E7-AC46-4190-9C5D-3D06277BDF9F",
+    "VENDOR_ECOBEE_AWAY_TARGET_HEAT": "73AAB542-892A-4439-879A-D2A883724B69",
+    "VENDOR_ECOBEE_AWAY_TARGET_COOL": "5DA985F0-898A-4850-B987-B76C6C78D670",
 }
 KEY_BY_TYPE: dict[str, str] = {v: k for k, v in CHAR_TYPES.items()}
 
@@ -104,11 +114,15 @@ FORBIDDEN_WRITE_TYPES: frozenset[str] = frozenset(
     }
 )
 # The same six, per comfort setting: READ ONLY, read just before a climate hold to check what
-# that hold would hold (a climate hold holds whatever the schedule's setpoints are).
+# that hold would hold (a climate hold holds whatever the schedule's setpoints are), and
+# polled (by their CHAR_TYPES keys) to tell a temperature set by hand from the comfort setting.
 COMFORT_TARGET_TYPES: dict[str, tuple[str, str]] = {
     "home": ("E4489BBC-5227-4569-93E5-B345E3E5508F", "7D381BAA-20F9-40E5-9BE9-AEB92D4BECEF"),
     "sleep": ("05B97374-6DC0-439B-A0FA-CA33F612D425", "A251F6E7-AC46-4190-9C5D-3D06277BDF9F"),
     "away": ("73AAB542-892A-4439-879A-D2A883724B69", "5DA985F0-898A-4850-B987-B76C6C78D670"),
+}
+COMFORT_TARGET_KEYS: dict[str, tuple[str, str]] = {
+    climate: (KEY_BY_TYPE[heat_t], KEY_BY_TYPE[cool_t]) for climate, (heat_t, cool_t) in COMFORT_TARGET_TYPES.items()
 }
 # The only characteristics this adapter ever writes.
 ALLOWED_WRITE_KEYS: frozenset[str] = frozenset(
@@ -514,7 +528,11 @@ def snapshot_from_values(
        a vacation / demand response until its end) -> carried as it was.
     3. CURRENT_MODE 3 -> a temperature hold at the current thresholds, ending at TIMESTAMP when
        that is in the future; not ours (the cloud channel's own holds are caught by rule 2).
-    4. otherwise no hold: HomeKit cannot tell a hand-set climate hold from the schedule."""
+    4. otherwise no hold: HomeKit cannot tell a hand-set climate hold from the schedule.
+
+    HomeKit shows no ecobee events and no utility enrollment: ``events`` is always empty and
+    ``utility`` None (an event the last cloud snapshot reported running is only carried as
+    ``hold``, rule 2). Whether a person changed something is ``detect_hand_change``'s job."""
     tstat = values.get(THERMOSTAT_AID, {})
     prev_settings = dict(previous.settings) if previous is not None else {}
     mode = _int(tstat.get("VENDOR_ECOBEE_CURRENT_MODE"))
@@ -575,7 +593,148 @@ def snapshot_from_values(
         sensor_sets=dict(previous.sensor_sets) if previous is not None else {},
         settings={k: v for k, v in prev_settings.items() if k not in ("program_heat_f", "program_cool_f")},
         connected=True,
+        events=[],  # never carried or invented: HomeKit cannot see ecobee events
+        utility=None,
     )
+
+
+# ---------------------------------------------------------------------------------------
+# hand changes seen over HomeKit (while the ecobee cloud is down)
+# ---------------------------------------------------------------------------------------
+
+HAND_CHANGE_F = 0.5  # active setpoints further than this from the comfort setting's targets
+
+
+@dataclass(frozen=True)
+class KnownHolds:
+    """What the app already knows may be on the thermostat, so that HomeKit's view of it is
+    not mistaken for a person's change. Built by the homekit service from ``control_actions``,
+    the last live snapshot and ``utility_events``."""
+
+    climate: str | None = None  # our verified HomeKit climate hold, still running
+    maybe_climates: frozenset[str] = frozenset()  # newer HomeKit holds of ours that may have landed
+    # (heat_f, cool_f) of temperature holds that are not a new change: ours, or one the cloud
+    # already reported before it went down
+    temps: tuple[tuple[float | None, float | None], ...] = ()
+    event: bool = False  # a vacation, utility event or unrecognised ecobee event is in force
+
+
+@dataclass(frozen=True)
+class HandChange:
+    """A change someone made at the thermostat (or in the ecobee app, Apple Home, Siri) that
+    HomeKit shows. ``heat_f`` / ``cool_f`` are the setpoints the thermostat holds now."""
+
+    kind: Literal["comfort", "temperature"]
+    climate_ref: str | None  # the comfort setting picked by hand; None for a temperature
+    heat_f: float | None
+    cool_f: float | None
+    current_mode: int
+
+    def same_as(self, request: Mapping[str, Any] | None) -> bool:
+        """Is ``request`` (a logged detection) this same change? A comfort setting by its
+        name (its setpoints may move with the schedule); a temperature by its setpoints."""
+        if not isinstance(request, Mapping) or (request.get("climate_ref") or None) != self.climate_ref:
+            return False
+        if self.kind == "comfort":
+            return True
+        for mine, logged in ((self.heat_f, _num(request.get("heat_f"))), (self.cool_f, _num(request.get("cool_f")))):
+            if (mine is None) != (logged is None):
+                return False
+            if mine is not None and logged is not None and abs(mine - logged) > 0.1:
+                return False
+        return True
+
+
+def comfort_targets_from_values(tstat: Mapping[str, Any]) -> dict[str, dict[str, float | None]]:
+    """The polled Home / Sleep / Away targets: {climate: {'heat_f', 'cool_f'}} in °F, None
+    where the thermostat does not expose one or returned no value."""
+    return {
+        climate: {"heat_f": setpoint_f(tstat.get(heat_k)), "cool_f": setpoint_f(tstat.get(cool_k))}
+        for climate, (heat_k, cool_k) in COMFORT_TARGET_KEYS.items()
+    }
+
+
+def _relevant_sides(hvac_target: int | None) -> tuple[str, ...]:
+    """The setpoints the thermostat acts on in its HEATING_COOLING_TARGET mode (both when the
+    mode is auto or unknown; none when off)."""
+    if hvac_target == 0:
+        return ()
+    if hvac_target == 1:
+        return ("heat_f",)
+    if hvac_target == 2:
+        return ("cool_f",)
+    return ("heat_f", "cool_f")
+
+
+def _differs(now: Mapping[str, float | None], want: Mapping[str, float | None], sides: tuple[str, ...]) -> bool | None:
+    """True when a relevant setpoint is more than HAND_CHANGE_F from ``want``; None when one
+    of them cannot be compared (not exposed or not read)."""
+    gaps: list[float] = []
+    for side in sides:
+        a, b = now.get(side), want.get(side)
+        if a is None or b is None:
+            return None
+        gaps.append(abs(a - b))
+    return any(gap > HAND_CHANGE_F for gap in gaps)
+
+
+def _known_temp(now: Mapping[str, float | None], temps: Iterable[tuple[float | None, float | None]]) -> bool:
+    """Does the thermostat hold the setpoints of a temperature hold we already know about?"""
+    for heat, cool in temps:
+        pairs = [(now.get("heat_f"), heat), (now.get("cool_f"), cool)]
+        compared = [(a, b) for a, b in pairs if a is not None and b is not None]
+        if compared and all(abs(a - b) <= HAND_CHANGE_F for a, b in compared):
+            return True
+    return False
+
+
+def detect_hand_change(values: Mapping[int, Mapping[str, Any]], known: KnownHolds) -> HandChange | None:
+    """A change a person made that HomeKit can see, from one poll of the thermostat (aid 1).
+
+    HomeKit shows the comfort setting in force (CURRENT_MODE: home 0, sleep 1, away 2,
+    temperature hold 3), the active heat/cool setpoints and each comfort setting's own
+    targets, but no ecobee holds or events. A change is:
+    (a) our HomeKit climate hold is still running (``known.climate``) but CURRENT_MODE shows
+        another comfort setting (picked by hand, or the schedule after someone pressed Resume)
+        or a temperature hold; or
+    (b) a comfort setting shows, but the setpoints the thermostat acts on differ by more than
+        0.5°F from that setting's own targets: someone set a temperature; or
+    (c) a temperature hold shows (CURRENT_MODE 3) whose setpoints match none of the comfort
+        settings' targets.
+    (b) and (c) need the targets to be readable and are never a temperature hold we already
+    know (``known.temps``). Nothing is a change while an ecobee event is in force (its
+    setpoints are not a person's), when CURRENT_MODE is unreadable or a code we don't know,
+    or when the thermostat shows a climate one of our own HomeKit holds may have set. A
+    comfort setting picked by hand without a hold of ours running looks exactly like the
+    schedule: HomeKit cannot see it."""
+    tstat = values.get(THERMOSTAT_AID, {})
+    mode = _int(tstat.get("VENDOR_ECOBEE_CURRENT_MODE"))
+    if mode is None or known.event or (mode not in MODE_CLIMATES and mode != MODE_TEMPERATURE_HOLD):
+        return None
+    now_sp = {
+        "heat_f": setpoint_f(tstat.get("TEMPERATURE_HEATING_THRESHOLD")),
+        "cool_f": setpoint_f(tstat.get("TEMPERATURE_COOLING_THRESHOLD")),
+    }
+    picked = MODE_CLIMATES.get(mode)  # None while a temperature hold shows
+    targets = comfort_targets_from_values(tstat)
+    sides = _relevant_sides(_int(tstat.get("HEATING_COOLING_TARGET")))
+    temperature = HandChange("temperature", None, now_sp["heat_f"], now_sp["cool_f"], mode)
+
+    if known.climate is not None and picked != known.climate and picked not in known.maybe_climates:
+        if picked is None:  # (a) a temperature hold replaced ours
+            return None if _known_temp(now_sp, known.temps) else temperature
+        shown = targets[picked]  # (a) another comfort setting replaced ours
+        return HandChange("comfort", picked,
+                          now_sp["heat_f"] if now_sp["heat_f"] is not None else shown["heat_f"],
+                          now_sp["cool_f"] if now_sp["cool_f"] is not None else shown["cool_f"], mode)
+    if picked is not None:  # (b)
+        moved = _differs(now_sp, targets[picked], sides)
+    else:  # (c) a temperature hold: is it one of the comfort settings' setpoints?
+        each = [_differs(now_sp, t, sides) for t in targets.values()]
+        moved = None if any(d is None for d in each) else all(each)
+    if not moved or _known_temp(now_sp, known.temps):
+        return None
+    return temperature
 
 
 _TS_RE = re.compile(

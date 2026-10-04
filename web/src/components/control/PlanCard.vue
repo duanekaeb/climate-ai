@@ -21,6 +21,13 @@ const RULES: Record<UnitTarget['rule'], string> = {
   precool: 'pre-cool',
   independent: 'independent',
   hold_off: 'hands off',
+  event_prep: 'pre-cooling before a utility event',
+}
+
+/** The rule's chip; 'event_prep' says pre-heating when the plan's reason does (heating season). */
+function ruleChip(t: UnitTarget): string {
+  if (t.rule === 'event_prep' && /^pre-heat/i.test(t.reason)) return 'pre-heating before a utility event'
+  return RULES[t.rule]
 }
 
 const rows = computed(() =>
@@ -58,7 +65,7 @@ function changed(a: number | null, b: number): boolean {
             {{ unitName(r.target.unit_key) }}
           </span>
           <span class="flex flex-wrap gap-1">
-            <span class="chip bg-surface-2 text-muted">{{ RULES[r.target.rule] }}</span>
+            <span class="chip bg-surface-2 text-muted">{{ ruleChip(r.target) }}</span>
             <span v-if="r.target.desired === 'program'" class="chip bg-surface-2 text-muted">schedule</span>
             <span class="chip" :class="r.would_write ? 'bg-accent/15 text-accent' : 'bg-surface-2 text-muted'">
               {{ r.would_write ? (plan.mode === 'act' ? 'will write' : 'would write') : 'no write needed' }}

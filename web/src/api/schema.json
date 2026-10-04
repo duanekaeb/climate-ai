@@ -1989,6 +1989,17 @@
     "included": {
      "type": "boolean"
     },
+    "note": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "residual_min": {
      "anyOf": [
       {
@@ -2006,6 +2017,7 @@
     "day",
     "expected_min",
     "included",
+    "note",
     "residual_min"
    ],
    "title": "ExperimentDayOut",

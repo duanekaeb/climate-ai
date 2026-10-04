@@ -95,7 +95,7 @@ web/src/api/schema.json && cd web && npm run gen:types`).
 | POST | `/auth/login` | public (throttled) | `PasswordBody` → `AuthState` |
 | POST | `/auth/logout` | public | → `AuthState` |
 | POST | `/auth/logout-everywhere` | owner | → `AuthState` (invalidates every owner session; so does a password change) |
-| GET | `/status` | reader | → `HouseStatus` |
+| GET | `/status` | reader | → `HouseStatus` (each `UnitLive` says whose hold runs: `hold_owner` + `hold_label` in house time, from `api/labels.py`; `person_hold`, `resume_backoff_until` while in the future, `utility_event` = running, else next announced, else one over in the last 2 h; `upcoming_events`) |
 | WS | `/ws` | owner cookie or agent token | server → `WsEvent` |
 | GET | `/rooms/{room_key}/history?hours=24` | reader | → `RoomHistory` |
 | GET | `/runtime/daily?days=30` | reader | → `DailyRuntime[]` |
@@ -108,13 +108,19 @@ web/src/api/schema.json && cd web && npm run gen:types`).
 | GET | `/analytics/comfort?days=7` | reader | → `ComfortRow[]` |
 | GET | `/analytics/drift` | reader | → `DriftReport` |
 | GET | `/analytics/natural-experiments?days=90` | reader | → `NaturalExperiments` |
-| GET | `/control/settings` | reader | → `SettingsOut` |
-| PUT | `/control/settings` | owner | `SettingsUpdate` → `SettingsOut` |
+| GET | `/control/settings` | reader | → `SettingsOut` (includes `utility_events`) |
+| PUT | `/control/settings` | owner | `SettingsUpdate` → `SettingsOut` (sections given are validated and stored; `utility_events` under key `utility_events`; an old client's `control.manual_backoff_hours` is read as `resume_backoff_hours`) |
 | POST | `/control/mode` | owner | `ModeBody` → `ControllerInfo` |
 | GET | `/control/plan` | reader | → `PlanOut` |
 | GET | `/control/actions?limit=100&unit_key=` | reader | → `ControlActionOut[]` |
-| POST | `/control/hold` | owner | `ManualHoldBody` → `ControlActionOut` (queued; worker executes) |
-| POST | `/control/resume` | owner | `UnitBody` → `ControlActionOut` |
+| POST | `/control/hold` | owner | `ManualHoldBody` → `ControlActionOut` (queued; worker executes). Exactly what was typed within the hard envelope: min/max, the deadband (or the thermostat's `heatCoolMinDelta` when larger), the 0.5°F grid; no step limit, humidity guard, rate limit or back-off |
+| POST | `/control/resume` | owner | `UnitBody` → `ControlActionOut` ("Resume schedule": queued `resume_program`, request kind `resume_schedule`; the ecobee schedule runs and the controller waits `resume_backoff_hours`) |
+| POST | `/control/automatic` | owner | `UnitBody` → `ControlActionOut` ("Back to automatic": queued `resume_program`, request kind `automatic`; the controller steers again at once and any resume back-off ends) |
+| GET | `/control/handback` | reader | → `HandbackInfo` (captured originals, mode, latest `handback` job, steps of the last finished one) |
+| POST | `/control/handback` | owner | → `JobOut` (queues a `handback` job; 409 while one is queued or running) |
+| GET | `/utility-events?days=30` | reader | → `UtilityEventOut[]` (open events plus those that started in the last `days`, newest first; `prep_label` from the current plan) |
+| POST | `/utility-events/{id}/skip` | owner | `SkipEventBody` (optional; `all_units` default true) → `UtilityEventOut` (`skip='requested'` on that event's rows that can be skipped; the worker opts out; 409 when the controller is off or the event is mandatory, over, or already skipped) |
+| POST | `/utility-events/{id}/unskip` | owner | `SkipEventBody` (optional) → `UtilityEventOut` (clears a still-`requested` skip; 409 otherwise) |
 | POST | `/control/presence` | owner | `PresenceBody` → `SettingsOut` |
 | GET | `/changes?status=` | reader | → `ChangeOut[]` |
 | POST | `/changes` | writer | `ProposePolicyBody` → `ChangeOut` (proposed_by = owner or claude) |
@@ -154,8 +160,8 @@ web/src/api/schema.json && cd web && npm run gen:types`).
 | POST | `/setup/homekit/code` | owner | `HomekitCodeBody` → `SetupState` |
 | POST | `/setup/homekit/unpair` | owner | `DeviceBody` → `SetupState` |
 
-The agent role may never call `/control/*` writes, `/setup/*`, `/agent/ask|run`,
-`/experiments/{id}/decision` or `/alerts/*/resolve`.
+The agent role may never call `/control/*` writes, `/utility-events/*` skips, `/setup/*`,
+`/agent/ask|run`, `/experiments/{id}/decision` or `/alerts/*/resolve`.
 
 ## Claude's tools (agent and MCP)
 
@@ -205,9 +211,15 @@ wide without horizontal scrolling, and labels rooms without sensors as "no senso
 | `changes.payload` (policy) | `{"params": {partial PolicyParams}, "base_policy_version_id": int, "current": {...}}` |
 | `changes.gates` | `validation` (list of violations), `validated_at`, `backtest` (BacktestOut or `{error}`), `shadow` `{start, days}`, `decision` `{actor, decision, reason, at}`, `trial` `{start, end, verdict...}` |
 | `control_actions.request` (HomeKit channel) | `{"kind": "climate_hold", "climate": "home"\|"sleep"\|"away", "until": ISO-8601}` or `{"kind": "clear_hold"}` |
+| `control_actions.request` (owner resumes, action `resume_program`) | `{"kind": "resume_schedule"\|"automatic", "unit_key", "reason"}` (`/control/resume` and `/control/automatic`) |
+| `app_settings['utility_events']` | `UtilityEventSettings` (alerts, skip rules, pre-cooling); edited through `PUT /control/settings` |
+| `app_settings['ecobee_original']` | `{unit_key: EcobeeOriginal}`: each unit's Smart Away, Follow Me and Home sensors before the controller's first change; read by `GET /control/handback` |
+| `jobs` kind `handback` | `params` `{}`, `requested_by` `owner`; `result` `{"steps": [HandbackStep...]}` |
+| `utility_events.skip*` (API writes) | owner skip: `skip='requested'`, `skip_by='owner'`, `skip_reason='Skipped from the app'`, `skip_requested_at`; a new request after `failed` resets `detail.skip_attempts` to 0; unskip clears all four |
+| `ecobee_thermostats.settings` | the curated settings plus `utility` (`UtilityInfo` dict or null) and `drAccept`; Setup's `EcobeeThermostatOut.utility` / `dr_accept` / `enrolled` |
 | `model_fits` kind `rc` | `metrics`: `rmse_1h`, `rmse_24h`, `persistence_rmse_1h/24h`, `bias_*`, `n_points`; `params.unidentified`: `["zone.param", ...]` |
 | `model_fits` kind `room_offsets` | `params.offsets`: `{room_key: {"day": °F, "night": °F}}` |
-| `UnitSnapshot.settings` | `autoAway`, `followMeComfort`, `heatCoolMinDelta` (°F), `program_heat_f`/`program_cool_f` (what the schedule holds now), `timeZone` (ecobee) |
+| `UnitSnapshot.settings` | `autoAway`, `followMeComfort`, `heatCoolMinDelta` (°F), `program_heat_f`/`program_cool_f` (what the schedule holds now), `timeZone`, `drAccept` (ecobee) |
 
 Compose networks: `db` sits on a private `data` network shared only with `app` and `worker`; the
 agent and MCP containers reach the API over the default network and never see the database.

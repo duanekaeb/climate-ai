@@ -1,6 +1,8 @@
 <script setup lang="ts">
-// The owner's manual timed hold and resume. Both are queued: the worker writes them through
-// the same guardrails as the controller, reads them back and logs them in the action log.
+// The owner's manual timed hold, "Resume schedule" and "Back to automatic". All are queued:
+// the worker writes them inside the hard limits, reads them back and logs them in the action
+// log. The owner's hold gets exactly what was typed (inside the hard limits) and, like any hold
+// a person sets, the controller leaves it alone until it ends.
 import { computed, ref, useId, watch } from 'vue'
 import type { ControlActionOut, SettingsOut, UnitLive } from '@/api/types'
 import Card from '@/components/Card.vue'
@@ -20,7 +22,7 @@ const cool = ref<number>(76)
 const limits = computed(() => props.settings.control.limits)
 const hourOptions = computed(() => [1, 2].filter((h) => h >= limits.value.min_hold_hours && h <= limits.value.max_hold_hours))
 const hours = ref<number>(2)
-const busy = ref<'hold' | 'resume' | null>(null)
+const busy = ref<'hold' | 'resume' | 'automatic' | null>(null)
 const error = ref('')
 const result = ref<ControlActionOut | null>(null)
 
@@ -56,7 +58,26 @@ const problems = computed(() => {
   return out
 })
 
-async function act(kind: 'hold' | 'resume') {
+const ACTION_NAMES: Record<'hold' | 'resume' | 'automatic', string> = {
+  hold: 'Hold',
+  resume: 'Resume schedule',
+  automatic: 'Back to automatic',
+}
+const resultName = ref('')
+
+// The two ways back, in words that match the current mode and wait.
+const choices = computed(() => {
+  const c = props.settings.control
+  const steer = c.mode === 'act' ? 'the app steers again now' : 'the app plans again now (it writes only in Act mode)'
+  const h = c.resume_backoff_hours
+  const resume =
+    h > 0
+      ? `your ecobee schedule runs for ${Number.isInteger(h) ? h : h.toFixed(1)} h first`
+      : 'the app takes over again at once too (no wait after Resume is set)'
+  return `Back to automatic cancels the running hold and ${steer}. Resume schedule cancels it and ${resume}.`
+})
+
+async function act(kind: 'hold' | 'resume' | 'automatic') {
   if (busy.value || (kind === 'hold' && problems.value.length)) return
   busy.value = kind
   error.value = ''
@@ -65,7 +86,10 @@ async function act(kind: 'hold' | 'resume') {
     result.value =
       kind === 'hold'
         ? await control.hold({ unit_key: unit.value, heat_f: heat.value, cool_f: cool.value, hours: hours.value })
-        : await control.resume(unit.value)
+        : kind === 'resume'
+          ? await control.resume(unit.value)
+          : await control.automatic(unit.value)
+    resultName.value = ACTION_NAMES[kind]
   } catch (e) {
     error.value = errorText(e)
   } finally {
@@ -86,7 +110,8 @@ async function act(kind: 'hold' | 'resume') {
       </label>
       <p v-if="live" class="num text-xs text-muted">
         Now {{ temp(live.zone_temp_f) }} · heat {{ temp(live.heat_sp_f) }} · cool {{ temp(live.cool_sp_f) }}
-        <template v-if="live.hold"> · on a {{ live.hold.set_by_us ? 'Climate AI' : 'manual' }} hold</template>
+        <template v-if="live.hold_label"> · {{ live.hold_label }}</template>
+        <template v-else-if="live.hold"> · on a hold</template>
       </p>
       <div class="grid grid-cols-3 gap-2">
         <label class="text-xs text-muted">
@@ -111,6 +136,9 @@ async function act(kind: 'hold' | 'resume') {
         <button type="button" class="btn btn-primary" :disabled="busy !== null || problems.length > 0" @click="act('hold')">
           {{ busy === 'hold' ? 'Queuing…' : 'Hold' }}
         </button>
+        <button type="button" class="btn" :disabled="busy !== null" @click="act('automatic')">
+          {{ busy === 'automatic' ? 'Queuing…' : 'Back to automatic' }}
+        </button>
         <button type="button" class="btn" :disabled="busy !== null" @click="act('resume')">
           {{ busy === 'resume' ? 'Queuing…' : 'Resume schedule' }}
         </button>
@@ -118,11 +146,12 @@ async function act(kind: 'hold' | 'resume') {
     </fieldset>
     <p v-if="error" class="mt-2 text-sm text-bad">{{ error }}</p>
     <p v-if="result" class="mt-2 text-sm" aria-live="polite">
-      {{ result.action }} for {{ unitName(result.unit_key) }}: <span class="font-medium">{{ result.status }}</span>.
-      <span class="text-muted">The worker sends it within seconds, reads it back and logs the result below.</span>
+      {{ resultName }} for {{ unitName(result.unit_key) }}: <span class="font-medium">{{ result.status }}</span>.
+      <span class="text-muted">The worker sends it within seconds, reads it back and logs the result.</span>
     </p>
     <p class="mt-2 text-xs text-muted">
-      The hold ends by itself after the time you pick; Resume schedule hands the unit back to its ecobee schedule now.
+      Your hold gets exactly what you type, inside your hard limits, and the app leaves it alone until it ends.
+      {{ choices }}
       <template v-if="!isOwner"> Only the owner can hold or resume.</template>
     </p>
   </Card>

@@ -1,4 +1,4 @@
-// Human labels for the Live screen (controller modes, calls, policy rules, equipment).
+// Human labels for the Live screen (controller modes, calls, policy rules, holds, equipment).
 import type { ControllerInfo, UnitLive, UnitTarget } from '@/api/types'
 
 export const MODE_INFO: Record<ControllerInfo['mode'], { label: string; hint: string; cls: string }> = {
@@ -24,6 +24,26 @@ export const RULE_LABELS: Record<UnitTarget['rule'], string> = {
   precool: 'Pre-cool',
   independent: 'Independent',
   hold_off: 'Holding off',
+  event_prep: 'Pre-cooling before a utility event',
+}
+
+/** The rule's label; 'event_prep' says pre-heating when the plan's reason does (heating season). */
+export function ruleLabel(target: Pick<UnitTarget, 'rule' | 'reason'>): string {
+  if (target.rule === 'event_prep' && /^pre-heat/i.test(target.reason)) return 'Pre-heating before a utility event'
+  return RULE_LABELS[target.rule]
+}
+
+type HoldOwner = NonNullable<UnitLive['hold_owner']>
+
+/** The small badge next to a unit's hold line: whose hold is running. */
+export const HOLD_BADGES: Record<HoldOwner, { label: string; cls: string }> = {
+  person: { label: 'Your hold', cls: 'bg-warn/15 text-warn' },
+  app: { label: 'Your hold', cls: 'bg-warn/15 text-warn' },
+  utility: { label: 'Utility event', cls: 'bg-accent/15 text-accent' },
+  vacation: { label: 'Vacation', cls: 'bg-surface-2 text-ink' },
+  ecobee_auto: { label: 'Smart Away', cls: 'bg-surface-2 text-ink' },
+  controller: { label: 'Ours', cls: 'bg-good/15 text-good' },
+  unknown_event: { label: 'ecobee event', cls: 'bg-warn/15 text-warn' },
 }
 
 /** ecobee equipment names ('compCool1', 'auxHeat1', 'fan', ...) -> icon + label. */

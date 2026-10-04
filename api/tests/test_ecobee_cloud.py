@@ -41,6 +41,7 @@ _INCLUDE_KEYS = {
     "includeEquipmentStatus": "equipmentStatus",
     "includeWeather": "weather",
     "includeLocation": "location",
+    "includeUtility": "utility",
 }
 _ALWAYS = ("identifier", "name", "thermostatRev", "isRegistered", "modelNumber", "brand", "features",
            "lastModified", "thermostatTime", "utcTime")
@@ -66,6 +67,7 @@ class FakeEcobee:
         self.inflight = 0
         self.max_inflight = 0
         self.report_bodies: list[dict[str, Any]] = []
+        self.dr_sticky = False  # resumeProgram leaves a running demandResponse in place
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handler)
@@ -174,10 +176,14 @@ class FakeEcobee:
                 t["runtime"]["desiredHeat"] = ev["heatHoldTemp"]
                 t["runtime"]["desiredCool"] = ev["coolHoldTemp"]
             elif fn["type"] == "resumeProgram":
+                # ecobee removes the top running event, except a mandatory demand response
                 for i, e in enumerate(t["events"]):
-                    if e["running"] and e["type"] == "hold":
-                        del t["events"][i]
+                    if not e["running"] or e["type"] == "template":
+                        continue
+                    if e["type"] == "demandResponse" and (e.get("isOptional") is False or self.dr_sticky):
                         break
+                    del t["events"][i]
+                    break
             self._bump(t)
         th = body.get("thermostat") or {}
         if "settings" in th:
@@ -266,7 +272,7 @@ async def test_fetch_snapshots(cloud, fake, db):
     sel = get[2]["selection"]
     assert sel["selectionType"] == "thermostats" and set(sel["selectionMatch"].split(",")) == {MAIN, UP, BED}
     for flag in ("includeRuntime", "includeExtendedRuntime", "includeSensors", "includeProgram", "includeEvents",
-                 "includeSettings", "includeEquipmentStatus", "includeWeather"):
+                 "includeSettings", "includeEquipmentStatus", "includeWeather", "includeUtility"):
         assert sel[flag] is True
 
     main = snaps[0]
@@ -464,7 +470,7 @@ async def test_resume_program_cancels_our_own_hold_without_force(cloud, fake, db
     assert "up" not in get_raw(db, HOLDS_KEY)  # the record of our hold is cleared
 
 
-@pytest.mark.parametrize("etype", ["vacation", "demandResponse", "autoAway", "autoHome", "quickSave"])
+@pytest.mark.parametrize("etype", ["vacation", "demandResponse", "autoAway", "autoHome", "quickSave", "today"])
 async def test_resume_program_never_cancels_an_event_even_when_forced(cloud, fake, etype):
     await cloud.poll_revisions()
     ev = dict(fake.tstats[MAIN]["events"][0], type=etype, running=True)

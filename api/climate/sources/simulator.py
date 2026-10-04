@@ -23,11 +23,22 @@ run on hot afternoons; stage-2 time is INCLUDED in stage 1), furnace seconds go 
 
 Thermostats run an ecobee-like program per unit: 'sleep' while any of the unit's sleep
 rooms is inside its sleep window (OccupancySettings), 'home' otherwise, setpoints from
-ControlSettings.comfort (day / night / away). Smart Away: during 'home', when none of the
-unit's occupancy sensors has seen motion for 30 minutes the unit switches to its away band
-until motion returns. ``holdHours`` holds override the program until they end. Control is
-on the average of the participating sensors (holds use the Home set) with ±0.5°F
-hysteresis and a 5-minute minimum run.
+ControlSettings.comfort (day / night / away). Smart Away (``autoAway``, on by default like a
+new ecobee): during 'home', when none of the unit's occupancy sensors has seen motion for 30
+minutes the unit switches to its away band until motion returns. ``holdHours`` holds override
+the program until they end. Control is on the average of the participating sensors (holds
+use the Home set) with ±0.5°F hysteresis and a 5-minute minimum run. ``apply_settings``
+switches the simulated ``autoAway`` / ``followMeComfort`` (Follow Me is reported only).
+
+Utility events: ``inject_event`` (or ``climate sim-event``, which writes the shared
+app_settings row ``sim_events`` that a database-backed simulator re-reads every simulated
+minute, because the CLI cannot reach the worker's in-memory house) puts a demand-response or
+vacation event on a thermostat. Before its start it is listed in ``snapshot.events`` (not
+running); while start <= now < end it is the running top event, above any hold, with its
+absolute setpoints or its offsets applied to the scheduled comfort setting (AC off / heat off
+park that side at the end of ecobee's range; duty-cycle limits are not simulated); after its
+end it disappears. ``resume_program`` never cancels it; ``opt_out_event`` removes a running
+optional demand-response event (refusing a mandatory one) like ecobee's resumeProgram does.
 
 Randomness (occupancy, sensor noise, synthetic weather) is a pure hash of (seed, stream,
 time, sensor), so results are reproducible regardless of how the timeline is stepped
@@ -40,7 +51,7 @@ import logging
 import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -51,6 +62,7 @@ from climate.sources.base import (
     RuntimeInterval,
     SensorReading,
     SourceHealth,
+    ThermostatEvent,
     UnitSnapshot,
     WriteResult,
 )
@@ -92,7 +104,16 @@ STAGE2_HEAT_MAX_OUT_F = 20.0
 HEAT_COOL_MIN_DELTA_F = 3.0
 ECOBEE_HEAT_RANGE = (45.0, 79.0)
 ECOBEE_COOL_RANGE = (65.0, 92.0)
-SNAPSHOT_SETTINGS: dict[str, object] = {"autoAway": True, "followMeComfort": False, "heatCoolMinDelta": 3.0}
+SNAPSHOT_SETTINGS: dict[str, object] = {"heatCoolMinDelta": 3.0}
+# Simulated thermostat settings apply_settings may change (defaults: a new ecobee's).
+DEFAULT_THERMOSTAT_SETTINGS: dict[str, bool] = {"autoAway": True, "followMeComfort": False}
+
+# --- events ----------------------------------------------------------------------------
+SIM_EVENTS_KEY = "sim_events"  # app_settings: {unit_key: [ThermostatEvent JSON]} (climate sim-event)
+SIM_EVENT_TYPES = ("demandResponse", "vacation")
+MAX_EVENT_OFFSET_F = 10.0  # largest relative change an injected event may make
+MAX_EVENT_DAYS = 31
+OPT_OUT_END_GUARD_MIN = 2  # like the ecobee adapter: no opt-out this close to an event's end
 
 # --- physics ---------------------------------------------------------------------------
 
@@ -427,6 +448,159 @@ def _synthetic_hours(
     return [_wx_hour_in(h, climate.hour(h), "observed" if h < now_h else "forecast") for h in range(h0, h1)]
 
 
+# --- injected events -------------------------------------------------------------------
+
+
+def _utc(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)
+
+
+def normalize_event(event: ThermostatEvent) -> ThermostatEvent:
+    """Check an event the simulator can run and return it with UTC times, ``running`` cleared
+    (the clock decides it) and a ``link_ref`` (ecobee's per-event id; when missing, one derived
+    from the type and window, so the same event on several units shares it). Raises ValueError
+    with a sentence for the owner."""
+    if event.event_type not in SIM_EVENT_TYPES:
+        raise ValueError(f"event type {event.event_type!r} is not simulated "
+                         f"(only {', '.join(SIM_EVENT_TYPES)})")
+    if event.start is None or event.end is None:
+        raise ValueError("a simulated event needs a start and an end")
+    start, end = _utc(event.start), _utc(event.end)
+    if end <= start:
+        raise ValueError("the event must end after it starts")
+    if end - start > timedelta(days=MAX_EVENT_DAYS):
+        raise ValueError(f"a simulated event lasts at most {MAX_EVENT_DAYS} days")
+    if event.is_relative:
+        if event.heat_f is not None or event.cool_f is not None:
+            raise ValueError("a relative event takes offsets, not setpoints")
+        cool, heat = event.cool_offset_f, event.heat_offset_f
+        if cool is not None and not 0 < cool <= MAX_EVENT_OFFSET_F:
+            raise ValueError(f"the cooling offset must be above 0 and at most +{MAX_EVENT_OFFSET_F:g}°F "
+                             "(utility events raise cooling setpoints)")
+        if heat is not None and not -MAX_EVENT_OFFSET_F <= heat < 0:
+            raise ValueError(f"the heating offset must be below 0 and at least -{MAX_EVENT_OFFSET_F:g}°F "
+                             "(utility events lower heating setpoints)")
+        changes = cool is not None or heat is not None
+    else:
+        if event.heat_offset_f is not None or event.cool_offset_f is not None:
+            raise ValueError("an absolute event takes setpoints, not offsets")
+        if event.heat_f is not None and not ECOBEE_HEAT_RANGE[0] <= event.heat_f <= ECOBEE_HEAT_RANGE[1]:
+            raise ValueError(f"heat setpoint {event.heat_f:g}°F is outside {ECOBEE_HEAT_RANGE}")
+        if event.cool_f is not None and not ECOBEE_COOL_RANGE[0] <= event.cool_f <= ECOBEE_COOL_RANGE[1]:
+            raise ValueError(f"cool setpoint {event.cool_f:g}°F is outside {ECOBEE_COOL_RANGE}")
+        if event.heat_f is not None and event.cool_f is not None and \
+                event.cool_f - event.heat_f < HEAT_COOL_MIN_DELTA_F - 1e-9:
+            raise ValueError(f"cool - heat must be at least {HEAT_COOL_MIN_DELTA_F:g}°F")
+        changes = event.heat_f is not None or event.cool_f is not None
+    if not (changes or event.is_cool_off or event.is_heat_off):
+        raise ValueError("the event changes no setpoint (duty-cycle limits are not simulated)")
+    link_ref = event.link_ref or f"sim-{event.event_type}-{start:%Y%m%d%H%M}-{end:%Y%m%d%H%M}"
+    return event.model_copy(update={"start": start, "end": end, "running": False, "link_ref": link_ref})
+
+
+@dataclass(frozen=True)
+class _Event:
+    """An injected event on one unit, with its window in simulation minutes."""
+
+    ev: ThermostatEvent  # normalized (UTC, link_ref set); ``running`` comes from the clock
+    start_m: int
+    end_m: int
+
+    @classmethod
+    def of(cls, ev: ThermostatEvent) -> _Event:
+        assert ev.start is not None and ev.end is not None
+        return cls(ev, _minute_of(ev.start), _minute_of(ev.end))
+
+    @property
+    def priority(self) -> tuple[int, int]:
+        """Overlapping events: a utility event wins over a vacation, then the earlier start."""
+        return (0 if self.ev.event_type == "demandResponse" else 1, self.start_m)
+
+
+def _events_from_raw(raw: Any) -> dict[str, list[ThermostatEvent]]:
+    """The ``sim_events`` row -> {unit_key: [normalized events]}; unusable entries are skipped."""
+    out: dict[str, list[ThermostatEvent]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for unit, items in raw.items():
+        if unit not in UNIT_INDEX or not isinstance(items, list):
+            continue
+        for item in items:
+            try:
+                out.setdefault(unit, []).append(normalize_event(ThermostatEvent.model_validate(item)))
+            except ValueError as exc:  # includes pydantic's ValidationError
+                log.info("simulator: injected event on %s skipped (%s)", unit, str(exc)[:120])
+    return out
+
+
+def _locked_events(session: Any) -> dict[str, list[ThermostatEvent]]:
+    """Read the ``sim_events`` row for an update (row lock, so the CLI and the worker's
+    simulator do not overwrite each other's change)."""
+    from sqlalchemy import select
+
+    from climate.store.orm import AppSetting
+
+    raw = session.execute(
+        select(AppSetting.value).where(AppSetting.key == SIM_EVENTS_KEY).with_for_update()
+    ).scalar_one_or_none()
+    return _events_from_raw(raw)
+
+
+def _store_events(session: Any, events: dict[str, list[ThermostatEvent]], now: datetime) -> None:
+    """Write the row back, dropping events that ended before ``now``."""
+    from climate.store.app_settings import put_setting
+
+    data: dict[str, list[dict[str, Any]]] = {}
+    for unit in UNIT_KEYS:
+        kept = sorted((e for e in events.get(unit, []) if e.end is not None and e.end > now),
+                      key=lambda e: (e.start or now, e.link_ref or ""))
+        if kept:
+            data[unit] = [e.model_dump(mode="json") for e in kept]
+    put_setting(session, SIM_EVENTS_KEY, data, updated_by="simulator")
+
+
+def load_sim_events(session: Any) -> dict[str, list[ThermostatEvent]]:
+    """The injected events in app_settings['sim_events'] (normalized), by unit."""
+    from climate.store.app_settings import get_raw
+
+    return _events_from_raw(get_raw(session, SIM_EVENTS_KEY))
+
+
+def add_sim_event(
+    session: Any, unit_keys: Iterable[str], event: ThermostatEvent, now: datetime
+) -> ThermostatEvent:
+    """Store ``event`` for each unit in app_settings['sim_events'] (replacing one with the same
+    link_ref) and return it as stored. A database-backed simulator picks it up within a
+    simulated minute. Raises ValueError for an unknown unit or an event it cannot run."""
+    units = list(dict.fromkeys(unit_keys))
+    unknown = [u for u in units if u not in UNIT_INDEX]
+    if not units or unknown:
+        raise ValueError(f"unknown unit(s): {', '.join(unknown) or 'none given'} "
+                         f"(use {', '.join(UNIT_KEYS)})")
+    ev = normalize_event(event)
+    events = _locked_events(session)
+    for unit in units:
+        events[unit] = [e for e in events.get(unit, []) if e.link_ref != ev.link_ref] + [ev]
+    _store_events(session, events, now)
+    return ev
+
+
+def remove_sim_events(session: Any, now: datetime, unit_keys: Iterable[str] | None = None,
+                      link_ref: str | None = None) -> int:
+    """Remove injected events (all, a unit's, or the one with ``link_ref``); returns how many."""
+    units = set(UNIT_KEYS if unit_keys is None else unit_keys)
+    events = _locked_events(session)
+    removed = 0
+    for unit in list(events):
+        if unit not in units:
+            continue
+        kept = [e for e in events[unit] if link_ref is not None and e.link_ref != link_ref]
+        removed += len(events[unit]) - len(kept)
+        events[unit] = kept
+    _store_events(session, events, now)
+    return removed
+
+
 # --- per-slot context ------------------------------------------------------------------
 
 
@@ -509,6 +683,11 @@ class SimulatedHouse:
         self._unit_motion: list[int | None] = [None] * n
         self._sensor_motion: list[int | None] = [None] * len(SENSORS)
         self._hold: list[_Hold | None] = [None] * n
+        self._events: list[list[_Event]] = [[] for _ in range(n)]  # injected, sorted by start
+        self._event_on: list[str | None] = [None] * n  # link_ref of the running event last minute
+        self._auto_away = [DEFAULT_THERMOSTAT_SETTINGS["autoAway"]] * n
+        self._follow_me = [DEFAULT_THERMOSTAT_SETTINGS["followMeComfort"]] * n
+        self._last_events_m: int | None = None
         self._rev = [0] * n
         self._acc: list[list[Any]] = [self._new_acc() for _ in range(n)]
         self._slots: list[RuntimeInterval] = []
@@ -637,6 +816,8 @@ class SimulatedHouse:
                     "rev": self._rev[i],
                     "hold": None if self._hold[i] is None else vars(self._hold[i]).copy(),
                     "acc": self._acc[i],
+                    "auto_away": self._auto_away[i],
+                    "follow_me": self._follow_me[i],
                 }
                 for i, k in enumerate(UNIT_KEYS)
             },
@@ -676,6 +857,10 @@ class SimulatedHouse:
             program = [str(p["program"]) for p in per]
             unit_motion = [None if p.get("unit_motion") is None else int(p["unit_motion"]) for p in per]
             rev = [int(p.get("rev", 0)) for p in per]
+            # thermostat settings (absent from states saved before apply_settings existed)
+            defaults = DEFAULT_THERMOSTAT_SETTINGS
+            auto_away = [bool(p.get("auto_away", defaults["autoAway"])) for p in per]
+            follow_me = [bool(p.get("follow_me", defaults["followMeComfort"])) for p in per]
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             log.info("simulator: cannot restore state (%s)", type(exc).__name__)
             return False
@@ -685,6 +870,7 @@ class SimulatedHouse:
         self._away, self._away_since, self._home_since = away, away_since, home_since
         self._program, self._unit_motion, self._rev = program, unit_motion, rev
         self._hold = holds
+        self._auto_away, self._follow_me = auto_away, follow_me
         self._acc = accs
         self._sensor_motion = sensor_motion
         self._slots = slots
@@ -887,13 +1073,54 @@ class SimulatedHouse:
     # thermostat logic
     # ===================================================================================
 
+    def _running_event(self, u: int, m: int) -> _Event | None:
+        """The injected event in effect on unit u at minute m (see ``_Event.priority``)."""
+        best: _Event | None = None
+        for e in self._events[u]:
+            if e.start_m <= m < e.end_m and (best is None or e.priority < best.priority):
+                best = e
+        return best
+
+    def _event_setpoints(self, u: int, e: _Event, program: str) -> tuple[float, float]:
+        """An event's effective (heat, cool): its absolute setpoints, or its offsets applied
+        to the scheduled comfort setting; a side it does not set keeps the schedule. AC off /
+        heat off park that side at the end of ecobee's range; the deadband always holds."""
+        ev = e.ev
+        heat, cool = self._bands[u][program]
+        if ev.is_relative:
+            heat += ev.heat_offset_f or 0.0
+            cool += ev.cool_offset_f or 0.0
+        else:
+            heat = ev.heat_f if ev.heat_f is not None else heat
+            cool = ev.cool_f if ev.cool_f is not None else cool
+        if ev.is_heat_off:
+            heat = ECOBEE_HEAT_RANGE[0]
+        if ev.is_cool_off:
+            cool = ECOBEE_COOL_RANGE[1]
+        heat = min(max(heat, ECOBEE_HEAT_RANGE[0]), ECOBEE_HEAT_RANGE[1])
+        cool = min(max(cool, ECOBEE_COOL_RANGE[0]), ECOBEE_COOL_RANGE[1])
+        if cool - heat < HEAT_COOL_MIN_DELTA_F:
+            sets_cool = ev.is_cool_off or (ev.cool_offset_f if ev.is_relative else ev.cool_f) is not None
+            if sets_cool:
+                heat = cool - HEAT_COOL_MIN_DELTA_F
+            else:
+                cool = heat + HEAT_COOL_MIN_DELTA_F
+        return round(heat, 1), round(cool, 1)
+
     def _resolve(self, u: int, m: int, program: str) -> tuple[float, float, str, str, bool]:
-        """(heat_sp, cool_sp, climate_ref, participating set, smart_away) for unit u at m."""
+        """(heat_sp, cool_sp, climate_ref, participating set, smart_away) for unit u at m.
+        A running event beats a hold, a hold beats the program (climate_ref stays the
+        scheduled one, as ecobee's currentClimateRef does)."""
+        if self._events[u]:
+            event = self._running_event(u, m)
+            if event is not None:
+                heat, cool = self._event_setpoints(u, event, program)
+                return heat, cool, program, "home", False
         hold = self._hold[u]
         if hold is not None and m < hold.end_m:
             return hold.heat_f, hold.cool_f, program, "home", False
         away = False
-        if program == "home":
+        if program == "home" and self._auto_away[u]:
             last = self._home_since[u]
             lm = self._unit_motion[u]
             if lm is not None and lm > last:
@@ -922,6 +1149,8 @@ class SimulatedHouse:
                 self._hold[u] = None
                 self._home_since[u] = m
                 self._rev[u] += 1
+            if self._events[u] or self._event_on[u] is not None:
+                self._track_events(u, m)
             prog = ctx.program[u]
             if prog != self._program[u]:
                 self._program[u] = prog
@@ -995,6 +1224,20 @@ class SimulatedHouse:
         T[UP] = tu + f_up / zu.capacitance * DT_H
         T[BED] = tb + f_bed / zb.capacitance * DT_H
         self._m = m + 1
+
+    def _track_events(self, u: int, m: int) -> None:
+        """Note an event starting or ending at minute m (new revision; after an event the
+        program resumes like after a hold) and forget events that are over."""
+        event = self._running_event(u, m)
+        key = event.ev.link_ref if event is not None else None
+        if key != self._event_on[u]:
+            if key is None:
+                self._home_since[u] = m
+            self._event_on[u] = key
+            self._rev[u] += 1
+        if any(e.end_m <= m for e in self._events[u]):
+            self._events[u] = [e for e in self._events[u] if e.end_m > m]
+            self._rev[u] += 1
 
     def _end_slot(self, record: bool) -> None:
         """Close the slot that just ended at self._m (append its intervals when recording)."""
@@ -1162,7 +1405,39 @@ class SimulatedHouse:
     # snapshots and revisions
     # ===================================================================================
 
+    def _event_hold(self, u: int, e: _Event, program: str) -> HoldInfo:
+        """A running event as ecobee reports it: its type, never ours, the event details, and
+        absolute setpoints only for an absolute event."""
+        ev = e.ev
+        heat, cool = self._event_setpoints(u, e, program)
+        return HoldInfo(
+            kind="temperature",
+            heat_f=None if ev.is_relative else heat,
+            cool_f=None if ev.is_relative else cool,
+            start=ev.start,
+            end=ev.end,
+            hold_type=ev.event_type,
+            set_by_us=False,
+            event_name=ev.name,
+            is_relative=ev.is_relative,
+            heat_offset_f=ev.heat_offset_f,
+            cool_offset_f=ev.cool_offset_f,
+            is_optional=ev.is_optional,
+            link_ref=ev.link_ref,
+        )
+
+    def _listed_events(self, u: int) -> list[ThermostatEvent]:
+        """Events running or ahead now, by start (UnitSnapshot.events)."""
+        assert self._m is not None
+        m = self._m
+        return [e.ev.model_copy(update={"running": e.start_m <= m < e.end_m})
+                for e in sorted(self._events[u], key=lambda e: (e.start_m, e.priority)) if e.end_m > m]
+
     def _hold_info(self, u: int) -> HoldInfo | None:
+        if self._m is not None and self._events[u]:
+            event = self._running_event(u, self._m)
+            if event is not None:
+                return self._event_hold(u, event, self._ensure_ctx().program[u])
         hold = self._hold[u]
         if hold is None or self._m is None or self._m >= hold.end_m:
             return None
@@ -1241,13 +1516,18 @@ class SimulatedHouse:
             sensors=self._readings(u, ctx, ts),
             sensor_sets={name: [SENSOR_KEYS[i] for i in members] for name, members in SENSOR_SETS[u].items()},
             settings={
+                **self._thermostat_settings(u),
                 **SNAPSHOT_SETTINGS,
                 # what the schedule itself would hold now (lets the controller resume early)
                 "program_heat_f": self._bands[u][ctx.program[u]][0],
                 "program_cool_f": self._bands[u][ctx.program[u]][1],
             },
             connected=True,
+            events=self._listed_events(u),
         )
+
+    def _thermostat_settings(self, u: int) -> dict[str, bool]:
+        return {"autoAway": self._auto_away[u], "followMeComfort": self._follow_me[u]}
 
     def _snapshots(self, unit_keys: list[str] | None = None) -> list[UnitSnapshot]:
         keys = UNIT_KEYS if unit_keys is None else [k for k in UNIT_KEYS if k in unit_keys]
@@ -1258,15 +1538,32 @@ class SimulatedHouse:
         heat, cool, climate, _, _ = self._resolve(u, self._m, ctx.program[u])
         hold = self._hold[u]
         hold_end = hold.end_m if hold is not None and self._m < hold.end_m else 0
-        return f"{ctx.slot_m}:{heat:.1f}:{cool:.1f}:{climate}:{hold_end}:{self._rev[u]}"
+        event = self._running_event(u, self._m) if self._events[u] else None
+        on = event.ev.link_ref if event is not None else "-"
+        return f"{ctx.slot_m}:{heat:.1f}:{cool:.1f}:{climate}:{hold_end}:{on}:{self._rev[u]}"
 
     def _brief(self, u: int) -> dict[str, object]:
-        """JSON-safe description of a unit's control state (before / read-back)."""
+        """JSON-safe description of a unit's control state (before / read-back). ``hold`` is
+        what runs on top: a running event (with its type and details) or our hold."""
         assert self._m is not None
         ctx = self._ensure_ctx()
         heat, cool, climate, _, away = self._resolve(u, self._m, ctx.program[u])
         hold = self._hold[u]
         active = hold is not None and self._m < hold.end_m
+        event = self._running_event(u, self._m) if self._events[u] else None
+        top: dict[str, object] | None
+        if event is not None:
+            top = self._event_hold(u, event, ctx.program[u]).model_dump(mode="json")
+        elif active and hold is not None:
+            top = {
+                "heat_f": hold.heat_f,
+                "cool_f": hold.cool_f,
+                "start": _iso(hold.start_m),
+                "end": _iso(hold.end_m),
+                "hold_type": "holdHours",
+            }
+        else:
+            top = None
         return {
             "unit_key": UNIT_KEYS[u],
             "ts": _iso(self._m),
@@ -1274,18 +1571,13 @@ class SimulatedHouse:
             "cool_f": cool,
             "climate_ref": climate,
             "smart_away": away,
-            "hold": (
-                {
-                    "heat_f": hold.heat_f,
-                    "cool_f": hold.cool_f,
-                    "start": _iso(hold.start_m),
-                    "end": _iso(hold.end_m),
-                    "hold_type": "holdHours",
-                }
-                if active and hold is not None
-                else None
-            ),
+            "hold": top,
         }
+
+    def _dr_running(self, u: int) -> bool:
+        assert self._m is not None
+        event = self._running_event(u, self._m)
+        return event is not None and event.ev.event_type == "demandResponse"
 
     # ===================================================================================
     # ThermostatSource
@@ -1345,10 +1637,17 @@ class SimulatedHouse:
         hold = readback["hold"]
         ok = (
             isinstance(hold, dict)
+            and hold.get("hold_type") == "holdHours"
             and hold["heat_f"] == heat
             and hold["cool_f"] == cool
             and hold["end"] == _iso(self._m + 60 * int(req.hours))
         )
+        error = None
+        if not ok:
+            # like ecobee: the hold is stored underneath, but a running event stays on top
+            error = (f"a running {hold['hold_type']} event overrides the hold"
+                     if isinstance(hold, dict) and hold.get("hold_type") != "holdHours"
+                     else "read-back does not match the request")
         self._persist_if_db()
         return WriteResult(
             ok=ok,
@@ -1356,7 +1655,7 @@ class SimulatedHouse:
             before=before,
             request=request,
             readback=readback,
-            error=None if ok else "read-back does not match the request",
+            error=error,
         )
 
     @staticmethod
@@ -1377,7 +1676,9 @@ class SimulatedHouse:
         return None
 
     async def resume_program(self, unit_key: str, reason: str, force: bool = False) -> WriteResult:
-        """Clear any hold so the unit follows its program again; read it back."""
+        """Clear any hold so the unit follows its program again; read it back. Every simulated
+        hold is the controller's, so ``force`` changes nothing. A running event is never
+        cancelled from here (like ecobee: that is ``opt_out_event``'s job)."""
         self._tick()
         request = {"unit_key": unit_key, "action": "resumeProgram", "reason": reason}
         u = UNIT_INDEX.get(unit_key)
@@ -1387,6 +1688,15 @@ class SimulatedHouse:
             )
         assert self._m is not None
         before = self._brief(u)
+        event = self._running_event(u, self._m)
+        if event is not None:
+            return WriteResult(
+                ok=False,
+                channel="simulator",
+                before=before,
+                request=request,
+                error=f"a running {event.ev.event_type} event is in effect; not resuming",
+            )
         if self._hold[u] is not None:
             self._hold[u] = None
             self._home_since[u] = self._m
@@ -1402,6 +1712,117 @@ class SimulatedHouse:
             readback=readback,
             error=None if ok else "hold still present after resume",
         )
+
+    async def opt_out_event(self, unit_key: str, reason: str) -> WriteResult:
+        """Opt out of the running utility event the way ecobee's resumeProgram does: refused
+        (``request['refused']``) unless a demandResponse event is on top, when it is mandatory
+        (``request['mandatory']``) or when it ends within 2 minutes; otherwise the event is
+        removed from this unit (a hold underneath, if any, runs again) and read back."""
+        self._tick()
+        request: dict[str, object] = {"unit_key": unit_key, "action": "resumeProgram", "reason": reason}
+        u = UNIT_INDEX.get(unit_key)
+        if u is None:
+            return WriteResult(
+                ok=False, channel="simulator", request=request, error=f"unknown unit {unit_key!r}"
+            )
+        assert self._m is not None
+        before = {**self._brief(u), "demand_response_running": self._dr_running(u)}
+        event = self._running_event(u, self._m)
+        if event is None or event.ev.event_type != "demandResponse":
+            hold = self._hold[u]
+            on_top = (f"a {event.ev.event_type} event is on top" if event is not None
+                      else "a hold is on top" if hold is not None and self._m < hold.end_m
+                      else "nothing is running")
+            return WriteResult(ok=False, channel="simulator", before=before,
+                               request={**request, "refused": True, "mandatory": False},
+                               error=f"no utility event to opt out of ({on_top}); nothing sent")
+        label = f" {event.ev.name!r}" if event.ev.name else ""
+        request.update(event_name=event.ev.name, link_ref=event.ev.link_ref)
+        if event.ev.is_optional is False:
+            return WriteResult(ok=False, channel="simulator", before=before,
+                               request={**request, "refused": True, "mandatory": True},
+                               error=f"the utility event{label} is mandatory: ecobee does not allow opting "
+                                     f"out of it; nothing sent")
+        if event.end_m - self._m <= OPT_OUT_END_GUARD_MIN:
+            return WriteResult(ok=False, channel="simulator", before=before,
+                               request={**request, "refused": True, "mandatory": False},
+                               error=f"the utility event{label} ends within {OPT_OUT_END_GUARD_MIN} minutes; "
+                                     f"nothing sent")
+        if self._use_db:
+            from sqlalchemy.exc import SQLAlchemyError
+
+            from climate.store.db import session_scope
+
+            try:
+                with session_scope() as s:
+                    remove_sim_events(s, _dt(self._m), [unit_key], link_ref=event.ev.link_ref)
+            except SQLAlchemyError as exc:
+                return WriteResult(ok=False, channel="simulator", before=before, request=request,
+                                   error=f"could not record the opt-out ({type(exc).__name__})")
+        self._events[u] = [e for e in self._events[u] if e.ev.link_ref != event.ev.link_ref]
+        self._event_on[u] = None
+        self._home_since[u] = self._m
+        self._rev[u] += 1
+        running = self._dr_running(u)
+        readback = {**self._brief(u), "demand_response_running": running}
+        self._persist_if_db()
+        return WriteResult(ok=not running, channel="simulator", before=before, request=request,
+                           readback=readback,
+                           error="the utility event is still running after the opt-out" if running else None)
+
+    async def apply_settings(self, unit_key: str, settings: dict[str, bool], reason: str) -> WriteResult:
+        """Set the simulated Smart Away (``autoAway``) and/or Follow Me (``followMeComfort``) on
+        one unit and read them back, like the ecobee adapter (other keys and non-boolean values
+        are refused). Smart Away off stops the unit from floating to its away band."""
+        self._tick()
+        wanted = dict(settings)
+        request: dict[str, object] = {"unit_key": unit_key, "settings": wanted, "reason": reason}
+        u = UNIT_INDEX.get(unit_key)
+        if u is None:
+            return WriteResult(
+                ok=False, channel="simulator", request=request, error=f"unknown unit {unit_key!r}"
+            )
+        bad = sorted(k for k in wanted if k not in DEFAULT_THERMOSTAT_SETTINGS)
+        if not wanted or bad or any(not isinstance(v, bool) for v in wanted.values()):
+            what = f"unsupported setting(s) {', '.join(bad)}" if bad else "no settings" if not wanted else \
+                "values must be true or false"
+            return WriteResult(ok=False, channel="simulator", request=request,
+                               error=f"{what}; only {' and '.join(DEFAULT_THERMOSTAT_SETTINGS)} "
+                                     f"can be written")
+        before = self._thermostat_settings(u)
+        if all(before[k] is v for k, v in wanted.items()):
+            return WriteResult(ok=True, channel="simulator", before=before, request={**request, "noop": True},
+                               readback=dict(before))
+        if "autoAway" in wanted:
+            self._auto_away[u] = wanted["autoAway"]
+        if "followMeComfort" in wanted:
+            self._follow_me[u] = wanted["followMeComfort"]
+        self._rev[u] += 1
+        readback = self._thermostat_settings(u)
+        ok = all(readback[k] is v for k, v in wanted.items())
+        self._persist_if_db()
+        return WriteResult(ok=ok, channel="simulator", before=before, request=request, readback=readback,
+                           error=None if ok else "settings did not read back as requested")
+
+    def inject_event(self, unit_key: str, event: ThermostatEvent) -> ThermostatEvent:
+        """Put a demand-response (or vacation) event on one unit, as a utility would (times
+        UTC). It is listed in ``snapshot.events`` until it starts, is the running top event
+        while start <= now < end, and disappears after its end. A database-backed simulator
+        also stores it in app_settings['sim_events'] (where ``climate sim-event`` puts events),
+        so it survives a restart. Returns the event as stored; ValueError when it cannot run."""
+        u = UNIT_INDEX.get(unit_key)
+        if u is None:
+            raise ValueError(f"unknown unit {unit_key!r}")
+        ev = normalize_event(event)
+        if self._use_db:
+            from climate.store.db import session_scope
+
+            with session_scope() as s:
+                add_sim_event(s, [unit_key], ev, self.now or utcnow())
+        others = [e for e in self._events[u] if e.ev.link_ref != ev.link_ref]
+        self._events[u] = sorted([*others, _Event.of(ev)], key=lambda e: (e.start_m, e.priority))
+        self._rev[u] += 1
+        return ev
 
     async def health(self) -> SourceHealth:
         when = self.now
@@ -1457,6 +1878,8 @@ class SimulatedHouse:
                 self._last_settings_m = now_m
             except SQLAlchemyError as exc:
                 log.warning("simulator: could not read settings (%s)", type(exc).__name__)
+        if force or self._last_events_m != now_m:
+            self._db_load_events(now_m)
         lo = max(self._m if self._m is not None else now_m, now_m - MAX_CATCHUP_MIN - WARMUP_MIN) - 120
         hi = now_m + 120
         stale = self._last_weather_m is None or abs(now_m - self._last_weather_m) >= WEATHER_EVERY_MIN
@@ -1466,6 +1889,28 @@ class SimulatedHouse:
         if force or stale or not covered:
             self._db_load_weather(lo - 60 * 6, hi + 60 * 6)
             self._last_weather_m = now_m
+
+    def _db_load_events(self, now_m: int) -> None:
+        """Re-read app_settings['sim_events'] (events ``climate sim-event`` injected from another
+        process). A unit's list is replaced only when its not-yet-ended events differ."""
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from climate.store.db import session_scope
+
+        try:
+            with session_scope() as s:
+                found = load_sim_events(s)
+        except SQLAlchemyError as exc:
+            log.warning("simulator: could not read injected events (%s)", type(exc).__name__)
+            return
+        self._last_events_m = now_m
+        ref = self._m if self._m is not None else now_m
+        for k, u in UNIT_INDEX.items():
+            new = sorted((_Event.of(e) for e in found.get(k, [])), key=lambda e: (e.start_m, e.priority))
+            live_new = [e for e in new if e.end_m > ref]
+            if live_new != [e for e in self._events[u] if e.end_m > ref]:
+                self._events[u] = live_new
+                self._rev[u] += 1
 
     def _db_load_weather(self, from_m: int, to_m: int) -> None:
         """Load real weather (any source but 'simulator') for [from_m, to_m)."""

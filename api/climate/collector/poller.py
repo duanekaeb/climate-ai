@@ -2,7 +2,9 @@
 
 ecobee: /thermostatSummary every poll_seconds (>= 180); /thermostat detail only for units
 whose revision changed; runtimeReport hourly for the last 2 h and nightly for the last 2 days
-(one request at a time). Simulator: advance, snapshot, runtime every sim_poll_seconds.
+(one request at a time). Simulator: advance, snapshot, runtime every sim_poll_seconds. Fetched
+snapshots also update the utility (demand-response) events they list
+(``climate.utility.events.ingest``).
 
 Failure handling (``record_source_failure`` / ``record_source_success``, also used by the
 worker when building a source fails):
@@ -34,7 +36,7 @@ from climate.sources.base import RuntimeInterval, ThermostatSource, UnitSnapshot
 from climate.store.app_settings import SourceSettings, beat, get_heartbeat, get_setting, put_setting
 from climate.store.db import session_scope
 from climate.store.orm import AppSetting
-from climate.timeutil import floor_slot
+from climate.timeutil import floor_slot, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -156,9 +158,20 @@ def record_source_success(kind: str, now: datetime) -> SourceState:
     return st
 
 
-def _ingest_snapshots_tx(snaps: list[UnitSnapshot]) -> None:
+def _ingest_snapshots_tx(snaps: list[UnitSnapshot], now: datetime | None = None) -> None:
+    """Store live snapshots, then the utility events they list (``climate.utility.events.ingest``,
+    live polls only: backfill's simulated history goes through ``ingest_snapshots`` alone). The
+    events step runs in a savepoint: if it fails, it alone is rolled back and logged, and the
+    poll still counts as a success."""
     with session_scope() as s:
         ingest_snapshots(s, snaps)
+        try:
+            with s.begin_nested():
+                from climate.utility import events as utility_events
+
+                utility_events.ingest(s, snaps, now or utcnow())
+        except Exception as exc:  # noqa: BLE001 - never fails the poll
+            log.warning("utility events ingest failed: %s", safe_error(exc))
 
 
 def _ingest_runtime_tx(intervals: list[RuntimeInterval], source: str) -> int:
@@ -182,7 +195,7 @@ async def poll_once(source: ThermostatSource, now: datetime, last_revisions: dic
         else:
             snaps = list(await source.fetch_snapshots(None))
         if snaps:
-            await asyncio.to_thread(_ingest_snapshots_tx, snaps)
+            await asyncio.to_thread(_ingest_snapshots_tx, snaps, now)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - transient by contract; counted and alerted

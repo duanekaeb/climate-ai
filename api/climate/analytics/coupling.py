@@ -13,6 +13,9 @@ Inference uses OLS with Newey-West (HAC) standard errors, implemented here with 
 hourly and daily residuals are autocorrelated, and ordinary standard errors would overstate
 certainty. Sun, a weaker AC on hot afternoons and Smart Away all peak together, so naive
 comparisons overstate coupling; the controls and placebos are what keep this honest.
+
+Hours and days with a utility event or the pre-cooling before one (``exclusions.event_days``)
+are left out of both: the utility, not the floors, set the thermostats then.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import numpy as np
 from scipy import stats as sstats
 from sqlalchemy.orm import Session
 
+from climate.analytics import exclusions
 from climate.analytics.baseline import expected_covered_seconds, expected_seconds, fit_window
 from climate.analytics.daily import (
     DayRow,
@@ -161,6 +165,7 @@ class _Panel:
     zone: dict[str, np.ndarray]
     cool_mode: dict[str, np.ndarray]
     known_mode: dict[str, np.ndarray]
+    excluded: np.ndarray | None = None  # hours on utility-event / pre-cooling days (left out)
 
 
 def _panel(session: Session, t0: datetime, t1: datetime, tz: str, units: list[str]) -> _Panel:
@@ -195,10 +200,11 @@ def _cooling_hours(p: _Panel, unit: str, source: str) -> np.ndarray:
     """Hours usable for the cooling regression of ``unit`` driven by ``source``."""
     s_u, s_s = p.slots[unit], p.slots[source]
     can_cool = (p.known_mode[unit] == 0) | (p.cool_mode[unit] >= 0.5 * s_u)
-    return (
+    usable = (
         (s_u >= MIN_SLOTS) & (s_s >= MIN_SLOTS) & np.isfinite(p.zone[unit]) & np.isfinite(p.zone[source])
         & np.isfinite(p.outdoor) & (p.heat[unit] == 0) & can_cool
     )
+    return usable if p.excluded is None else usable & ~p.excluded
 
 
 @dataclass
@@ -261,6 +267,14 @@ def coupling(session: Session, days: int = 30) -> Coupling:
     t1 = utcnow().replace(minute=0, second=0, microsecond=0)
     t0 = t1 - timedelta(days=days)
     p = _panel(session, t0, t1, tz, ["main", "up", "bed"])
+    ex = exclusions.event_days(session, local_date(t0, tz), local_date(t1, tz), tz)
+    left: dict[date, str] = {}
+    if ex:
+        ords = np.array([d.toordinal() for d in ex], dtype=np.int64)
+        p.excluded = np.isin(p.local_day, ords)
+        seen = {int(d) for d in np.unique(p.local_day[p.excluded])}
+        left = {d: why for d, why in ex.items() if d.toordinal() in seen}
+    left_note = exclusions.left_out_note(left)
     up, why = _hourly_regression(p, "up", "main")
     bed, why_bed = _hourly_regression(p, "bed", "main")
 
@@ -284,7 +298,7 @@ def coupling(session: Session, days: int = 30) -> Coupling:
     if up is None:
         return Coupling(days=days, n_hours=int(m_pts.sum()), points=points, coef_min_per_degf=None, ci90=None,
                         placebo_coef=None, placebo_ci90=None,
-                        interpretation=f"Not enough data to measure floor coupling over {days} days: {why}.")
+                        interpretation=f"Not enough data to measure floor coupling over {days} days: {why}." + left_note)
     text = (f"Each 1°F the main floor sits above the upstairs adds about {up.coef:.2f} min of upstairs cooling per "
             f"hour (90% interval {up.low:.2f} to {up.high:.2f}), after outdoor heat"
             f"{', sun' if up.used_sun else ''} and time of day.")
@@ -306,7 +320,7 @@ def coupling(session: Session, days: int = 30) -> Coupling:
         ci90=(round(up.low, 3), round(up.high, 3)),
         placebo_coef=None if bed is None else round(bed.coef, 3),
         placebo_ci90=None if bed is None else (round(bed.low, 3), round(bed.high, 3)),
-        interpretation=text,
+        interpretation=text + left_note,
     )
 
 
@@ -375,10 +389,13 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
             float_f[int(d)] = float(over[hot].mean()) if hot.any() else 0.0
 
     rows = daily_rows(session, start, end, tz, ["up", "bed"])
-    fits = fit_window(session, start, end, tz, rows=rows)
+    ex = exclusions.event_days(session, start, end, tz)
+    fits = fit_window(session, start, end, tz, rows=rows, excluded=ex)
+    left = {r.day: ex[r.day] for r in rows if r.day in ex}
+    left_note = exclusions.left_out_note(left)
     by: dict[str, dict[int, DayRow]] = {"up": {}, "bed": {}}
     for r in rows:
-        if r.unit_key in by and is_complete(r):
+        if r.unit_key in by and is_complete(r) and r.day not in ex:
             by[r.unit_key][r.day.toordinal()] = r
 
     def residuals(unit: str) -> dict[int, float]:
@@ -410,7 +427,7 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
 
     def empty(note: str) -> NaturalExperiments:
         return NaturalExperiments(days=days, events=events_out, estimate_min_per_event=None, ci90=None,
-                                  placebo_estimate=None, bed_wing_estimate=None, note=note)
+                                  placebo_estimate=None, bed_wing_estimate=None, note=note + left_note)
 
     if fit_up is None:
         return empty(f"No upstairs cooling baseline can be fitted on these {days} days yet, so there is nothing to "
@@ -471,5 +488,5 @@ def natural_experiments(session: Session, days: int = 90) -> NaturalExperiments:
         placebo_ci90=None if placebo is None else (round(placebo[1], 1), round(placebo[2], 1)),
         bed_wing_estimate=None if bed is None else round(bed[0], 1),
         bed_wing_ci90=None if bed is None else (round(bed[1], 1), round(bed[2], 1)),
-        controls_ok=controls_ok, note=note,
+        controls_ok=controls_ok, note=note + left_note,
     )

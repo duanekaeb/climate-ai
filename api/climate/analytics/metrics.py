@@ -12,6 +12,7 @@ import numpy as np
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from climate.analytics import exclusions
 from climate.analytics.baseline import (
     MODES,
     BaselineFit,
@@ -294,7 +295,8 @@ def drift(session: Session, recent_days: int = 7) -> DriftReport:
     exists the active fit is used and the note says so. Only unit/modes in use during the
     window are checked, and only with a baseline that passes its checks and a mode that ran
     on enough training and recent days (``drift_check``, which also defines z); the note
-    names everything skipped and why."""
+    names everything skipped and why. Days with a utility event or the pre-cooling before one
+    are left out of the window (and of the baseline's training days), and the note counts them."""
     tz = house_tz(session)
     end = local_date(utcnow(), tz) - timedelta(days=1)
     start = end - timedelta(days=recent_days - 1)
@@ -303,6 +305,9 @@ def drift(session: Session, recent_days: int = 7) -> DriftReport:
         return DriftReport(units=[], note="No active baselines yet, so there is nothing to check for drift.")
     pre = pre_period_fits(session, start, tz)
     rows = daily_rows(session, start, end, tz)
+    ex = exclusions.event_days(session, start, end, tz)
+    left = {r.day: ex[r.day] for r in rows if r.day in ex}
+    rows = [r for r in rows if r.day not in ex]
     fits: dict[tuple[str, str], BaselineFit] = {k: pre.get(k) or v for k, v in active.items()}
     in_sample = sorted(k for k in active if k not in pre)
     in_use = involved_modes(rows, fits)
@@ -333,6 +338,7 @@ def drift(session: Session, recent_days: int = 7) -> DriftReport:
     if in_sample:
         note += (" No baseline from before the window for " + ", ".join(f"{u} {m}" for u, m in in_sample)
                  + "; the active fit was used, which has already seen these days.")
+    note += exclusions.left_out_note(left)
     return DriftReport(units=units, note=note)
 
 

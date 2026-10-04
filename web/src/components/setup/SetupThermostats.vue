@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Which ecobee thermostat is which of our three units.
+// Which ecobee thermostat is which of our three units, and whether each is enrolled in a
+// utility energy-saving program (demand response) and accepts its events.
 import { computed, ref } from 'vue'
 import type { EcobeeThermostatOut, UnitOut } from '@/api/types'
 import Card from '@/components/Card.vue'
@@ -14,6 +15,27 @@ const busyId = ref<string | null>(null)
 const errors = ref<Record<string, string>>({})
 
 const unitName = (key: string | null) => props.units.find((u) => u.key === key)?.name ?? key ?? ''
+
+/** Utility enrollment as ecobee reports it (includeUtility, or a utility event seen). */
+function enrollment(t: EcobeeThermostatOut): { text: string; on: boolean } {
+  if (t.utility?.name) return { text: `Enrolled with ${t.utility.name}`, on: true }
+  if (t.enrolled) return { text: 'Enrolled in a utility program', on: true }
+  return { text: 'No utility program found', on: false }
+}
+
+// ecobee's drAccept setting, in plain words.
+const DR_ACCEPT: Record<string, string> = {
+  always: 'accepts events',
+  never: 'declines events',
+  askMe: 'asks you about each event',
+  customerSelect: 'you choose for each event',
+  defaultAccept: 'accepts events unless you decline',
+  defaultDecline: 'declines events unless you accept',
+}
+function drAccept(t: EcobeeThermostatOut): string | null {
+  if (!t.dr_accept) return null
+  return DR_ACCEPT[t.dr_accept] ?? t.dr_accept
+}
 const duplicates = computed(() => {
   const seen = new Map<string, number>()
   for (const t of props.thermostats) if (t.unit_key) seen.set(t.unit_key, (seen.get(t.unit_key) ?? 0) + 1)
@@ -45,6 +67,10 @@ async function map(t: EcobeeThermostatOut, value: string) {
           <p class="text-xs break-all text-muted">
             {{ t.model_number ?? 'ecobee' }} · <span class="font-mono">{{ t.identifier }}</span> ·
             {{ t.sensors.length }} sensor{{ t.sensors.length === 1 ? '' : 's' }} · seen {{ timeAgo(t.last_seen_at) }}
+          </p>
+          <p class="mt-1 text-xs">
+            <span :class="enrollment(t).on ? 'font-medium' : 'text-muted'">{{ enrollment(t).text }}</span>
+            <span v-if="drAccept(t)" class="text-muted"> · utility events: {{ drAccept(t) }}</span>
           </p>
           <p v-if="t.unit_key && duplicates.has(t.unit_key)" class="mt-1 text-xs text-warn">
             Another thermostat is also mapped to {{ unitName(t.unit_key) }}.

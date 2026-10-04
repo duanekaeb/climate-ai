@@ -1,4 +1,5 @@
-"""/status assembly and degradation, plus room history, runtime and weather readers."""
+"""/status assembly and degradation (including the unit cards' hold labels, person holds,
+resume back-offs and utility events), plus room history, runtime and weather readers."""
 
 from __future__ import annotations
 
@@ -9,12 +10,13 @@ from sqlalchemy import select
 
 from climate import state
 from climate.analytics import baseline, daily, metrics
+from climate.api.labels import when
 from climate.api.schemas import OPEN_METEO_ATTRIBUTION, PlanRow
 from climate.control import controller
 from climate.control.guardrails import GuardResult
-from climate.control.policy import HouseState, PolicyParams, RoomStatus, UnitStatus, UnitTarget
+from climate.control.policy import HouseState, PersonHold, PolicyParams, RoomStatus, UnitStatus, UnitTarget
 from climate.house import ROOMS
-from climate.sources.base import UnitSnapshot
+from climate.sources.base import HoldInfo, ThermostatEvent, UnitSnapshot
 from climate.store.app_settings import (
     ControlSettings,
     Heartbeat,
@@ -23,7 +25,15 @@ from climate.store.app_settings import (
     put_setting,
 )
 from climate.store.db import session_scope
-from climate.store.orm import Alert, HomekitDevice, LiveSensor, LiveUnit, RoomStateRow, WeatherHour
+from climate.store.orm import (
+    Alert,
+    HomekitDevice,
+    LiveSensor,
+    LiveUnit,
+    RoomStateRow,
+    UtilityEvent,
+    WeatherHour,
+)
 from climate.timeutil import day_bounds_utc, local_date, utcnow
 from tests.factories import make_history
 
@@ -107,6 +117,98 @@ def test_status_uses_the_services(owner, monkeypatch):
     assert body["units"][0]["target"] is None
     assert [r["room_key"] for r in body["rooms"]] == [r.key for r in ROOMS]  # house order
     assert body["house_empty_reason"] == "Someone is home."
+
+
+def _event_row(s, unit_key: str, status: str, start, end, **kw) -> int:
+    row = UtilityEvent(unit_key=unit_key, event_key=kw.pop("event_key", f"link:{unit_key}"), event_type="demandResponse",
+                       name="Peak saver", status=status, start_at=start, end_at=end, first_seen_at=start - timedelta(hours=6),
+                       last_seen_at=start, is_relative=True, cool_offset_f=2.0, is_optional=True, **kw)
+    s.add(row)
+    s.flush()
+    return row.id
+
+
+def test_status_unit_cards_say_whose_hold_runs(owner, monkeypatch):
+    now = utcnow()
+    tz = "America/Chicago"
+    since, until = now - timedelta(minutes=40), now + timedelta(minutes=50)
+    vacation = ThermostatEvent(event_type="vacation", name="Trip", start=now + timedelta(days=2),
+                               end=now + timedelta(days=5))
+    dr_now = ThermostatEvent(event_type="demandResponse", name="Peak saver", running=True,
+                             start=now - timedelta(minutes=30), end=now + timedelta(hours=2), is_relative=True,
+                             cool_offset_f=2.0, link_ref="bed")
+    past = ThermostatEvent(event_type="vacation", start=now - timedelta(days=3), end=now - timedelta(days=1))
+
+    def snap(unit_key: str, hold: HoldInfo | None = None, events=()) -> UnitSnapshot:
+        return UnitSnapshot(unit_key=unit_key, ts=now, source="ecobee", hvac_mode="cool", heat_sp_f=68, cool_sp_f=75,
+                            hold=hold, events=list(events))
+
+    person = PersonHold(since=since, first_seen=since, by="thermostat", hold_type="holdHours", until=until,
+                        heat_f=68, cool_f=74, detection_id=12)
+    units = {
+        "up": UnitStatus(unit_key="up", name="Upstairs",
+                         snapshot=snap("up", HoldInfo(heat_f=68, cool_f=74, start=since, end=until, hold_type="holdHours")),
+                         person_hold=person, resume_backoff_until=now - timedelta(minutes=1)),
+        "main": UnitStatus(unit_key="main", name="Main floor", snapshot=snap("main", None, [past]),
+                           resume_backoff_until=now + timedelta(hours=2), resume_seen_at=now - timedelta(hours=2)),
+        "bed": UnitStatus(unit_key="bed", name="Bed / Office wing",
+                          snapshot=snap("bed", HoldInfo(hold_type="demandResponse", start=dr_now.start, end=dr_now.end,
+                                                        is_relative=True, cool_offset_f=2.0, link_ref="bed"),
+                                        [dr_now, vacation])),
+    }
+    hs = _house_state(now)
+    hs.units = units
+    monkeypatch.setattr(state, "load_house_state", lambda session, now=None: hs)
+    monkeypatch.setattr(controller, "current_plan", lambda session, now=None: [])
+    with session_scope() as s:
+        skipped = _event_row(s, "up", "opted_out", now - timedelta(hours=1), now + timedelta(hours=2), skip="done",
+                             skip_by="owner", ended_at=now - timedelta(minutes=20), skip_done_at=now - timedelta(minutes=20))
+        _event_row(s, "up", "ended", now - timedelta(days=1), now - timedelta(hours=20), event_key="link:old",
+                   ended_at=now - timedelta(hours=20))  # over long ago: not on the card
+        tomorrow = _event_row(s, "main", "announced", now + timedelta(days=1), now + timedelta(days=1, hours=3))
+        _event_row(s, "main", "announced", now + timedelta(days=2), now + timedelta(days=2, hours=3),
+                   event_key="link:later")  # announced too, but not the next one
+        running = _event_row(s, "bed", "running", now - timedelta(minutes=30), now + timedelta(hours=2),
+                             started_at=now - timedelta(minutes=30))
+    body = owner.get("/api/status").json()
+    cards = {u["unit_key"]: u for u in body["units"]}
+
+    up = cards["up"]
+    assert up["hold_owner"] == "person"
+    assert up["hold_label"] == f"On your hold since {when(since, tz, now)}, until {when(until, tz, now)}"
+    assert up["person_hold"]["detection_id"] == 12 and up["person_hold"]["by"] == "thermostat"
+    assert up["resume_backoff_until"] is None  # already over
+    assert up["utility_event"]["id"] == skipped and up["utility_event"]["status"] == "opted_out"
+    assert up["utility_event"]["skip"] == "done" and up["utility_event"]["can_skip"] is False
+
+    main = cards["main"]
+    assert (main["hold_owner"], main["hold_label"], main["person_hold"]) == (None, None, None)
+    assert main["resume_backoff_until"] is not None
+    assert main["utility_event"]["id"] == tomorrow and main["utility_event"]["status"] == "announced"
+    assert main["utility_event"]["unit_name"] == "Main floor" and main["utility_event"]["can_skip"] is True
+    assert main["upcoming_events"] == []  # the past vacation is not ahead
+
+    bed = cards["bed"]
+    assert bed["hold_owner"] == "utility"
+    assert bed["hold_label"] == f"Utility event until {when(dr_now.end, tz, now)} (cooling +2°F)"
+    assert bed["utility_event"]["id"] == running and bed["utility_event"]["change_label"] == "cooling +2°F"
+    assert [e["event_type"] for e in bed["upcoming_events"]] == ["vacation"]
+
+
+def test_status_labels_degrade_with_the_state_service(owner, broken_services):
+    now = utcnow()
+    hold = HoldInfo(heat_f=68, cool_f=74, start=now - timedelta(minutes=5), end=now + timedelta(hours=1),
+                    hold_type="holdHours", set_by_us=False)
+    with session_scope() as s:
+        s.add(LiveUnit(unit_key="up", ts=now, source="ecobee", snapshot=_snapshot("up", hold=hold.model_dump(mode="json"))))
+        _event_row(s, "main", "running", now - timedelta(minutes=10), now + timedelta(hours=1))
+    body = owner.get("/api/status").json()
+    cards = {u["unit_key"]: u for u in body["units"]}
+    assert cards["up"]["hold_owner"] == "person"  # not known to be ours: the cautious reading
+    assert cards["up"]["person_hold"] is None
+    assert cards["main"]["utility_event"]["status"] == "running"
+    assert cards["main"]["hold_owner"] == "utility"  # no snapshot for main: the event's own window says so
+    assert cards["bed"]["utility_event"] is None
 
 
 def test_status_parts_from_heartbeats_weather_and_alerts(owner, broken_services):

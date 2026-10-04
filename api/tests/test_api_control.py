@@ -1,5 +1,7 @@
-"""Control routes: settings validation, mode, owner holds (validated, queued), presence, the
-action log, and the change gates' permission mapping (control.changes is monkeypatched)."""
+"""Control routes: settings validation (including utility events and the renamed resume
+back-off), mode, owner holds (validated against the hard envelope only, queued), "Resume
+schedule" and "Back to automatic", presence, the action log, and the change gates' permission
+mapping (control.changes is monkeypatched)."""
 
 from __future__ import annotations
 
@@ -13,9 +15,11 @@ from climate.api.schemas import PlanRow
 from climate.control import changes, controller
 from climate.control.guardrails import GuardResult
 from climate.control.policy import UnitTarget
-from climate.store.app_settings import SourceSettings, put_setting
+from climate.sources.base import UnitSnapshot
+from climate.store.app_settings import ControlSettings, SourceSettings, get_setting, put_setting
 from climate.store.db import session_scope
-from climate.store.orm import Change, ControlAction
+from climate.store.orm import Change, ControlAction, LiveUnit
+from climate.timeutil import utcnow
 
 
 def _messages(r) -> str:
@@ -87,6 +91,49 @@ def test_put_settings_rejects_bad_location_and_rooms(owner):
     assert ok.status_code == 200 and ok.json()["location"]["lat"] == 41.9
 
 
+def test_utility_event_settings_round_trip(owner, agent):
+    body = _settings(agent)
+    assert body["utility_events"]["alerts"] is True and body["utility_events"]["precondition"] is False
+    ue = dict(body["utility_events"], auto_skip=True, skip_above_f=79.5, precondition=True,
+              precondition_degrees_f=1.5, precondition_end_gap_min=15)
+    r = owner.put("/api/control/settings", json={"utility_events": ue})
+    assert r.status_code == 200, r.text
+    saved = _settings(owner)["utility_events"]
+    assert (saved["auto_skip"], saved["skip_above_f"], saved["precondition_degrees_f"], saved["precondition_end_gap_min"]) \
+        == (True, 79.5, 1.5, 15)
+    assert _settings(owner)["control"] == body["control"]  # other sections untouched
+    for bad in ({"precondition_degrees_f": 5}, {"precondition_end_gap_min": 5}, {"skip_above_f": 60}):
+        r = owner.put("/api/control/settings", json={"utility_events": dict(ue, **bad)})
+        assert r.status_code == 422, bad
+    assert _settings(owner)["utility_events"] == saved  # nothing saved
+
+
+def test_resume_backoff_and_reminder_settings(owner):
+    control = _settings(owner)["control"]
+    assert control["resume_backoff_hours"] == 4.0 and control["manual_hold_reminder_hours"] == 0.0
+    assert "manual_backoff_hours" not in control
+    r = owner.put("/api/control/settings", json={"control": dict(control, resume_backoff_hours=2.5,
+                                                                 manual_hold_reminder_hours=3)})
+    assert r.status_code == 200, r.text
+    assert (r.json()["control"]["resume_backoff_hours"], r.json()["control"]["manual_hold_reminder_hours"]) == (2.5, 3)
+    assert owner.put("/api/control/settings", json={"control": dict(control, resume_backoff_hours=30)}).status_code == 422
+
+
+def test_settings_accept_the_old_backoff_name(owner):
+    control = _settings(owner)["control"]
+    legacy = {k: v for k, v in control.items() if k != "resume_backoff_hours"}
+    r = owner.put("/api/control/settings", json={"control": dict(legacy, manual_backoff_hours=6)})
+    assert r.status_code == 200, r.text
+    assert r.json()["control"]["resume_backoff_hours"] == 6.0
+    # an old web bundle spreads what it read (the new name) and sets the old one: the old one is the edit
+    r = owner.put("/api/control/settings", json={"control": dict(control, manual_backoff_hours=1.5)})
+    assert r.status_code == 200, r.text
+    assert r.json()["control"]["resume_backoff_hours"] == 1.5
+    with session_scope() as s:
+        assert get_setting(s, "control", ControlSettings).resume_backoff_hours == 1.5
+    assert owner.put("/api/control/settings", json={"control": dict(legacy, manual_backoff_hours=99)}).status_code == 422
+
+
 def test_mode_switch(owner):
     r = owner.post("/api/control/mode", json={"mode": "act"})
     assert r.status_code == 200
@@ -151,6 +198,58 @@ def test_manual_hold_is_queued_on_the_current_source(owner):
     assert [x["action"] for x in log] == ["resume_program", "set_hold"]
     assert [x["unit_key"] for x in owner.get("/api/control/actions", params={"unit_key": "up"}).json()] == ["up"]
     assert owner.get("/api/control/actions", params={"unit_key": "attic"}).status_code == 404
+
+
+def _live(unit_key: str, **kw) -> None:
+    snap = UnitSnapshot(unit_key=unit_key, ts=utcnow(), source="ecobee", hvac_mode="cool", heat_sp_f=68, cool_sp_f=72, **kw)
+    with session_scope() as s:
+        s.add(LiveUnit(unit_key=unit_key, ts=snap.ts, source="ecobee", snapshot=snap.model_dump(mode="json")))
+
+
+def test_manual_hold_gets_what_was_typed_without_a_step_limit(owner):
+    _live("up")  # currently cooling to 72°F; the owner wants 80°F (8°F more than max_step_f)
+    r = owner.post("/api/control/hold", json={"unit_key": "up", "heat_f": 62, "cool_f": 80})
+    assert r.status_code == 200, r.text
+    assert (r.json()["request"]["heat_f"], r.json()["request"]["cool_f"]) == (62.0, 80.0)
+
+
+def test_manual_hold_respects_the_thermostats_own_minimum_gap(owner):
+    _live("main", settings={"heatCoolMinDelta": 50})  # ecobee reports tenths: 5°F
+    r = owner.post("/api/control/hold", json={"unit_key": "main", "heat_f": 70, "cool_f": 74})
+    assert r.status_code == 422 and "at least 5°F below cool (the thermostat's own minimum gap)" in _messages(r)
+    assert owner.post("/api/control/hold", json={"unit_key": "main", "heat_f": 69, "cool_f": 74}).status_code == 200
+    # without a reported setting the hard limits' deadband (3°F) is the rule
+    assert owner.post("/api/control/hold", json={"unit_key": "bed", "heat_f": 70, "cool_f": 74}).status_code == 200
+
+
+def test_resume_schedule_and_back_to_automatic(owner, agent):
+    r = owner.post("/api/control/resume", json={"unit_key": "up"})
+    assert r.status_code == 200, r.text
+    a = r.json()
+    assert (a["action"], a["status"], a["actor"], a["request"]["kind"]) == ("resume_program", "queued", "owner",
+                                                                            "resume_schedule")
+    assert a["reason"] == "Owner: resume schedule (the ecobee schedule runs; the controller waits 4 h)"
+    assert a["request"]["unit_key"] == "up" and a["request"]["reason"] == a["reason"]
+
+    with session_scope() as s:
+        put_setting(s, "control", ControlSettings(resume_backoff_hours=1.5))
+    assert "waits 1.5 h" in owner.post("/api/control/resume", json={"unit_key": "up"}).json()["reason"]
+    with session_scope() as s:
+        put_setting(s, "control", ControlSettings(resume_backoff_hours=0))
+    assert "steers again at once" in owner.post("/api/control/resume", json={"unit_key": "up"}).json()["reason"]
+
+    r = owner.post("/api/control/automatic", json={"unit_key": "main"})
+    assert r.status_code == 200, r.text
+    a = r.json()
+    assert (a["action"], a["status"], a["request"]["kind"]) == ("resume_program", "queued", "automatic")
+    assert a["reason"] == "Owner: back to automatic (the controller steers again now)"
+
+    assert owner.post("/api/control/automatic", json={"unit_key": "attic"}).status_code == 404
+    assert agent.post("/api/control/automatic", json={"unit_key": "main"}).status_code == 403
+    assert agent.post("/api/control/resume", json={"unit_key": "main"}).status_code == 403
+    with session_scope() as s:
+        kinds = [r.request["kind"] for r in s.execute(select(ControlAction).order_by(ControlAction.id)).scalars()]
+    assert kinds == ["resume_schedule", "resume_schedule", "resume_schedule", "automatic"]
 
 
 def test_presence(owner):

@@ -142,6 +142,7 @@ def test_settings_and_outdoor():
     s = P.curated_settings(t["settings"])
     assert s["autoAway"] is True and s["followMeComfort"] is False
     assert s["heatCoolMinDelta"] == 4.0 and s["coolRangeLow"] == 65.0
+    assert s["drAccept"] == "customerSelect"  # utility-event enrollment choice, for Setup
     assert P.outdoor_now(t["weather"]) == (84.2, 40.0)
     assert P.outdoor_now({"forecasts": [{"temperature": -5002}]}) == (None, None)
 
@@ -184,7 +185,7 @@ def test_event_overrides_keep_their_type_and_are_never_ours():
     off = P.thermostat_utc_offset(hall)
     ev = P.running_override(hall["events"])
     ours = {"heat_f": 68.0, "cool_f": 75.0, "end": "2026-10-04T21:00:00+00:00"}  # same setpoints and end
-    assert P.EVENT_HOLD_TYPES == ("vacation", "autoAway", "autoHome", "quickSave", "demandResponse")
+    assert set(P.EVENT_HOLD_TYPES) == {"vacation", "autoAway", "autoHome", "quickSave", "demandResponse"}
     for etype in P.EVENT_HOLD_TYPES:
         event = dict(ev, type=etype, holdClimateRef="away" if etype == "autoAway" else "")
         assert P.running_override([event]) is event

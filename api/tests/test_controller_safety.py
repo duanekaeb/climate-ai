@@ -83,16 +83,19 @@ async def test_resume_at_thermostat_backs_off_instead_of_rewriting(db):
     await controller.tick(src, NOW)
     assert src.holds == []
     (row,) = actions(db, unit_key="up", status="skipped")
-    assert row.reason == "Someone resumed the schedule at the upstairs thermostat; backing off until 6:00 PM."
+    assert row.reason == "Someone pressed Resume at the upstairs thermostat; following the ecobee schedule until 6:00 PM."
     assert row.request["kind"] == RESUME_KIND and row.rule == "hold_off"
-    assert load_house_state(db, NOW + timedelta(minutes=1)).units["up"].manual_override_until == NOW + timedelta(hours=4)
+    unit = load_house_state(db, NOW + timedelta(minutes=1)).units["up"]
+    assert (unit.resume_backoff_until, unit.resume_seen_at, unit.person_hold) == (NOW + timedelta(hours=4), NOW, None)
 
-    later = NOW + timedelta(minutes=6)  # logged once, the back-off keeps its first-seen start
-    put_snapshot(db, "up", later - timedelta(minutes=1), heat=67.0, cool=78.0)
-    refresh_sensors(db, later)
-    await controller.tick(src, later)
-    assert src.holds == [] and len(actions(db, unit_key="up", status="skipped")) == 1
-    assert load_house_state(db, later).units["up"].manual_override_until == NOW + timedelta(hours=4)
+    # logged once; the back-off keeps its first-seen start and its full length, also after
+    # our old hold would have ended (NOW + 60 min) (bug 1)
+    for later in (NOW + timedelta(minutes=6), NOW + timedelta(minutes=90)):
+        put_snapshot(db, "up", later - timedelta(minutes=1), heat=67.0, cool=78.0)
+        refresh_sensors(db, later)
+        await controller.tick(src, later)
+        assert src.holds == [] and len(actions(db, unit_key="up", status="skipped")) == 1
+        assert load_house_state(db, later).units["up"].resume_backoff_until == NOW + timedelta(hours=4)
 
     after = NOW + timedelta(hours=4, minutes=5)  # back-off over (and our old hold long gone)
     put_snapshot(db, "up", after - timedelta(minutes=1), heat=67.0, cool=78.0)
@@ -120,7 +123,7 @@ def test_resume_detection_needs_a_snapshot_newer_than_the_write(db):
     our_hold(db, "bed", NOW - timedelta(minutes=30), 68.0, 76.0)
     db.commit()
     units = load_house_state(db, NOW).units
-    assert all(units[k].manual_override_until is None for k in ("up", "main", "bed"))
+    assert all(units[k].resume_backoff_until is None and units[k].person_hold is None for k in ("up", "main", "bed"))
 
 
 # ---------------------------------------------------------------------------------------
@@ -128,7 +131,7 @@ def test_resume_detection_needs_a_snapshot_newer_than_the_write(db):
 # ---------------------------------------------------------------------------------------
 
 
-async def test_refused_resume_is_skipped_and_starts_the_backoff(db):
+async def test_refused_resume_is_skipped_and_becomes_a_persons_hold(db):
     setup_house(db, act_units=["up"])
     our_hold(db, "up", NOW - timedelta(hours=1), 67.0, 76.0)
     put_snapshot(db, "up", NOW - timedelta(minutes=1), heat=67.0, cool=76.0,
@@ -141,11 +144,14 @@ async def test_refused_resume_is_skipped_and_starts_the_backoff(db):
     assert src.resumes == ["up"] and src.forced == [False]  # the controller never forces
     (row,) = actions(db, unit_key="up", action="resume_program")
     assert row.status == "skipped" and row.rule == "hold_off"
-    assert "not written by the controller" in row.reason and "backing off until 6:00 PM" in row.reason
+    assert row.reason == ("The upstairs thermostat's hold was not written by the controller, so it was left alone; "
+                          "the controller waits until it ends.")
     assert row.request["kind"] == MANUAL_KIND and row.request["refused"] is True
     assert (row.request["heat_f"], row.request["cool_f"]) == (67.0, 76.0)
     state = load_house_state(db, NOW + timedelta(minutes=1))
-    assert state.units["up"].manual_override_until == NOW + timedelta(hours=4)
+    ph = state.units["up"].person_hold
+    assert ph is not None and ph.detection_id == row.id and ph.until == NOW + timedelta(hours=1)
+    assert state.units["up"].resume_backoff_until is None
     assert state.units["up"].snapshot.hold.set_by_us is False
 
     later = NOW + timedelta(minutes=5)
@@ -169,7 +175,7 @@ async def test_smart_away_is_not_a_manual_change_and_is_overridden(db):
                  hold=HoldInfo(kind="climate", climate_ref="away", hold_type="autoAway",
                                start=NOW - timedelta(minutes=5)))
     db.commit()
-    assert load_house_state(db, NOW).units["main"].manual_override_until is None
+    assert load_house_state(db, NOW).units["main"].person_hold is None
     src = FakeSource()
     await controller.tick(src, NOW)
     assert actions(db, status="skipped") == []
@@ -199,7 +205,7 @@ async def test_vacation_and_demand_response_are_never_overridden(db, event, word
                          action="set_hold", status="queued", rule="manual", reason="Owner hold",
                          request={"unit_key": "up", "heat_f": 68.0, "cool_f": 77.0, "hours": 2}))
     db.commit()
-    assert load_house_state(db, NOW).units["up"].manual_override_until is None
+    assert load_house_state(db, NOW).units["up"].person_hold is None
     by = {r.target.unit_key: r for r in controller.current_plan(db, NOW)}
     assert words in by["up"].guard.blocked_reason and not by["up"].would_write
     src = FakeSource()
@@ -209,6 +215,7 @@ async def test_vacation_and_demand_response_are_never_overridden(db, event, word
     assert actions(db, status="skipped") == []
     owner = actions(db, actor="owner")[0]
     assert owner.status == "failed" and words in owner.error
+    assert ("Skip the event first." in owner.error) == (event == "demandResponse")
 
 
 async def test_quick_save_is_a_person(db):
@@ -220,7 +227,7 @@ async def test_quick_save_is_a_person(db):
     await controller.tick(src, NOW)
     assert src.holds == []
     (row,) = actions(db, unit_key="up", status="skipped")
-    assert "by hand" in row.reason
+    assert row.reason.startswith("Someone pressed Quick Save on the upstairs thermostat (66–80°F, until you change it)")
 
 
 # ---------------------------------------------------------------------------------------
@@ -236,7 +243,7 @@ async def test_failed_readback_that_landed_is_ours_not_manual(db):
                                end=NOW + timedelta(minutes=117)))
     db.commit()
     state = load_house_state(db, NOW)
-    assert state.units["up"].manual_override_until is None and state.units["up"].snapshot.hold.set_by_us
+    assert state.units["up"].person_hold is None and state.units["up"].snapshot.hold.set_by_us
     src = FakeSource()
     await controller.tick(src, NOW)
     assert actions(db, status="skipped") == [] and src.holds == []
@@ -250,7 +257,7 @@ async def test_same_setpoints_but_a_permanent_hold_is_still_manual(db):
     db.commit()
     await controller.tick(FakeSource(), NOW)
     (row,) = actions(db, unit_key="up", status="skipped")
-    assert "by hand" in row.reason
+    assert row.reason.startswith("Someone set a hold on the upstairs thermostat (68–77°F, until you change it)")
 
 
 # ---------------------------------------------------------------------------------------
@@ -397,11 +404,11 @@ async def test_owner_actions_fail_while_the_controller_is_off(db):
 
 async def test_owner_resume_forces_and_owner_hold_obeys_the_hard_limits(db):
     setup_house(db, mode="suggest")
-    put_snapshot(db, "up", NOW - timedelta(minutes=1), heat=50.0, cool=78.0)  # far below the 60°F minimum
+    put_snapshot(db, "up", NOW - timedelta(minutes=1), heat=66.0, cool=78.0)
     db.add_all([
         ControlAction(ts=NOW - timedelta(minutes=1), unit_key="up", actor="owner", mode="act", channel="simulator",
                       action="set_hold", status="queued", rule="manual", reason="Owner hold",
-                      request={"unit_key": "up", "heat_f": 68.0, "cool_f": 78.0, "hours": 1}),
+                      request={"unit_key": "up", "heat_f": 55.0, "cool_f": 78.0, "hours": 1}),
         ControlAction(ts=NOW - timedelta(minutes=1), unit_key="bed", actor="owner", mode="act", channel="simulator",
                       action="resume_program", status="queued", rule="manual", reason="Owner resume",
                       request={"unit_key": "bed"}),
@@ -409,7 +416,7 @@ async def test_owner_resume_forces_and_owner_hold_obeys_the_hard_limits(db):
     db.commit()
     src = FakeSource()
     await controller.execute_queued(src, NOW)
-    assert [h.heat_f for h in src.holds] == [60.0]  # the hard minimum, not the 52°F step
+    assert [h.heat_f for h in src.holds] == [60.0]  # typed 55°F: the hard minimum still wins
     assert src.resumes == ["bed"] and src.forced == [True]
 
 

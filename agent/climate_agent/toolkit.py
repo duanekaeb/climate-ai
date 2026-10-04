@@ -335,12 +335,10 @@ class Toolkit:
                 f"{w.get('attribution') or OPEN_METEO_ATTRIBUTION}"
             )
         lines.append("Units:")
+        events: dict[str, tuple[dict[str, Any], list[str]]] = {}
+        ahead: list[str] = []
         for u in s.get("units") or []:
-            hold = u.get("hold")
-            hold_txt = ""
-            if hold:
-                end = await self.local(hold.get("end"), "%H:%M") if hold.get("end") else "no end"
-                hold_txt = f", hold {temp(hold.get('heat_f'), 1)}/{temp(hold.get('cool_f'), 1)} until {end}{' (ours)' if hold.get('set_by_us') else ' (NOT ours)'}"
+            hold_txt = await self._hold_text(u)
             tgt = u.get("target")
             tgt_txt = ""
             if tgt:
@@ -351,6 +349,19 @@ class Toolkit:
                 f"{hold_txt}; today {minutes(u.get('today_runtime_min'))}, duty last hour {pct(u.get('duty_last_hour_pct'), 0)}, "
                 f"maxed {minutes(u.get('maxed_minutes_today'))}{'' if u.get('connected', True) else ', DISCONNECTED'}{tgt_txt}"
             )
+            ev = u.get("utility_event")
+            if isinstance(ev, dict):
+                key = str(ev.get("event_key") or ev.get("id"))
+                events.setdefault(key, (ev, []))[1].append(str(u.get("name")))
+            for e in u.get("upcoming_events") or []:
+                if e.get("event_type") != "demandResponse":  # utility events are listed below
+                    ahead.append(f"{e.get('event_type')} on {u.get('name')} {await self.local(e.get('start'), '%a %m-%d %H:%M')}"
+                                 f"–{await self.local(e.get('end'), '%a %m-%d %H:%M')}")
+        if events:
+            lines.append("Utility events (the controller stands aside while one runs; only the owner or the owner's skip rules opt out):")
+            lines += [await self._event_line(ev, names) for ev, names in list(events.values())[:5]]
+        if ahead:
+            lines.append("Ahead: " + "; ".join(ahead[:5]))
         by_unit: dict[str, list[str]] = defaultdict(list)
         for r in s.get("rooms") or []:
             if r.get("has_sensor"):
@@ -372,6 +383,38 @@ class Toolkit:
         if agent.get("token_warning"):
             lines.append(f"Agent: {clip(agent.get('token_warning'), 160)}")
         return "\n".join(lines)
+
+    async def _hold_text(self, u: dict[str, Any]) -> str:
+        """Whose hold runs on a unit (the API's label), a person's hold and a resume back-off."""
+        hold = u.get("hold") or {}
+        label = u.get("hold_label")
+        if label:
+            sp = f" {temp(hold.get('heat_f'), 1)}/{temp(hold.get('cool_f'), 1)}" if hold.get("heat_f") is not None else ""
+            text = f", hold{sp} [{u.get('hold_owner') or '?'}]: {clip(label, 80)}"
+        elif hold:  # an API from before hold labels
+            end = await self.local(hold.get("end"), "%H:%M") if hold.get("end") else "no end"
+            text = f", hold {temp(hold.get('heat_f'), 1)}/{temp(hold.get('cool_f'), 1)} until {end}{' (ours)' if hold.get('set_by_us') else ' (NOT ours)'}"
+        else:
+            text = ""
+        if u.get("person_hold"):
+            text += " (a person's hold: the controller writes nothing to this unit until it ends or the owner taps Back to automatic)"
+        if u.get("resume_backoff_until"):
+            text += f"; after a Resume the ecobee schedule runs until {await self.local(u.get('resume_backoff_until'), '%a %H:%M')} (controller waits)"
+        return text
+
+    async def _event_line(self, ev: dict[str, Any], unit_names: list[str]) -> str:
+        status = {"opted_out": "skipped (opted out)"}.get(str(ev.get("status")), str(ev.get("status")))
+        window = f"{await self.local(ev.get('start_at'), '%a %m-%d %H:%M')}–{await self.local(ev.get('end_at'), '%H:%M')}"
+        name = clip(ev.get("name") or "utility event", 40)
+        parts = [f"- {name} {status}, {window} on {', '.join(unit_names)}: {clip(ev.get('change_label'), 40)}"]
+        if ev.get("is_optional") is False:
+            parts.append("mandatory (cannot be skipped)")
+        if ev.get("skip"):
+            why = f" ({clip(ev.get('skip_reason'), 60)})" if ev.get("skip_reason") else ""
+            parts.append(f"skip {ev.get('skip')} by {ev.get('skip_by') or '?'}{why}")
+        if ev.get("prep_label"):
+            parts.append(clip(ev.get("prep_label"), 110))
+        return "; ".join(parts)
 
     async def query_runtime(
         self,
@@ -818,8 +861,12 @@ class Toolkit:
         pol = s.get("policy") or {}
         lim = ctl.get("limits") or {}
         ranges = s.get("signoff_ranges") or {}
+        backoff = ctl.get("resume_backoff_hours", ctl.get("manual_backoff_hours"))  # older APIs: the old name
+        reminder = ctl.get("manual_hold_reminder_hours")
         lines = [
-            f"Controller mode {ctl.get('mode')}; act units {', '.join(ctl.get('act_units') or []) or 'none'}; holds {ctl.get('hold_hours')} h; manual back-off {num(ctl.get('manual_backoff_hours'), 1)} h.",
+            (f"Controller mode {ctl.get('mode')}; act units {', '.join(ctl.get('act_units') or []) or 'none'}; holds {ctl.get('hold_hours')} h. "
+            f"A person's hold always wins, however long it runs; after someone presses Resume the controller waits "
+            f"{num(backoff, 1)} h; hold reminder {'after ' + num(reminder, 1) + ' h' if reminder else 'off'}."),
             f"Policy v{s.get('policy_version_id')}: " + ", ".join(f"{k}={v}" for k, v in pol.items()),
             "Claude may sign off model-queued changes only inside: "
             + ", ".join(f"{k} {num(v[0], 1)}–{num(v[1], 1)}" for k, v in ranges.items() if isinstance(v, (list, tuple)) and len(v) == 2)
@@ -840,6 +887,18 @@ class Toolkit:
             windows.append(f"{room} " + ", ".join(f"{w.get('start')}–{w.get('end')}" for w in ws))
         if windows:
             lines.append("Sleep windows (count as occupied): " + "; ".join(windows))
+        ue = s.get("utility_events")
+        if isinstance(ue, dict):
+            rules = [r for r in (
+                "someone asleep" if ue.get("skip_when_asleep") else "",
+                f"a room ≥ {temp(ue.get('skip_above_f'))} cooling" if ue.get("skip_above_f") is not None else "",
+                f"a room ≤ {temp(ue.get('skip_below_f'))} heating" if ue.get("skip_below_f") is not None else "",
+            ) if r]
+            skip = f"on ({', '.join(rules) or 'no rule set'})" if ue.get("auto_skip") else "off"
+            prep = (f"on: {num(ue.get('precondition_degrees_f'), 1, '°F')} for up to {ue.get('precondition_hours')} h, "
+                    f"ending {ue.get('precondition_end_gap_min')} min before the start") if ue.get("precondition") else "off"
+            lines.append(f"Utility events: alerts {'on' if ue.get('alerts') else 'off'}; automatic skip {skip}; "
+                         f"pre-cool/pre-heat {prep}.")
         phones = occ.get("phones_away")
         lines.append(
             f"Occupancy: empty after {occ.get('empty_after_min')} min, house empty after {occ.get('house_empty_after_min')} min; "
@@ -1124,9 +1183,10 @@ def _spec(method: ToolMethod, kind: ToolKind, description: str, read_only: bool 
 TOOLS: tuple[ToolSpec, ...] = (
     # read
     _spec(Toolkit.get_house_status, "read",
-          "Live house status: per unit call, zone temp, setpoints, hold, today's runtime, duty, maxed minutes and what the "
-          "policy wants and why; every room's temp (or 'no sensor') and occupancy state; house empty or not; weather now; "
-          "open alerts. Start most runs here."),
+          "Live house status: per unit call, zone temp, setpoints, whose hold runs (ours, a person's, a utility event, "
+          "vacation...), a resume back-off, today's runtime, duty, maxed minutes and what the policy wants and why; utility "
+          "events (announced, running or skipped); every room's temp (or 'no sensor') and occupancy state; house empty "
+          "or not; weather now; open alerts. Start most runs here."),
     _spec(Toolkit.query_runtime, "read",
           "Daily stage-1 runtime (minutes) per unit and for the house over N days (1-120) with the weather-normalized "
           "expected minutes (only where that unit/mode baseline passes its checks), outdoor temps and maxed-out "
@@ -1167,8 +1227,9 @@ TOOLS: tuple[ToolSpec, ...] = (
     _spec(Toolkit.list_reports, "read", "Recent reports (id, date, kind, author, title). Read one with get_report."),
     _spec(Toolkit.get_report, "read", "One report's markdown body (first 3000 characters)."),
     _spec(Toolkit.get_settings, "read",
-          "Controller mode, active policy parameters, your sign-off ranges and owner-only switches, hard limits, comfort "
-          "bands, sleep windows, occupancy settings and time zone."),
+          "Controller mode, the wait after a Resume and the hold reminder, active policy parameters, your sign-off ranges "
+          "and owner-only switches, hard limits, comfort bands, utility-event settings (skip rules, pre-cooling), sleep "
+          "windows, occupancy settings and time zone."),
     _spec(Toolkit.list_experiments, "read", "All experiments with status, arms, length and checkpoints."),
     _spec(Toolkit.experiment_detail, "read",
           "One experiment: arms, checkpoints with alpha spending, current effect with 90% interval, and the pre-planned "
