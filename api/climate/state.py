@@ -48,7 +48,24 @@ SINCE_LOOKBACK = timedelta(days=14)
 SUNNY_CLOUD_PCT = 40.0
 MATCH_F = 0.1  # a hold matches our request within this
 MANUAL_KIND = "manual_hold_detected"  # request.kind of the controller's manual-change log rows
+RESUME_KIND = "manual_resume_detected"  # request.kind of its "someone cancelled our hold" rows
 WRITE_STATUSES = ("verified", "sent")
+HOLD_ACTIONS = ("set_hold", "resume_program")  # setpoint writes (program/settings writes are not)
+# A queued row is a change on its way (HomeKit fallback, owner actions): it counts toward the
+# one-change-per-30-min limit like a sent one.
+CHANGE_STATUSES = ("verified", "sent", "queued")
+ATTEMPT_STATUSES = ("verified", "sent", "failed")
+# ecobee's own automatic events: not a person's change, the controller may override them.
+AUTO_EVENTS = ("autoAway", "autoHome")
+# Events the controller never overrides (guardrails blocks them): not a manual change either.
+PROTECTED_EVENTS = ("vacation", "demandResponse")
+# A snapshot must be this much newer than our write before its missing hold says anything: a
+# verified write's read-back proved it landed (the grace covers thermostat clock skew); a write
+# still in flight ('sent') needs longer (a crashed write).
+VERIFIED_GRACE = timedelta(minutes=2)
+SENT_GRACE = timedelta(minutes=5)
+END_SLACK = timedelta(minutes=5)  # a hold that ends this soon may already have ended on its own
+ATTEMPT_WINDOW_SLACK = timedelta(minutes=10)
 
 
 def load_house_state(session: Session, now: datetime | None = None) -> HouseState:
@@ -61,7 +78,11 @@ def load_house_state(session: Session, now: datetime | None = None) -> HouseStat
 
     During a change's trial window (afternoons, ``changes.TRIAL_WINDOW``) the trial policy
     version replaces the active one. A hold that matches the controller's own latest write
-    is marked ``set_by_us``; any other hold starts the manual back-off."""
+    (or its latest attempted one whose read-back failed but which landed) is marked
+    ``set_by_us``; any other hold a person made starts the manual back-off, and so does our
+    hold vanishing early (someone pressed Resume at the thermostat). ecobee's automatic
+    events (Smart Away / Home, vacation, demand response) are not a person's change and start
+    no back-off; Quick Save is."""
     now = now or utcnow()
     control = _setting(session, "control", ControlSettings)
     occupancy = _setting(session, "occupancy", OccupancySettings)
@@ -241,7 +262,8 @@ def _units(session: Session, now: datetime, control: ControlSettings) -> dict[st
     last_change = dict(
         session.execute(
             select(ControlAction.unit_key, func.max(ControlAction.ts))
-            .where(ControlAction.status.in_(WRITE_STATUSES), ControlAction.actor.in_(("controller", "owner")))
+            .where(ControlAction.status.in_(CHANGE_STATUSES), ControlAction.actor.in_(("controller", "owner")),
+                   ControlAction.action.in_(HOLD_ACTIONS))
             .group_by(ControlAction.unit_key)
         ).all()
     )
@@ -254,7 +276,9 @@ def _units(session: Session, now: datetime, control: ControlSettings) -> dict[st
                 snap = UnitSnapshot.model_validate(row.snapshot)
             except ValidationError:
                 log.warning("live_units snapshot for %s does not parse; treating the unit as unknown", unit.key)
-        ref_ts = snap.ts if snap is not None else (row.ts if row is not None else None)
+        # the newest snapshot, whichever source wrote it (HomeKit takes over while the cloud is down)
+        stamps = [t for t in (snap.ts if snap is not None else None, row.ts if row is not None else None) if t]
+        ref_ts = max(stamps) if stamps else None
         status = UnitStatus(
             unit_key=unit.key,
             name=unit.name,
@@ -263,7 +287,7 @@ def _units(session: Session, now: datetime, control: ControlSettings) -> dict[st
             call=_call(snap),
             last_change_at=last_change.get(unit.key),
         )
-        if snap is not None and snap.hold is not None:
+        if snap is not None:
             status.manual_override_until = _manual_override(session, unit.key, snap, control, now)
         out[unit.key] = status
     return out
@@ -289,11 +313,106 @@ def latest_write(session: Session, unit_key: str) -> ControlAction | None:
         .where(
             ControlAction.unit_key == unit_key,
             ControlAction.status.in_(WRITE_STATUSES),
-            ControlAction.action.in_(("set_hold", "resume_program")),
+            ControlAction.action.in_(HOLD_ACTIONS),
         )
         .order_by(ControlAction.ts.desc(), ControlAction.id.desc())
         .limit(1)
     ).scalar_one_or_none()
+
+
+def latest_attempt(session: Session, unit_key: str) -> ControlAction | None:
+    """The controller's newest hold write or resume for the unit that was sent to the
+    thermostat, including one whose read-back failed (it may have landed anyway)."""
+    return session.execute(
+        select(ControlAction)
+        .where(
+            ControlAction.unit_key == unit_key,
+            ControlAction.actor == "controller",
+            ControlAction.status.in_(ATTEMPT_STATUSES),
+            ControlAction.action.in_(HOLD_ACTIONS),
+            ControlAction.channel != "none",
+        )
+        .order_by(ControlAction.ts.desc(), ControlAction.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def write_end(write: ControlAction, default_hours: float) -> datetime | None:
+    """When the hold a set_hold row wrote ends: its HomeKit ``until``, else (completed_at or
+    ts) + its hours."""
+    req = write.request if isinstance(write.request, dict) else {}
+    until = req.get("until")
+    if isinstance(until, str):
+        try:
+            end = datetime.fromisoformat(until)
+            return end if end.tzinfo is not None else None
+        except ValueError:
+            return None
+    hours = req.get("hours", default_hours)
+    if not isinstance(hours, (int, float)) or isinstance(hours, bool) or hours <= 0:
+        hours = default_hours
+    return (write.completed_at or write.ts) + timedelta(hours=float(hours))
+
+
+def cancelled_write(
+    session: Session, unit_key: str, snap: UnitSnapshot | None, control: ControlSettings, now: datetime,
+) -> ControlAction | None:
+    """Our latest set_hold for the unit when a snapshot NEWER than it shows no hold although
+    that hold should still be running: someone pressed Resume at the thermostat (or cancelled
+    our hold in the ecobee app). None otherwise.
+
+    Snapshots that came over HomeKit say nothing here (HomeKit shows no ecobee holds). A
+    write still in flight ('sent') needs a snapshot 5 minutes newer; a newer failed attempt
+    makes the picture ambiguous, so it says nothing either. A hold that was due to end within
+    5 minutes of the snapshot may simply have run out."""
+    if snap is None or snap.hold is not None or snap.source == "homekit":
+        return None
+    write = latest_write(session, unit_key)
+    if write is None or write.action != "set_hold":
+        return None
+    attempt = latest_attempt(session, unit_key)
+    if attempt is not None and attempt.status == "failed" and (attempt.ts, attempt.id) > (write.ts, write.id):
+        return None
+    if write.status == "verified" and write.completed_at is not None:
+        seen_from = write.completed_at + VERIFIED_GRACE
+    else:
+        seen_from = write.ts + SENT_GRACE
+    if snap.ts <= seen_from:
+        return None
+    end = write_end(write, control.hold_hours)
+    if end is None or now >= end or snap.ts >= end - END_SLACK:
+        return None
+    return write
+
+
+def resume_detection(session: Session, unit_key: str, after: datetime) -> ControlAction | None:
+    """The controller's log row for "our hold was cancelled at the thermostat", after ``after``."""
+    return session.execute(
+        select(ControlAction)
+        .where(
+            ControlAction.unit_key == unit_key,
+            ControlAction.status == "skipped",
+            ControlAction.request["kind"].astext == RESUME_KIND,
+            ControlAction.ts > after,
+        )
+        .order_by(ControlAction.ts, ControlAction.id)
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _in_attempt_window(hold: HoldInfo, attempt: ControlAction, default_hours: float) -> bool:
+    """The hold could be what ``attempt`` wrote: it started no earlier than the attempt and
+    ends within the attempt's hold hours (plus read-back slack)."""
+    if hold.end is None:
+        return False
+    req = attempt.request if isinstance(attempt.request, dict) else {}
+    hours = req.get("hours", default_hours)
+    if not isinstance(hours, (int, float)) or isinstance(hours, bool) or hours <= 0:
+        hours = default_hours
+    sent = attempt.ts
+    if hold.start is not None and hold.start < sent - ATTEMPT_WINDOW_SLACK:
+        return False
+    return sent - ATTEMPT_WINDOW_SLACK <= hold.end <= sent + timedelta(hours=float(hours)) + ATTEMPT_WINDOW_SLACK
 
 
 def hold_matches(hold: HoldInfo, request: dict[str, Any] | None) -> bool:
@@ -336,7 +455,8 @@ def same_signature(a: dict[str, Any] | None, b: dict[str, Any]) -> bool:
 
 
 def manual_detection(session: Session, unit_key: str, hold: HoldInfo, after: datetime | None) -> ControlAction | None:
-    """The controller's first log row for this manual hold, written after our last write."""
+    """The controller's first log row for this manual hold, written after our last write
+    (rows with ``refused`` are resumes the source refused because the hold was not ours)."""
     q = (
         select(ControlAction)
         .where(
@@ -357,25 +477,43 @@ def manual_detection(session: Session, unit_key: str, hold: HoldInfo, after: dat
 def _manual_override(
     session: Session, unit_key: str, snap: UnitSnapshot, control: ControlSettings, now: datetime,
 ) -> datetime | None:
+    """When the manual back-off for this unit ends, or None when nobody changed it by hand."""
+    backoff = timedelta(hours=control.manual_backoff_hours)
     hold = snap.hold
     if hold is None:
-        return None
-    backoff = timedelta(hours=control.manual_backoff_hours)
+        # our hold vanished before its end: someone resumed the schedule at the thermostat
+        cancelled = cancelled_write(session, unit_key, snap, control, now)
+        if cancelled is None:
+            return None
+        seen = resume_detection(session, unit_key, cancelled.ts)
+        return (seen.ts if seen is not None else now) + backoff  # first seen (the tick logs it now)
+    if hold.hold_type in AUTO_EVENTS or hold.hold_type in PROTECTED_EVENTS:
+        hold.set_by_us = False
+        return None  # ecobee's own event, not a person (guardrails blocks vacation / DR)
     write = latest_write(session, unit_key)
+    # Already logged as a person's hold after our last write (including a resume the source
+    # refused because the hold was not ours): that decision stands.
+    seen = manual_detection(session, unit_key, hold, write.ts if write is not None else None)
+    if seen is not None:
+        hold.set_by_us = False
+        refused = isinstance(seen.request, dict) and bool(seen.request.get("refused"))
+        return (seen.ts if refused or hold.start is None else hold.start) + backoff
     if write is not None and write.action == "set_hold" and hold_matches(hold, write.request):
         if write.actor == "owner":
             return (write.completed_at or write.ts) + backoff  # the owner's own hold from the app
         hold.set_by_us = True
         return None
+    attempt = latest_attempt(session, unit_key)
+    if (
+        attempt is not None and attempt.action == "set_hold" and (write is None or attempt.id != write.id)
+        and hold_matches(hold, attempt.request) and _in_attempt_window(hold, attempt, control.hold_hours)
+    ):
+        hold.set_by_us = True  # our write landed although its read-back failed
+        return None
     if hold.set_by_us:
         return None  # the source itself recognised the hold as ours
-    if hold.start is not None:
-        start = hold.start
-    else:
-        # first seen: the controller's log row for it, else right now (the tick logs it now)
-        seen = manual_detection(session, unit_key, hold, write.ts if write is not None else None)
-        start = seen.ts if seen is not None else now
-    return start + backoff
+    # first seen: right now (the tick logs it now)
+    return (hold.start if hold.start is not None else now) + backoff
 
 
 # ---------------------------------------------------------------------------------------

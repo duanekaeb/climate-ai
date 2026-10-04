@@ -48,7 +48,11 @@ function decide(decision: Decision, reason: string) {
       <dl class="num mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
         <div class="rounded-xl bg-surface-2 p-2"><dt class="text-[11px] text-muted">Length</dt><dd>{{ e.n_days }} days</dd></div>
         <div class="rounded-xl bg-surface-2 p-2"><dt class="text-[11px] text-muted">Switch every</dt><dd>{{ e.block_days }} {{ e.block_days === 1 ? 'day' : 'days' }}</dd></div>
-        <div class="rounded-xl bg-surface-2 p-2"><dt class="text-[11px] text-muted">False-win rate</dt><dd>{{ num(e.alpha * 100, 0, '%') }}</dd></div>
+        <div class="rounded-xl bg-surface-2 p-2">
+          <dt class="text-[11px] text-muted">Alpha (two-sided)</dt>
+          <dd>{{ num(e.alpha, 2) }}</dd>
+          <dd class="text-[11px] leading-tight text-muted">false win ≤ {{ Number((e.alpha * 50).toFixed(1)) }}%</dd>
+        </div>
         <div class="rounded-xl bg-surface-2 p-2"><dt class="text-[11px] text-muted">Measure</dt><dd class="truncate" :title="e.metric">{{ e.metric.replace(/_/g, ' ') }}</dd></div>
       </dl>
 

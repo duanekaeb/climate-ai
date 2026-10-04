@@ -1,6 +1,8 @@
 // Thin fetch wrapper for /api. Cookies carry the owner session (same origin, so the iOS
-// WKWebView wrapper and the PWA behave the same). 401 -> the router sends you to /login.
+// WKWebView wrapper and the PWA behave the same). 401 -> background updates stop and the
+// router sends you to /login.
 import { router } from '@/router'
+import { stopLiveUpdates } from '@/stores/status'
 
 export class ApiError extends Error {
   status: number
@@ -30,6 +32,7 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (res.status === 401 && !path.startsWith('/auth')) {
+    stopLiveUpdates()
     const here = router.currentRoute.value.fullPath
     if (!here.startsWith('/login')) router.push({ path: '/login', query: { next: here } })
   }

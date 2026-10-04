@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Propose a randomized switchback. The success measure (weather-normalized total-house
 // runtime), the length and the checkpoints are fixed here, before the test starts.
-import { computed, ref, useId } from 'vue'
+import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
 import type { ArmIn, PolicyParams, ProposeExperimentBody } from '@/api/types'
 import Icon from '@/components/Icon.vue'
 import { errorText } from '@/components/analysis/stats'
@@ -31,6 +31,8 @@ const nDays = ref(28)
 const blockDays = ref(2)
 const nCheckpoints = ref(3)
 const alpha = ref(0.1)
+/** The change the proposer expects, in % of total-house runtime: only used to size the test. */
+const effectPct = ref(10)
 const busy = ref(false)
 const submitError = ref('')
 const touched = ref(false)
@@ -68,8 +70,31 @@ const errors = computed(() => {
   if (!isInt(nDays.value, 6, 180)) out.push('Length: 6 to 180 days.')
   if (!isInt(blockDays.value, 1, 7)) out.push('Switch every 1 to 7 days.')
   if (!isInt(nCheckpoints.value, 1, 3)) out.push('Checkpoints: 1 to 3.')
-  if (!(alpha.value > 0 && alpha.value < 0.5)) out.push('False-win rate: between 0 and 0.5.')
+  if (!(alpha.value > 0 && alpha.value < 0.5)) out.push('Alpha: between 0 and 0.5.')
   return out
+})
+
+// Size the test with the same power calculation as the calculator (80% power, this alpha).
+const effectOk = computed(() => Number.isFinite(effectPct.value) && effectPct.value >= 1 && effectPct.value <= 50)
+let powerTimer: number | undefined
+watch(
+  [effectPct, alpha],
+  ([e, a]) => {
+    window.clearTimeout(powerTimer)
+    if (!effectOk.value || !(a > 0 && a < 0.5)) return
+    powerTimer = window.setTimeout(() => void store.loadProposalPower(e, a, 0.8), 300)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => window.clearTimeout(powerTimer))
+
+const sizing = computed(() => {
+  const p = store.proposalPower.data
+  if (!effectOk.value || !p || p.effect_pct !== effectPct.value || p.alpha !== alpha.value) return null
+  if (p.days_per_arm === null) return { needed: null, short: false, note: p.note }
+  // Days per arm times the number of arms (the API's total_days assumes two arms).
+  const needed = p.days_per_arm * arms.value.length
+  return { needed, perArm: p.days_per_arm, short: isInt(nDays.value, 6, 180) && nDays.value < needed, note: p.note }
 })
 
 const shortWarning = computed(() =>
@@ -171,14 +196,38 @@ async function submit() {
         </select>
       </label>
       <label class="text-xs text-muted">
-        False-win rate (alpha)
+        Alpha (two-sided)
         <input v-model.number="alpha" type="number" min="0.01" max="0.49" step="0.01" class="input num mt-1" />
       </label>
     </fieldset>
-    <p class="text-xs text-muted">
-      The measure is weather-normalized total-house runtime. Size the length with the power calculator: a 10–15% change
-      usually shows within weeks, a 5% change can take months.
-    </p>
+    <div class="rounded-xl border border-line p-3">
+      <label class="flex items-center justify-between gap-3 text-sm font-medium">
+        <span>Expected effect <span class="font-normal text-muted">(% of total-house runtime)</span></span>
+        <input v-model.number="effectPct" type="number" min="1" max="50" step="1" class="input num !w-20 shrink-0" />
+      </label>
+      <p class="mt-1 text-xs text-muted">
+        Only used to size the test. The measure is weather-normalized total-house runtime, at 80% power and the alpha
+        above.
+      </p>
+      <p v-if="!effectOk" class="mt-2 text-xs text-bad">Expected effect: 1 to 50%.</p>
+      <p v-else-if="store.proposalPower.error" class="mt-2 text-xs text-warn">
+        Couldn't size the test: {{ store.proposalPower.error }}
+      </p>
+      <p v-else-if="!sizing" class="mt-2 text-xs text-muted">Sizing the test…</p>
+      <p v-else-if="sizing.needed === null" class="mt-2 text-xs text-warn">{{ sizing.note || "Can't size a test yet." }}</p>
+      <p v-else-if="sizing.short" role="status" class="mt-2 flex items-start gap-1.5 text-xs text-warn">
+        <Icon name="alert" :size="14" class="mt-px shrink-0" />
+        <span>
+          A {{ effectPct }}% change needs about <span class="num font-semibold">{{ sizing.needed }}</span> test days
+          ({{ sizing.perArm }} per arm × {{ arms.length }} arms); {{ nDays }} days will likely miss it. Lengthen the test,
+          test a bigger change, or try it in the simulator first.
+        </span>
+      </p>
+      <p v-else class="mt-2 text-xs text-good">
+        A {{ effectPct }}% change needs about <span class="num font-semibold">{{ sizing.needed }}</span> test days
+        ({{ sizing.perArm }} per arm × {{ arms.length }} arms); {{ nDays }} days is enough.
+      </p>
+    </div>
     <p v-if="shortWarning" class="text-xs text-warn">{{ shortWarning }}</p>
 
     <ul v-if="touched && errors.length" class="space-y-0.5 text-xs text-bad">

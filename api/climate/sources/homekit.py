@@ -10,7 +10,9 @@ saved encrypted in the DB (secrets 'homekit_pairing:<alias>'), never to a plain 
 Vendor characteristics on current firmware are 'pr' without 'ev': poll them. Subscribe only
 'ev' characteristics; check ``supports_subscribe``. put_characteristics: an entry is a
 failure only when status != 0. Writes: TIMESTAMP (reuse the unit's suffix) in its own put,
-then SET_HOLD_SCHEDULE in a separate put, then read back. Never write HOME/SLEEP/AWAY targets.
+then SET_HOLD_SCHEDULE in a separate put, then read back. Never write HOME/SLEEP/AWAY targets
+(they are only ever READ, before a climate hold, to check what that hold would hold).
+``snapshot_from_values`` turns a poll into a UnitSnapshot for when the ecobee cloud is down.
 
 This module is a pure adapter: no database access. aiohomekit is imported lazily so the rest
 of the stack (which does not install the ``homekit`` extra) can import these helpers.
@@ -34,7 +36,7 @@ from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from climate.house import ROOM_BY_KEY, SENSORS, normalize_name
-from climate.sources.base import SensorReading, WriteResult
+from climate.sources.base import HoldInfo, HvacMode, SensorReading, UnitSnapshot, WriteResult
 
 log = logging.getLogger("climate.homekit")
 
@@ -49,6 +51,10 @@ STATUS_UNPAIRED = 0x01
 ClimateName = Literal["home", "sleep", "away"]
 CLIMATE_CODES: dict[str, int] = {"home": 0, "sleep": 1, "away": 2}  # SET_HOLD_SCHEDULE values
 # VENDOR_ECOBEE_CURRENT_MODE readings: home 0, sleep 1, away 2, temp 3.
+MODE_CLIMATES: dict[int, str] = {code: name for name, code in CLIMATE_CODES.items()}
+MODE_TEMPERATURE_HOLD = 3
+HVAC_TARGETS: dict[int, str] = {0: "off", 1: "heat", 2: "cool", 3: "auto"}  # HEATING_COOLING_TARGET
+OUR_HOLD_MATCH_S = 120  # TIMESTAMP within this of our hold's end = our hold is the one running
 
 _BASE_UUID = "-0000-1000-8000-0026BB765291"
 
@@ -65,6 +71,10 @@ CHAR_TYPES: dict[str, str] = {
     "STATUS_LO_BATT": "00000079" + _BASE_UUID,
     "BATTERY_LEVEL": "00000068" + _BASE_UUID,
     "HEATING_COOLING_CURRENT": "0000000F" + _BASE_UUID,
+    # Read only (polled for the HomeKit fallback snapshot; never written, never subscribed):
+    "HEATING_COOLING_TARGET": "00000033" + _BASE_UUID,  # 0 off, 1 heat, 2 cool, 3 auto
+    "TEMPERATURE_HEATING_THRESHOLD": "00000012" + _BASE_UUID,  # active heat setpoint, °C
+    "TEMPERATURE_COOLING_THRESHOLD": "0000000D" + _BASE_UUID,  # active cool setpoint, °C
     "VENDOR_ECOBEE_EQUIPMENT_RUNNING": "4A6AE4F6-036C-495D-87CC-B3702B437741",
     "VENDOR_ECOBEE_CURRENT_MODE": "B7DDB9A3-54BB-4572-91D2-F1F5B0510F8C",
     "VENDOR_ECOBEE_TIMESTAMP": "1621F556-1367-443C-AF19-82AF018E99DE",
@@ -93,6 +103,13 @@ FORBIDDEN_WRITE_TYPES: frozenset[str] = frozenset(
         "5DA985F0-898A-4850-B987-B76C6C78D670",  # VENDOR_ECOBEE_AWAY_TARGET_COOL
     }
 )
+# The same six, per comfort setting: READ ONLY, read just before a climate hold to check what
+# that hold would hold (a climate hold holds whatever the schedule's setpoints are).
+COMFORT_TARGET_TYPES: dict[str, tuple[str, str]] = {
+    "home": ("E4489BBC-5227-4569-93E5-B345E3E5508F", "7D381BAA-20F9-40E5-9BE9-AEB92D4BECEF"),
+    "sleep": ("05B97374-6DC0-439B-A0FA-CA33F612D425", "A251F6E7-AC46-4190-9C5D-3D06277BDF9F"),
+    "away": ("73AAB542-892A-4439-879A-D2A883724B69", "5DA985F0-898A-4850-B987-B76C6C78D670"),
+}
 # The only characteristics this adapter ever writes.
 ALLOWED_WRITE_KEYS: frozenset[str] = frozenset(
     {"VENDOR_ECOBEE_TIMESTAMP", "VENDOR_ECOBEE_SET_HOLD_SCHEDULE", "VENDOR_ECOBEE_CLEAR_HOLD"}
@@ -434,6 +451,131 @@ def readings_from_values(
         if r is not None:
             out.append(r)
     return out
+
+
+def setpoint_f(v: Any) -> float | None:
+    """A HomeKit setpoint (°C) -> °F on ecobee's 0.5 °F grid (HomeKit rounds °C to 0.1, which
+    would otherwise turn 68.5 °F into 68.54)."""
+    f = _c_to_f(v)
+    return None if f is None else round(f * 2) / 2
+
+
+_SETPOINT_MATCH_F = 0.3
+_HEAT_EQUIPMENT = {True: "heatPump", False: "auxHeat1"}  # by settings['hasHeatPump']
+
+
+def _hold_still_shown(prev: HoldInfo, mode: int | None, heat: float | None, cool: float | None,
+                      ts: datetime) -> bool:
+    """Does the thermostat still show ``prev`` (a hold from the last live snapshot)?"""
+    if prev.end is not None and prev.end <= ts:
+        return False
+    if prev.hold_type in ("vacation", "demandResponse") and prev.end is not None:
+        return True  # scheduled events with a known end: kept until that end
+    if mode is None:
+        return False
+    if prev.kind == "climate" or prev.climate_ref:
+        return MODE_CLIMATES.get(mode) == (prev.climate_ref or "").lower()
+    if mode != MODE_TEMPERATURE_HOLD:
+        return False
+    for held, now in ((prev.heat_f, heat), (prev.cool_f, cool)):
+        if held is not None and now is not None and abs(held - now) > _SETPOINT_MATCH_F:
+            return False
+    return True
+
+
+def snapshot_from_values(
+    unit_key: str,
+    values: Mapping[int, Mapping[str, Any]],
+    aid_map: Mapping[int, str],
+    ts: datetime,
+    tz: str,
+    *,
+    previous: UnitSnapshot | None = None,
+    our_hold: tuple[str, datetime] | None = None,
+) -> UnitSnapshot:
+    """A UnitSnapshot (source 'homekit') from one HomeKit poll, for when the cloud is down.
+
+    Read from the thermostat (aid 1): zone temperature / humidity, the heating/cooling call
+    (-> ``equipment_running``), the target mode (-> ``hvac_mode``), the active heat/cool
+    thresholds (-> setpoints), CURRENT_MODE (-> ``climate_ref`` home/sleep/away). Sensors are
+    the readings of every mapped accessory (thermostat + paired SmartSensors). Nothing is
+    invented: what HomeKit does not show stays None. From ``previous`` (the last live snapshot)
+    only configuration is carried: name, model, sensor sets, settings WITHOUT the schedule's
+    ``program_*`` setpoints (the schedule may have moved on), and ``hvac_mode`` when HomeKit
+    does not expose its target mode.
+
+    Hold, first rule that applies (TIMESTAMP is ecobee's "next scheduled change": a hold's end,
+    or the next schedule transition when no hold runs):
+    1. ``our_hold`` = (climate, until) of our last verified HomeKit climate hold: still before
+       ``until``, CURRENT_MODE shows that climate and TIMESTAMP (when readable) is within 2 min
+       of ``until`` -> that climate hold, ``set_by_us``.
+    2. ``previous.hold`` the thermostat still shows (not ended; climate hold while CURRENT_MODE
+       is that climate; temperature hold while CURRENT_MODE is 3 and the thresholds still match;
+       a vacation / demand response until its end) -> carried as it was.
+    3. CURRENT_MODE 3 -> a temperature hold at the current thresholds, ending at TIMESTAMP when
+       that is in the future; not ours (the cloud channel's own holds are caught by rule 2).
+    4. otherwise no hold: HomeKit cannot tell a hand-set climate hold from the schedule."""
+    tstat = values.get(THERMOSTAT_AID, {})
+    prev_settings = dict(previous.settings) if previous is not None else {}
+    mode = _int(tstat.get("VENDOR_ECOBEE_CURRENT_MODE"))
+    climate = MODE_CLIMATES.get(mode) if mode is not None else None
+    heat_sp = setpoint_f(tstat.get("TEMPERATURE_HEATING_THRESHOLD"))
+    cool_sp = setpoint_f(tstat.get("TEMPERATURE_COOLING_THRESHOLD"))
+    hvac: HvacMode | None = None
+    target = _int(tstat.get("HEATING_COOLING_TARGET"))
+    if target is not None and target in HVAC_TARGETS:
+        hvac = HVAC_TARGETS[target]  # type: ignore[assignment]
+    elif previous is not None:
+        hvac = previous.hvac_mode
+    call = _int(tstat.get("HEATING_COOLING_CURRENT"))
+    equipment: list[str] = []
+    if call == 1:
+        equipment = [_HEAT_EQUIPMENT[prev_settings.get("hasHeatPump") is True]]
+    elif call == 2:
+        equipment = ["compCool1"]
+
+    end: datetime | None = None
+    raw_ts = tstat.get("VENDOR_ECOBEE_TIMESTAMP")
+    if isinstance(raw_ts, str):
+        try:
+            end = parse_timestamp(raw_ts, tz)
+        except (HomekitError, ValueError):
+            end = None
+    future_end = end if end is not None and end > ts else None
+
+    hold: HoldInfo | None = None
+    if our_hold is not None:
+        ours_climate, until = our_hold
+        if (until > ts and climate == ours_climate
+                and (end is None or abs((end - until).total_seconds()) <= OUR_HOLD_MATCH_S)):
+            hold = HoldInfo(kind="climate", climate_ref=climate, end=until, hold_type="dateTime", set_by_us=True)
+    if hold is None and previous is not None and previous.hold is not None \
+            and _hold_still_shown(previous.hold, mode, heat_sp, cool_sp, ts):
+        hold = previous.hold.model_copy()
+    if hold is None and mode == MODE_TEMPERATURE_HOLD:
+        hold = HoldInfo(kind="temperature", heat_f=heat_sp, cool_f=cool_sp, end=future_end,
+                        hold_type="dateTime" if future_end is not None else None, set_by_us=False)
+
+    return UnitSnapshot(
+        unit_key=unit_key,
+        ts=ts,
+        source="homekit",
+        revision=None,
+        name=previous.name if previous is not None else None,
+        model=previous.model if previous is not None else None,
+        hvac_mode=hvac or "off",
+        equipment_running=equipment,
+        heat_sp_f=heat_sp,
+        cool_sp_f=cool_sp,
+        climate_ref=climate,
+        hold=hold,
+        zone_temp_f=_c_to_f(tstat.get("TEMPERATURE_CURRENT")),
+        zone_humidity=_num(tstat.get("RELATIVE_HUMIDITY_CURRENT"), 0, 100),
+        sensors=readings_from_values(values, aid_map, ts),
+        sensor_sets=dict(previous.sensor_sets) if previous is not None else {},
+        settings={k: v for k, v in prev_settings.items() if k not in ("program_heat_f", "program_cool_f")},
+        connected=True,
+    )
 
 
 _TS_RE = re.compile(
@@ -1178,6 +1320,28 @@ class HomekitBridge:
         ok = ts_k in back and mode_k in back
         return WriteResult(ok=ok, channel="homekit", before=before, request=request, readback=readback,
                            error=None if ok else "read-back after clearing the hold returned no values")
+
+    async def read_comfort_targets(self, alias: str) -> dict[str, dict[str, float | None]]:
+        """READ the Home / Sleep / Away target setpoints: {climate: {'heat_f', 'cool_f'}} in °F
+        (None when the thermostat does not expose one or returns no value). One GET, never a
+        put: these characteristics are FORBIDDEN_WRITE_TYPES. Raises HomekitError on failure."""
+        ent = self._entry(alias)
+        async with ent.lock:
+            if ent.parsed is None:
+                await self._inventory_locked(ent)
+            assert ent.parsed is not None
+            where: dict[tuple[str, str], tuple[int, int]] = {}
+            for climate, (heat_t, cool_t) in COMFORT_TARGET_TYPES.items():
+                for side, ctype in (("heat_f", heat_t), ("cool_f", cool_t)):
+                    k = next((k for k, t in sorted(ent.parsed.types.items())
+                              if k[0] == THERMOSTAT_AID and t == ctype and "pr" in ent.parsed.perms.get(k, [])), None)
+                    if k is not None:
+                        where[(climate, side)] = k
+            got = await self._get(ent, sorted(set(where.values()))) if where else {}
+        out: dict[str, dict[str, float | None]] = {c: {"heat_f": None, "cool_f": None} for c in COMFORT_TARGET_TYPES}
+        for (climate, side), k in where.items():
+            out[climate][side] = setpoint_f(got.get(k))
+        return out
 
 
 def hold_window(now: datetime, max_hours: int) -> tuple[datetime, datetime]:

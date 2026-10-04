@@ -12,6 +12,18 @@ was unreachable; assumptions are marked):
   slot for equipment columns, percent for humidity, 0/1 for occupancy. Blank means no data.
 - Event and report dates/times are THERMOSTAT-LOCAL wall time; ``thermostatTime`` vs
   ``utcTime`` on each thermostat gives the current offset.
+
+``HoldInfo.hold_type`` vocabulary (what overrides the program right now; ``parse_hold``):
+
+- A running override EVENT that is not a plain hold carries its ecobee event type verbatim:
+  ``vacation``, ``autoAway`` / ``autoHome`` (Smart Home/Away), ``quickSave`` (Smart Away
+  quick save), ``demandResponse`` (utility event). These are never "ours": ``set_by_us`` is
+  always False for them, whatever their setpoints, so callers can tell a Smart Away or a
+  vacation from a hand-set hold and from the controller's own hold (``EVENT_HOLD_TYPES``).
+- A plain ``hold`` event (someone or something set a hold) carries how it was set, inferred
+  because ecobee does not echo the request's holdType: ``holdHours``, ``nextTransition``,
+  ``indefinite`` or ``dateTime`` (``PLAIN_HOLD_TYPES``). Only these can be ``set_by_us``
+  (they match the last hold the controller wrote, ``app_settings['ecobee_holds']``).
 """
 
 from __future__ import annotations
@@ -62,8 +74,12 @@ _EQUIPMENT_FIELDS = {
     "fan": "fan",
 }
 
+# hold_type values (see the module docstring). Event overrides keep their ecobee event type;
+# plain 'hold' events get one of the inferred plain types.
+EVENT_HOLD_TYPES = ("vacation", "autoAway", "autoHome", "quickSave", "demandResponse")
+PLAIN_HOLD_TYPES = ("holdHours", "nextTransition", "indefinite", "dateTime")
 # Events that override the program. The first RUNNING one in the list is in effect.
-OVERRIDE_EVENT_TYPES = ("hold", "vacation", "autoAway", "autoHome", "quickSave", "demandResponse")
+OVERRIDE_EVENT_TYPES = ("hold", *EVENT_HOLD_TYPES)
 
 _HVAC_MODES: dict[str, HvacMode] = {
     "heat": "heat",
@@ -485,7 +501,7 @@ def parse_hold(
     the holdType: ends in 2035+ -> indefinite; matches our last write -> holdHours; ends on the
     next program transition after it started -> nextTransition; a whole number of hours ->
     holdHours; otherwise dateTime. Other running overrides report their event type
-    (vacation / autoAway / autoHome / quickSave / demandResponse)."""
+    (vacation / autoAway / autoHome / quickSave / demandResponse) and are never ``set_by_us``."""
     off = offset or timedelta(0)
     start = local_to_utc_offset(event.get("startDate"), event.get("startTime"), off)
     end = local_to_utc_offset(event.get("endDate"), event.get("endTime"), off)
@@ -495,9 +511,9 @@ def parse_hold(
     ref = str(event.get("holdClimateRef") or "") or None
     etype = str(event.get("type") or "hold")
     hold = HoldInfo(kind="climate" if ref else "temperature", heat_f=heat, cool_f=cool, climate_ref=ref,
-                    start=start, end=end, hold_type=etype)
+                    start=start, end=end, hold_type=etype, set_by_us=False)
     if etype != "hold":
-        return hold
+        return hold  # an event override, never ours (even if its setpoints equal our last hold)
     hold.set_by_us = hold_matches_ours(hold, ours)
     end_local = parse_ecobee_dt(f"{event.get('endDate')} {event.get('endTime')}")
     start_local = parse_ecobee_dt(f"{event.get('startDate')} {event.get('startTime')}")

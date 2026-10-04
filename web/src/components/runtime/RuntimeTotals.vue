@@ -4,14 +4,18 @@ import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { DailyRuntime } from '@/api/types'
 import { UNIT_COLORS, UNIT_NAMES, minutes } from '@/lib/format'
-import { unitTotals } from '@/stores/runtime'
+import { type FailingBaselines, baselineFailNote, failingInUse, summarizeDays, unitTotals } from '@/stores/runtime'
 
-const props = defineProps<{ rows: DailyRuntime[]; days: number }>()
+const props = defineProps<{ rows: DailyRuntime[]; days: number; failing: FailingBaselines }>()
 
-const totals = computed(() => unitTotals(props.rows))
+const totals = computed(() => unitTotals(props.rows, props.failing))
+// The house expectation is summed per day, and only on days where every unit that ran has an
+// expectation from a passing baseline (the same rule as the chart and the summary above).
+const houseDays = computed(() => summarizeDays(props.rows, props.failing))
+const failingNotes = computed(() => failingInUse(props.rows, props.failing).map(baselineFailNote))
 const house = computed(() => {
   const t = totals.value
-  const withExpected = t.filter((u) => u.expected !== null)
+  const covered = houseDays.value.filter((d) => d.expected !== null)
   return {
     active: t.reduce((s, u) => s + u.active, 0),
     cool: t.reduce((s, u) => s + u.cool, 0),
@@ -19,10 +23,13 @@ const house = computed(() => {
     aux: t.reduce((s, u) => s + u.aux, 0),
     fan: t.reduce((s, u) => s + u.fan, 0),
     maxed: t.reduce((s, u) => s + u.maxed, 0),
-    expected: withExpected.length ? withExpected.reduce((s, u) => s + (u.expected ?? 0), 0) : null,
+    expected: covered.length ? covered.reduce((s, d) => s + (d.expected ?? 0), 0) : null,
+    partial: covered.length > 0 && covered.length < houseDays.value.length,
   }
 })
-const partial = computed(() => totals.value.some((u) => u.expected !== null && u.daysWithExpected < u.days))
+const partial = computed(
+  () => house.value.partial || totals.value.some((u) => u.expected !== null && u.daysWithExpected < u.days),
+)
 </script>
 
 <template>
@@ -51,7 +58,8 @@ const partial = computed(() => totals.value.some((u) => u.expected !== null && u
           </th>
           <td class="px-1 py-2 text-right">{{ minutes(u.active) }}</td>
           <td class="px-1 py-2 text-right">
-            {{ minutes(u.expected) }}<span v-if="u.expected !== null && u.daysWithExpected < u.days" class="text-muted">*</span>
+            {{ minutes(u.expected) }}<span v-if="u.expected !== null && u.daysWithExpected < u.days" class="text-muted">*</span><span
+              v-if="u.daysFailing" class="text-warn" title="Baseline fails its checks">†</span>
           </td>
           <td class="px-1 py-2 text-right" :class="u.unit_key === 'up' && u.maxed > 0 ? 'font-semibold text-bad' : ''">{{ minutes(u.maxed) }}</td>
           <td class="hidden px-1 py-2 text-right sm:table-cell">{{ minutes(u.cool) }}</td>
@@ -64,7 +72,10 @@ const partial = computed(() => totals.value.some((u) => u.expected !== null && u
         <tr>
           <th scope="row" class="py-2 pr-2 text-left">House</th>
           <td class="px-1 py-2 text-right">{{ minutes(house.active) }}</td>
-          <td class="px-1 py-2 text-right">{{ minutes(house.expected) }}</td>
+          <td class="px-1 py-2 text-right">
+            {{ minutes(house.expected) }}<span v-if="house.partial" class="font-normal text-muted">*</span><span
+              v-if="failingNotes.length" class="font-normal text-warn" title="Leaves out baselines that fail their checks">†</span>
+          </td>
           <td class="px-1 py-2 text-right">{{ minutes(house.maxed) }}</td>
           <td class="hidden px-1 py-2 text-right sm:table-cell">{{ minutes(house.cool) }}</td>
           <td class="hidden px-1 py-2 text-right sm:table-cell">{{ minutes(house.heat) }}</td>
@@ -76,6 +87,10 @@ const partial = computed(() => totals.value.some((u) => u.expected !== null && u
     <p class="mt-2 text-xs text-muted">
       Runtime counts cooling on cooling days and heating on heating days. Expected is the weather-normalized baseline.
       <template v-if="partial">* The baseline covers only some of these days.</template>
+      <template v-if="failingNotes.length">
+        <span class="text-warn">† <template v-for="(n, i) in failingNotes" :key="n">{{ i ? '; ' : '' }}{{ n }}</template>,
+          so those days aren't counted in Expected.</span>
+      </template>
       Whether a change saved anything, with a 90% interval, is on
       <RouterLink to="/results" class="text-accent underline">Did it work?</RouterLink>
     </p>

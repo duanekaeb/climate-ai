@@ -82,7 +82,9 @@ const isOpenMeteo = computed(() => /open-meteo/i.test(weather.value?.attribution
         Signed out of ecobee
       </p>
       <p v-if="source.detail" class="mt-1 line-clamp-2 text-xs text-muted">{{ source.detail }}</p>
-      <p class="mt-0.5 text-xs text-muted">Last read {{ timeAgo(source.last_success_at) }}</p>
+      <p class="mt-0.5 text-xs text-muted">
+        {{ source.last_success_at ? `Last read ${timeAgo(source.last_success_at)}` : 'Waiting for the first read' }}
+      </p>
       <p v-if="status.homekit.enabled" class="mt-0.5 text-xs" :class="status.homekit.online ? 'text-muted' : 'text-warn'">
         HomeKit {{ status.homekit.online ? `online · ${status.homekit.paired} paired` : 'offline' }}
       </p>

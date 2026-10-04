@@ -7,6 +7,7 @@ import Icon from '@/components/Icon.vue'
 import { useThemeKey } from '@/components/runtime/chartKit'
 import { routes } from '@/router'
 import { useAuth } from '@/stores/auth'
+import { stopLiveUpdates } from '@/stores/status'
 
 const auth = useAuth()
 const router = useRouter()
@@ -33,6 +34,7 @@ async function signOut() {
   error.value = ''
   try {
     await auth.logout()
+    stopLiveUpdates()
     await router.replace('/login')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

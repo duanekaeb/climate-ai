@@ -2,6 +2,8 @@
 // Runtime: daily runtime per unit against the weather-expected total and the outdoor mean,
 // totals per unit, and a picked day's 5-minute detail.
 import { computed, onMounted, watch } from 'vue'
+import { RouterLink } from 'vue-router'
+import type { DailyRuntime } from '@/api/types'
 import AsyncState from '@/components/AsyncState.vue'
 import Card from '@/components/Card.vue'
 import Icon from '@/components/Icon.vue'
@@ -12,7 +14,7 @@ import TapChart from '@/components/runtime/TapChart.vue'
 import { chartTheme, dayLabel, useThemeKey } from '@/components/runtime/chartKit'
 import { dailyRuntimeOption } from '@/components/runtime/runtimeCharts'
 import { UNIT_COLORS, UNIT_NAMES, minutes } from '@/lib/format'
-import { sortUnitKeys, summarizeDays, useRuntime } from '@/stores/runtime'
+import { baselineFailNote, failingInUse, sortUnitKeys, summarizeDays, useRuntime } from '@/stores/runtime'
 import { useStatus } from '@/stores/status'
 
 const RANGES = [14, 30, 90]
@@ -23,7 +25,9 @@ const themeKey = useThemeKey()
 
 const tz = computed(() => status.data?.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone)
 const rows = computed(() => store.daily ?? [])
-const days = computed(() => summarizeDays(rows.value))
+const days = computed(() => summarizeDays(rows.value, store.failing))
+// Failing baselines behind some expectation in this range: their expectations are left out.
+const failingNotes = computed(() => failingInUse(rows.value, store.failing).map(baselineFailNote))
 const unitKeys = computed(() => sortUnitKeys(rows.value.map((r) => r.unit_key)))
 const hasOutdoor = computed(() => days.value.some((d) => d.outdoorMean !== null))
 
@@ -36,6 +40,7 @@ const summary = computed(() => {
     actualCovered: covered.reduce((s, d) => s + d.total, 0),
     expected: covered.length ? covered.reduce((s, d) => s + (d.expected ?? 0), 0) : null,
     coveredDays: covered.length,
+    excludedDays: ds.filter((d) => d.expected === null && d.excluded.length).length,
     upMaxed: up,
   }
 })
@@ -62,13 +67,27 @@ watch(days, (ds) => {
   if (!ds.some((d) => d.date === store.date)) pickDate(ds[ds.length - 1].date)
 })
 
+function refresh() {
+  store.loadDaily(store.days)
+  store.loadBaselines()
+  if (store.date) store.loadIntraday(store.date)
+}
+
 onMounted(() => {
   status.start()
+  store.loadBaselines()
   store.loadDaily(store.days)
   if (store.date) store.loadIntraday(store.date)
 })
 
 const pickerDays = computed(() => [...days.value].reverse())
+// Each unit's mode on the picked day, so the 5-minute totals count what the daily chart counts.
+const intradayModes = computed(() => {
+  const date = store.intraday?.date
+  const out: Record<string, DailyRuntime['mode']> = {}
+  for (const r of rows.value) if (r.date === date) out[r.unit_key] = r.mode
+  return out
+})
 </script>
 
 <template>
@@ -82,13 +101,13 @@ const pickerDays = computed(() => [...days.value].reverse())
         </button>
       </div>
       <button type="button" class="btn !px-2.5 !py-1.5" :disabled="store.dailyLoading" aria-label="Refresh runtime"
-              @click="store.loadDaily(store.days); store.date && store.loadIntraday(store.date)">
+              @click="refresh">
         <Icon name="refresh" :size="16" :class="store.dailyLoading ? 'animate-spin' : ''" />
       </button>
     </div>
 
     <Card title="Daily runtime" subtitle="Per unit, stacked, against what the weather predicts for the whole house.">
-      <AsyncState :loading="store.dailyLoading && !store.daily" :error="store.daily ? '' : store.dailyError"
+      <AsyncState :loading="(store.dailyLoading && !store.daily) || !store.baselinesKnown" :error="store.daily ? '' : store.dailyError"
                   :empty="!!store.daily && !store.daily.length" empty-text="No runtime recorded in this range yet.">
         <div class="space-y-3">
           <dl class="grid grid-cols-3 gap-2 text-center">
@@ -98,7 +117,9 @@ const pickerDays = computed(() => [...days.value].reverse())
             </div>
             <div class="rounded-xl bg-surface-2 p-2">
               <dt class="text-[11px] text-muted">Expected</dt>
-              <dd class="num font-semibold">{{ minutes(summary.expected) }}</dd>
+              <dd class="num font-semibold">
+                {{ minutes(summary.expected) }}<sup v-if="failingNotes.length" class="text-muted">†</sup>
+              </dd>
               <dd v-if="summary.expected !== null && summary.coveredDays < days.length" class="num text-[11px] leading-tight text-muted">
                 {{ summary.coveredDays }} of {{ days.length }} days · actual {{ minutes(summary.actualCovered) }}
               </dd>
@@ -109,6 +130,19 @@ const pickerDays = computed(() => [...days.value].reverse())
             </div>
           </dl>
           <p v-if="store.dailyError" role="status" class="text-xs text-warn">Couldn't refresh: {{ store.dailyError }}</p>
+          <div v-if="failingNotes.length" class="flex items-start gap-1.5 text-xs text-warn">
+            <Icon name="alert" :size="14" class="mt-px shrink-0" />
+            <p>
+              † <template v-for="(n, i) in failingNotes" :key="n">{{ i ? '; ' : '' }}{{ n }}</template>.
+              Expected leaves those out, so {{ summary.excludedDays }} of {{ days.length }} days have no house
+              expectation.
+              <RouterLink to="/results" class="underline">Baselines</RouterLink>
+            </p>
+          </div>
+          <p v-else-if="store.baselinesError" role="status" class="text-xs text-warn">
+            Couldn't check whether the baselines pass their checks ({{ store.baselinesError }}), so Expected may rest on a
+            failing one.
+          </p>
 
           <figure class="min-w-0">
             <TapChart :option="option" height="300px" @tap="onTap" />
@@ -141,12 +175,12 @@ const pickerDays = computed(() => [...days.value].reverse())
       <AsyncState :loading="store.intradayLoading && !store.intraday" :error="store.intraday ? '' : store.intradayError"
                   :empty="!!store.intraday && !store.intraday.units.some((u) => u.points.length)"
                   empty-text="No 5-minute data for this day.">
-        <IntradayPanel v-if="store.intraday" :intraday="store.intraday" :tz="tz" />
+        <IntradayPanel v-if="store.intraday" :intraday="store.intraday" :tz="tz" :modes="intradayModes" />
       </AsyncState>
     </Card>
 
-    <Card v-if="rows.length" title="Totals by unit" :subtitle="`Last ${store.days} days`">
-      <RuntimeTotals :rows="rows" :days="store.days" />
+    <Card v-if="rows.length && store.baselinesKnown" title="Totals by unit" :subtitle="`Last ${store.days} days`">
+      <RuntimeTotals :rows="rows" :days="store.days" :failing="store.failing" />
     </Card>
   </div>
 </template>

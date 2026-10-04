@@ -11,8 +11,12 @@ import Markdown from '@/components/Markdown.vue'
 import ReportMeta from '@/components/reports/ReportMeta.vue'
 import { localDate, localTime, timeAgo } from '@/lib/format'
 import { REPORT_FILTERS, type ReportFilter, isReportFilter, useReports } from '@/stores/reports'
+import { useStatus } from '@/stores/status'
 
 const store = useReports()
+const status = useStatus()
+// House times are shown in the house's time zone, not the device's.
+const tz = computed(() => status.data?.tz)
 const route = useRoute()
 const router = useRouter()
 
@@ -50,6 +54,7 @@ function back() {
 
 let off: (() => void) | undefined
 onMounted(() => {
+  status.start()
   off = onEvent((e) => {
     if (e.type === 'report') store.load(kind.value, { quiet: true })
   })
@@ -107,7 +112,7 @@ const detail = computed(() => (selectedId.value !== null && store.detail?.id ===
               <h2 class="text-lg font-semibold">{{ detail.title }}</h2>
               <div class="mt-2"><ReportMeta :report="detail" /></div>
               <p class="mt-1 text-xs text-muted">
-                Published {{ localDate(detail.created_at) }}, {{ localTime(detail.created_at) }}
+                Published {{ localDate(detail.created_at, tz) }}, {{ localTime(detail.created_at, tz) }}
                 <template v-if="detail.author === 'claude'"> · written by Claude</template>
               </p>
               <hr class="my-3 border-line" />

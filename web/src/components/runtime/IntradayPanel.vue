@@ -8,9 +8,10 @@ import OpenMeteoAttribution from '@/components/OpenMeteoAttribution.vue'
 import { UNIT_COLORS, UNIT_NAMES, minutes } from '@/lib/format'
 import { sortUnitKeys } from '@/stores/runtime'
 import { chartTheme, useThemeKey } from './chartKit'
-import { intradayOption, intradayTotals } from './runtimeCharts'
+import { type DayModes, intradayOption, intradayTotals } from './runtimeCharts'
 
-const props = defineProps<{ intraday: Intraday; tz: string }>()
+// modes: each unit's mode on this day (from the daily rows), so the totals match the daily chart.
+const props = defineProps<{ intraday: Intraday; tz: string; modes?: DayModes }>()
 const themeKey = useThemeKey()
 
 const allKeys = computed(() => sortUnitKeys(props.intraday.units.map((u) => u.unit_key)))
@@ -22,7 +23,7 @@ const option = computed(() => {
   void themeKey.value
   return intradayOption({ intraday: props.intraday, unitKeys: keys.value, tz: props.tz, theme: chartTheme() })
 })
-const totals = computed(() => intradayTotals(props.intraday))
+const totals = computed(() => intradayTotals(props.intraday, props.modes ?? {}))
 const hasOutdoor = computed(() => props.intraday.outdoor.some((p) => p.temp_f !== null))
 </script>
 
@@ -62,9 +63,11 @@ const hasOutdoor = computed(() => props.intraday.outdoor.some((p) => p.temp_f !=
           <span class="h-2 w-2 rounded-full" :style="{ background: UNIT_COLORS[k] ?? 'var(--color-accent)' }" aria-hidden="true" />
           <span class="truncate">{{ UNIT_NAMES[k] ?? k }}</span>
         </dt>
-        <dd class="num font-semibold">{{ minutes(totals[k] ?? 0) }}</dd>
+        <dd class="num font-semibold">{{ minutes(totals[k]?.minutes ?? 0) }}</dd>
+        <dd class="text-[11px] leading-tight text-muted">{{ totals[k]?.label ?? 'cool + heat' }}</dd>
       </div>
     </dl>
+    <p class="text-[11px] text-muted">Day totals count the day's mode only, like the daily chart.</p>
     <OpenMeteoAttribution v-if="hasOutdoor" />
   </div>
 </template>

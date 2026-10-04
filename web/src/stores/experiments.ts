@@ -15,6 +15,8 @@ export const useExperiments = defineStore('experiments', () => {
   const list = resource<ExperimentOut[]>()
   const detail = resource<ExperimentDetail>()
   const power = resource<PowerOut>()
+  /** Sizing for the proposal being drafted (kept apart from the calculator's own result). */
+  const proposalPower = resource<PowerOut>()
 
   function loadList() {
     return loadInto(list, 'all', () => api.get<ExperimentOut[]>('/experiments'))
@@ -26,6 +28,12 @@ export const useExperiments = defineStore('experiments', () => {
 
   function loadPower(effectPct: number, alpha: number, powerTarget: number) {
     return loadInto(power, `${effectPct}|${alpha}|${powerTarget}`, () =>
+      api.get<PowerOut>('/experiments/power', { effect_pct: effectPct, alpha, power: powerTarget }),
+    )
+  }
+
+  function loadProposalPower(effectPct: number, alpha: number, powerTarget = 0.8) {
+    return loadInto(proposalPower, `${effectPct}|${alpha}|${powerTarget}`, () =>
       api.get<PowerOut>('/experiments/power', { effect_pct: effectPct, alpha, power: powerTarget }),
     )
   }
@@ -52,5 +60,5 @@ export const useExperiments = defineStore('experiments', () => {
     return e
   }
 
-  return { list, detail, power, loadList, loadDetail, loadPower, propose, decide }
+  return { list, detail, power, proposalPower, loadList, loadDetail, loadPower, loadProposalPower, propose, decide }
 })

@@ -6,10 +6,14 @@ import type { SourceSettings } from '@/api/types'
 import Card from '@/components/Card.vue'
 import { localDate, localTime } from '@/lib/format'
 import { useSetup } from '@/stores/setup'
+import { useStatus } from '@/stores/status'
 import { useAction } from './useAction'
 
 const props = defineProps<{ source: SourceSettings; ecobeeSignedIn: boolean }>()
 const setup = useSetup()
+const status = useStatus()
+// House times are shown in the house's time zone, not the device's.
+const tz = computed(() => status.data?.tz)
 const { busy, error, done, run } = useAction()
 
 const form = reactive({ kind: props.source.kind, homekit: props.source.homekit_enabled })
@@ -60,7 +64,7 @@ async function save() {
         Not signed in to ecobee yet. Until you are, the worker has nothing to read.
       </p>
       <p v-if="paused" class="rounded-xl border border-warn/40 bg-warn/10 p-2.5 text-sm text-warn">
-        ecobee cloud calls are paused after repeated errors, until {{ localDate(paused) }}, {{ localTime(paused) }}.
+        ecobee cloud calls are paused after repeated errors, until {{ localDate(paused, tz) }}, {{ localTime(paused, tz) }}.
       </p>
 
       <label class="flex cursor-pointer items-start gap-3">

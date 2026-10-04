@@ -12,6 +12,22 @@ const ZONES: Record<string, string> = {
   b: 'bed wing',
 }
 
+// The RC model's per-zone rate parameters, named "<zone>.<param>" by the API
+// (api/climate/models/thermal_rc.py PARAM_NAMES): main has ua_out, ua_up, ua_bed, sun, q,
+// gain; up has ua_out, ua_main, k_stack, sun, q, gain; bed has ua_out, ua_main, sun, q, gain.
+const RATE: Record<string, string> = {
+  ua_out: 'how quickly it gains or loses heat to the outdoors (insulation)',
+  ua_up: 'how easily heat moves between it and the upstairs',
+  ua_main: 'how easily heat moves between it and the main floor',
+  ua_bed: 'how easily heat moves between it and the bed wing',
+  k_stack: 'extra heat rising up the stairwell when the main floor is warmer',
+  k_s: 'extra heat rising up the stairwell when the main floor is warmer',
+  sun: 'how much the sun heats it',
+  q: 'how much its unit heats or cools it per minute of runtime',
+  gain: 'steady heat from people and appliances',
+}
+
+// Older physical-form names ("R_mu", "C_up"), kept so stored fits still read in plain words.
 const BASE: Record<string, string> = {
   C: 'how much heat it stores (thermal mass)',
   R: 'how well it is insulated from outdoors',
@@ -25,8 +41,17 @@ const BASE: Record<string, string> = {
   g: 'steady heat from people and appliances',
 }
 
-/** "R_mu" -> "how easily heat moves between …"; "C_up" -> "upstairs: how much heat it stores …". */
+/** "main.ua_up" -> "Main floor: how easily heat moves between it and the upstairs";
+ *  "up.k_stack" -> "Upstairs: extra heat rising up the stairwell …". Unknown names pass through. */
 export function plainParam(name: string): string {
+  const dot = name.indexOf('.')
+  if (dot > 0) {
+    const zone = ZONES[name.slice(0, dot)]
+    const words = RATE[name.slice(dot + 1)] ?? BASE[name.slice(dot + 1)]
+    if (words) return zone ? `${capitalize(zone)}: ${words}` : capitalize(words)
+    return name
+  }
+  if (RATE[name]) return capitalize(RATE[name])
   if (BASE[name]) return capitalize(BASE[name])
   const i = name.lastIndexOf('_')
   if (i > 0) {

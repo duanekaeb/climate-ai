@@ -344,6 +344,23 @@ async def test_set_hold_sends_holdhours_with_rounded_tenths_and_reads_back(cloud
     assert snap.hold.end - snap.hold.start == timedelta(hours=2)
 
 
+async def test_smart_away_snapshot_is_distinguishable_and_not_ours(cloud, fake, db):
+    """Finding 2: a running autoAway reaches the snapshot as hold_type 'autoAway', set_by_us
+    False, even when its setpoints equal the hold the controller last wrote."""
+    await cloud.poll_revisions()
+    ours = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=62.0, cool_f=80.0, hours=2, reason="ours"))
+    assert ours.ok, ours.error
+    held = fake.tstats[UP]["events"][0]
+    fake.tstats[UP]["events"] = [dict(held, type="autoAway", name="smartAway", holdClimateRef="away"), held]
+    (snap,) = await cloud.fetch_snapshots(["up"])
+    assert snap.hold is not None
+    assert (snap.hold.hold_type, snap.hold.set_by_us, snap.hold.climate_ref) == ("autoAway", False, "away")
+    # and once Smart Away ends, our own hold is recognized again
+    fake.tstats[UP]["events"] = [held]
+    (snap,) = await cloud.fetch_snapshots(["up"])
+    assert (snap.hold.hold_type, snap.hold.set_by_us) == ("holdHours", True)
+
+
 async def test_set_hold_readback_mismatch_is_not_ok(cloud, fake):
     await cloud.poll_revisions()
     fake.hold_heat_override = 680
@@ -352,6 +369,48 @@ async def test_set_hold_readback_mismatch_is_not_ok(cloud, fake):
     assert "does not match" in result.error
     assert result.readback["hold"]["heat_f"] == 68.0
     assert len(fake.posts) == 1
+
+
+def _shift_clock(t: dict[str, Any], minutes: int) -> None:
+    """Move a fake thermostat's clock (thermostatTime and utcTime) forward."""
+    for k in ("thermostatTime", "utcTime"):
+        dt = datetime.strptime(t[k], "%Y-%m-%d %H:%M:%S") + timedelta(minutes=minutes)  # noqa: DTZ007
+        t[k] = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def test_renewal_that_never_landed_is_not_verified(cloud, fake, db, monkeypatch):
+    """Finding 5: an older hold with the same setpoints and 10 minutes left must not verify a
+    renewal whose POST was lost in transit."""
+    await cloud.poll_revisions()
+    first = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="first"))
+    assert first.ok, first.error
+    db.rollback()
+    record = dict(get_raw(db, HOLDS_KEY)["up"])
+    _shift_clock(fake.tstats[UP], 110)  # 10 minutes left on our hold: the controller renews it
+
+    async def lost_post(ident, payload):
+        raise EcobeeApiError("ecobee thermostat request failed (ConnectError)", transport=True)
+
+    monkeypatch.setattr(cloud, "_post", lost_post)
+    renew = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="renew"))
+    assert renew.ok is False
+    assert "older hold" in renew.error and "ConnectError" in renew.error
+    assert renew.readback["hold"]["heat_f"] == 68.0  # same setpoints, but the old end time
+    db.rollback()
+    assert get_raw(db, HOLDS_KEY)["up"] == record  # the record of our hold is not moved
+
+
+async def test_renewal_that_lands_is_verified(cloud, fake, db):
+    await cloud.poll_revisions()
+    first = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="first"))
+    assert first.ok, first.error
+    _shift_clock(fake.tstats[UP], 110)
+    renew = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="renew"))
+    assert renew.ok is True, renew.error
+    assert len(fake.posts) == 2
+    db.rollback()
+    end = datetime.fromisoformat(get_raw(db, HOLDS_KEY)["up"]["end"])
+    assert end == datetime(2026, 10, 4, 23, 22, 10, tzinfo=UTC)  # shifted clock (21:22:10Z) + 2 h
 
 
 async def test_set_hold_rejected_before_sending(cloud, fake):
@@ -369,13 +428,49 @@ async def test_set_hold_rejected_before_sending(cloud, fake):
 
 async def test_resume_program(cloud, fake):
     await cloud.poll_revisions()
-    result = await cloud.resume_program("main", "back to schedule")
+    # the Hallway's running hold was set by hand: only an owner's forced resume cancels it
+    result = await cloud.resume_program("main", "back to schedule", force=True)
     assert result.ok is True, result.error
     assert fake.posts[-1]["functions"] == [{"type": "resumeProgram", "params": {"resumeAll": False}}]
     assert result.before["hold"]["heat_f"] == 68.0 and result.readback["hold"] is None
+    assert result.request["force"] is True
     # nothing running -> no write
     again = await cloud.resume_program("main", "again")
     assert again.ok is True and again.request.get("noop") is True and len(fake.posts) == 1
+
+
+async def test_resume_program_refuses_a_hold_the_controller_did_not_set(cloud, fake):
+    """Finding 8: the controller's resume must never erase a hand-set hold."""
+    await cloud.poll_revisions()
+    result = await cloud.resume_program("main", "controller resume")
+    assert result.ok is False
+    assert result.error == "the running hold was not set by the controller; not cancelled"
+    assert result.before["hold"]["set_by_us"] is False and result.request["force"] is False
+    assert fake.posts == []
+    # an indefinite hand-set hold (Bedroom) is refused the same way
+    bed = await cloud.resume_program("bed", "controller resume")
+    assert bed.ok is False and "not set by the controller" in bed.error and fake.posts == []
+
+
+async def test_resume_program_cancels_our_own_hold_without_force(cloud, fake, db):
+    await cloud.poll_revisions()
+    written = await cloud.set_hold(HoldRequest(unit_key="up", heat_f=68.0, cool_f=77.0, hours=2, reason="ours"))
+    assert written.ok, written.error
+    result = await cloud.resume_program("up", "back to schedule")
+    assert result.ok is True, result.error
+    assert result.before["hold"]["set_by_us"] is True and result.readback["hold"] is None
+    assert fake.posts[-1]["functions"] == [{"type": "resumeProgram", "params": {"resumeAll": False}}]
+    db.rollback()
+    assert "up" not in get_raw(db, HOLDS_KEY)  # the record of our hold is cleared
+
+
+@pytest.mark.parametrize("etype", ["vacation", "demandResponse", "autoAway", "autoHome", "quickSave"])
+async def test_resume_program_never_cancels_an_event_even_when_forced(cloud, fake, etype):
+    await cloud.poll_revisions()
+    ev = dict(fake.tstats[MAIN]["events"][0], type=etype, running=True)
+    fake.tstats[MAIN]["events"] = [ev]
+    result = await cloud.resume_program("main", "owner resume", force=True)
+    assert result.ok is False and etype in result.error and fake.posts == []
 
 
 async def test_resume_program_never_cancels_a_vacation(cloud, fake):
@@ -401,6 +496,44 @@ async def test_ensure_settings(cloud, fake):
     assert results[0].before == {"autoAway": True, "followMeComfort": False}
     assert results[0].readback == {"autoAway": False, "followMeComfort": False}
     assert fake.tstats[BED]["settings"]["followMeComfort"] is False
+
+
+async def test_ensure_settings_results_are_complete_and_idempotent(cloud, fake):
+    """Every result carries before / request / readback for the worker's log; a second run
+    writes nothing because everything already reads off."""
+    await cloud.poll_revisions()
+    first = await cloud.ensure_settings()
+    for r in first:
+        assert r.ok and r.channel == "ecobee", r.error
+        assert set(r.request) >= {"unit_key", "identifier", "settings", "reason"}
+        assert r.request["settings"] == {"autoAway": False, "followMeComfort": False}
+        assert r.before and r.readback == {"autoAway": False, "followMeComfort": False}
+    assert [bool(r.request.get("noop")) for r in first] == [False, True, False]
+    n_posts = len(fake.posts)
+    second = await cloud.ensure_settings("custom reason")
+    assert len(fake.posts) == n_posts  # no write when already off
+    assert all(r.ok and r.request.get("noop") is True for r in second)
+    assert all(r.before == r.readback == {"autoAway": False, "followMeComfort": False} for r in second)
+    assert second[0].request["reason"] == "custom reason"
+
+
+async def test_ensure_settings_failed_readback_keeps_before_and_reports(cloud, fake, monkeypatch):
+    await cloud.poll_revisions()
+    real = cloud._get_thermostats
+    calls = {"n": 0}
+
+    async def flaky(identifiers, includes):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the read-back after the writes
+            raise EcobeeApiError("ecobee thermostat: HTTP 500, status 3: Processing error")
+        return await real(identifiers, includes)
+
+    monkeypatch.setattr(cloud, "_get_thermostats", flaky)
+    results = {r.request["unit_key"]: r for r in await cloud.ensure_settings()}
+    main = results["main"]
+    assert main.ok is False and "read-back failed" in main.error and main.readback is None
+    assert main.before == {"autoAway": True, "followMeComfort": False} and "noop" not in main.request
+    assert results["up"].ok is True and results["up"].request["noop"] is True
 
 
 async def test_update_sensor_sets_read_modify_write(cloud, fake):

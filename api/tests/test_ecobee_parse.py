@@ -177,6 +177,32 @@ def test_hold_parsing_types():
     assert P.running_override([dict(ev, running=False)]) is None
 
 
+def test_event_overrides_keep_their_type_and_are_never_ours():
+    """Finding 2: Smart Home/Away, vacation, demand response and quick save are told apart
+    from plain holds by hold_type, and never count as the controller's hold."""
+    hall = tstat("411111111111")
+    off = P.thermostat_utc_offset(hall)
+    ev = P.running_override(hall["events"])
+    ours = {"heat_f": 68.0, "cool_f": 75.0, "end": "2026-10-04T21:00:00+00:00"}  # same setpoints and end
+    assert P.EVENT_HOLD_TYPES == ("vacation", "autoAway", "autoHome", "quickSave", "demandResponse")
+    for etype in P.EVENT_HOLD_TYPES:
+        event = dict(ev, type=etype, holdClimateRef="away" if etype == "autoAway" else "")
+        assert P.running_override([event]) is event
+        hold = P.parse_hold(event, off, hall["program"], ours)
+        assert hold.hold_type == etype and hold.set_by_us is False, etype
+    smart_away = P.parse_hold(dict(ev, type="autoAway", holdClimateRef="away"), off, hall["program"], ours)
+    assert smart_away.kind == "climate" and smart_away.climate_ref == "away"
+    # plain holds only ever carry an inferred plain type
+    plain = [P.parse_hold(dict(ev, endTime=t), off, hall["program"], None).hold_type
+             for t in ("16:00:00", "22:00:00", "17:45:00")]
+    plain.append(P.parse_hold(P.running_override(tstat("433333333333")["events"]), off, {}, None).hold_type)
+    assert plain == ["holdHours", "nextTransition", "dateTime", "indefinite"]
+    assert set(plain) == set(P.PLAIN_HOLD_TYPES)
+    # the first RUNNING override is the one in effect (a Smart Away above a hand-set hold)
+    stacked = [dict(ev, type="autoAway", holdClimateRef="away"), ev]
+    assert P.parse_hold(P.running_override(stacked), off, hall["program"], ours).hold_type == "autoAway"
+
+
 def test_report_chunks_are_at_most_31_days_and_inclusive():
     start = datetime(2026, 8, 1, 0, 3, tzinfo=UTC)
     end = datetime(2026, 9, 15, 0, 0, tzinfo=UTC)

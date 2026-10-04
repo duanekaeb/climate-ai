@@ -35,6 +35,12 @@ function cvText(f: ModelFitOut): string {
   return cv === null ? '—' : num(cv * 100, 1, '%')
 }
 
+/** The baseline's ASHRAE Guideline 14 verdict (metrics.passes), or null when not reported. */
+function passes(f: ModelFitOut): boolean | null {
+  const v = f.metrics?.passes
+  return typeof v === 'boolean' ? v : null
+}
+
 function unitName(f: ModelFitOut): string {
   return f.unit_key ? (UNIT_NAMES[f.unit_key] ?? f.unit_key) : 'Whole house'
 }
@@ -57,11 +63,19 @@ function beats(model: number | null, persistence: number | null): boolean | null
               <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{ background: `var(--color-unit-${f.unit_key})` }" />
               <span class="truncate">{{ unitName(f) }} · {{ f.mode ?? '—' }}</span>
             </span>
-            <span class="chip" :class="fitChip(f.status)">{{ f.status }}</span>
+            <span class="flex shrink-0 items-center gap-1">
+              <span class="chip" :class="fitChip(f.status)">{{ f.status }}</span>
+              <span v-if="passes(f) !== null" class="chip" :class="passes(f) ? 'bg-good/15 text-good' : 'bg-bad/15 text-bad'">
+                {{ passes(f) ? 'passes' : 'fails' }}
+              </span>
+            </span>
           </div>
           <p class="num mt-1 text-xs text-muted">
             CV(RMSE) {{ cvText(f) }} · R²
             {{ num(numberAt(f.metrics, 'r2'), 2) }} · trained {{ dayRange(f.train_start, f.train_end) }}
+          </p>
+          <p v-if="passes(f) === false" class="mt-1 text-xs text-bad">
+            Fails its checks (CV(RMSE) ≤ 20%, |NMBE| ≤ 0.5%), so no savings or expected runtime uses it.
           </p>
         </li>
       </ul>

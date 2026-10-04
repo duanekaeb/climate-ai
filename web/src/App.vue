@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { routes } from '@/router'
 import { useAuth } from '@/stores/auth'
-import { useStatus } from '@/stores/status'
+import { stopLiveUpdates, useStatus } from '@/stores/status'
 import Icon from '@/components/Icon.vue'
 
 const route = useRoute()
+const router = useRouter()
 const auth = useAuth()
 const status = useStatus()
 const dark = ref(document.documentElement.classList.contains('dark'))
@@ -25,14 +26,29 @@ function toggleTheme() {
   }
 }
 
-// The router guard loads auth before the first page renders; start live status once signed in.
+// The router guard loads auth before the first page renders; start live status once signed in
+// and inside the app (a 401 sends you to /login while auth still reads "signed in", so the
+// route matters too: coming back from the sign-in page restarts it).
 watch(
-  () => auth.state?.authenticated,
-  (signedIn) => {
-    if (signedIn) status.start()
+  () => !!auth.state?.authenticated && !route.meta.public,
+  (live) => {
+    if (live) status.start()
   },
   { immediate: true },
 )
+
+const signingOut = ref(false)
+async function signOut() {
+  if (signingOut.value) return
+  signingOut.value = true
+  try {
+    await auth.logout()
+    stopLiveUpdates()
+    await router.push('/login')
+  } finally {
+    signingOut.value = false
+  }
+}
 </script>
 
 <template>
@@ -55,7 +71,7 @@ watch(
         <button class="btn !px-2 !py-1" :title="dark ? 'Light mode' : 'Dark mode'" @click="toggleTheme">
           <Icon :name="dark ? 'sun' : 'moon'" :size="16" />
         </button>
-        <button class="underline" @click="auth.logout().then(() => $router.push('/login'))">Sign out</button>
+        <button class="underline" :disabled="signingOut" @click="signOut">Sign out</button>
       </div>
     </aside>
 

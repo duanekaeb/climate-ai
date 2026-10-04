@@ -2,7 +2,8 @@
 
 ``check`` never raises: it clamps what it can and reports violations as sentences, and sets
 ``blocked_reason`` when nothing may be written right now (rate limit, manual back-off,
-stale data, humidity guard, mode off).
+stale data, humidity guard, mode off, a vacation or demand-response event). Whatever it
+returns with ``ok`` is inside the hard limits, on the 0.5°F grid and keeps the deadband.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ from climate.timeutil import to_local
 
 STALE_AFTER = timedelta(minutes=15)
 _EPS = 0.01
+# Running ecobee events the controller never overrides (event type -> how it is worded).
+PROTECTED_EVENTS = {"vacation": "vacation", "demandResponse": "utility demand-response"}
 
 
 class GuardResult(BaseModel):
@@ -51,24 +54,35 @@ def check(
     act_units: list[str] | None = None,
     enforce_rate_limit: bool = True,
     enforce_manual_backoff: bool = True,
+    homekit_data_ok: bool = False,
     tz: str | None = None,
 ) -> GuardResult:
     """Clamp to [min,max] heat/cool, keep cool - heat >= min_deadband_f (and the unit's
     heatCoolMinDelta setting if reported), limit each step to max_step_f from the current
     setpoint, block if the last write was < min_minutes_between_changes ago, block during
     manual_override_until, block raising cool_f while zone humidity > max_indoor_rh, block
-    when the snapshot is older than 15 minutes or the unit is disconnected.
+    when the snapshot is older than 15 minutes or the unit is disconnected, and block while a
+    vacation or utility demand-response event runs (those are never overridden).
 
     Keyword options (all default to the strictest behaviour except ``mode``):
     - ``mode``: the controller mode; 'off' blocks. With 'act' and ``act_units`` given, a
       unit outside the list is blocked (it stays suggest-only).
     - ``enforce_rate_limit`` / ``enforce_manual_backoff``: False only for owner holds (the
       owner is the manual actor).
+    - ``homekit_data_ok``: True only while the ecobee cloud circuit is open and HomeKit has
+      taken over; otherwise a snapshot that came over HomeKit (no ecobee hold or program
+      data) blocks the write.
     - ``tz``: house time zone, only used to word times in sentences.
 
     Clamp order: round -> hard min/max -> step limit from the current setpoint -> humidity
     (never raise cool while humid) -> deadband (moves the setpoint that changed; when both
-    or neither changed, moves heat down unless the thermostat is heating) -> hard limits again.
+    or neither changed, moves heat down unless the thermostat is heating) -> hard limits
+    LAST. The hard limits always win: when the current setpoint sits so far outside them
+    that the step limit cannot reach them, the value is clamped into [min, max] anyway and
+    the violation is recorded, so nothing outside the hard limits is ever written. The
+    deadband is then re-checked inside the limits; when they leave no room for it the
+    result is blocked. Every value is on the thermostat's 0.5°F grid (limits that are not on
+    the grid are tightened to the nearest grid point inside them).
     Clamping is computed even when blocked, so the plan view shows what would be written."""
     name = _unit_name(unit)
     violations: list[str] = []
@@ -90,6 +104,17 @@ def check(
         age = unit.age_s if unit.age_s is not None else (now - snap.ts).total_seconds()
         if age > STALE_AFTER.total_seconds():
             blocked.append(f"The {name} thermostat's data is {int(age // 60)} min old (more than 15 min).")
+        if snap.source == "homekit" and not homekit_data_ok:
+            blocked.append(
+                f"The {name} thermostat's latest data came over HomeKit, which shows no ecobee holds; "
+                "waiting for fresh ecobee cloud data."
+            )
+        event = snap.hold.hold_type if snap.hold is not None else None
+        if event in PROTECTED_EVENTS:
+            blocked.append(
+                f"A {PROTECTED_EVENTS[event]} event is running on the {name} thermostat; the controller never "
+                "overrides it."
+            )
     if enforce_manual_backoff and unit.manual_override_until is not None and unit.manual_override_until > now:
         blocked.append(
             f"Someone changed the {name} thermostat by hand; backing off until "
@@ -108,8 +133,12 @@ def check(
     # --- clamping ---------------------------------------------------------------------
     want_heat, want_cool = round_setpoint(target.heat_f), round_setpoint(target.cool_f)
     heat, cool = want_heat, want_cool
+    bounds = _bounds(limits)
+    lo_heat, hi_heat, lo_cool, hi_cool = bounds
+    if lo_heat > hi_heat or lo_cool > hi_cool:
+        blocked.append(f"The hard limits leave no valid setpoint for the {name} thermostat (minimum above maximum).")
 
-    heat, cool = _hard_limits(heat, cool, limits, violations)
+    heat, cool = _hard_limits(heat, cool, bounds, violations)
 
     if cur_heat is not None and abs(heat - cur_heat) > limits.max_step_f + _EPS:
         stepped = _toward(cur_heat, heat, limits.max_step_f)
@@ -139,8 +168,16 @@ def check(
 
     deadband = _deadband(limits, snap.settings if snap is not None else {})
     if cool - heat < deadband - _EPS:
-        heat, cool = _fix_deadband(heat, cool, deadband, cur_heat, cur_cool, snap, cool_cap, limits)
+        heat, cool = _fix_deadband(heat, cool, deadband, cur_heat, cur_cool, snap, cool_cap, bounds)
         violations.append(f"Kept the {deadband:g}°F gap between heat and cool: {heat:g}–{cool:g}°F.")
+
+    # Hard limits LAST: they win over the step limit and the humidity guard (a current
+    # setpoint far outside them cannot be stepped back inside in one change).
+    heat, cool = _final_limits(heat, cool, bounds, limits.max_step_f, violations)
+    if cool - heat < deadband - _EPS:
+        heat, cool = _fix_deadband(heat, cool, deadband, cur_heat, cur_cool, snap, cool_cap, bounds)
+        heat, cool = _final_limits(heat, cool, bounds, limits.max_step_f, violations)
+        violations.append(f"Kept the {deadband:g}°F gap between heat and cool inside the hard limits: {heat:g}–{cool:g}°F.")
     if cool - heat < deadband - _EPS:
         blocked.append(
             f"The hard limits leave no room for a {deadband:g}°F gap between heat and cool on the {name} thermostat."
@@ -245,19 +282,59 @@ def _toward(current: float, wanted: float, step: float) -> float:
     return math.ceil((current - step) * 2 - _EPS) / 2
 
 
-def _hard_limits(heat: float, cool: float, limits: HardLimits, violations: list[str]) -> tuple[float, float]:
-    if heat < limits.min_heat_f - _EPS:
-        violations.append(f"Heat {heat:g}°F raised to the {limits.min_heat_f:g}°F minimum.")
-        heat = limits.min_heat_f
-    elif heat > limits.max_heat_f + _EPS:
-        violations.append(f"Heat {heat:g}°F lowered to the {limits.max_heat_f:g}°F maximum.")
-        heat = limits.max_heat_f
-    if cool < limits.min_cool_f - _EPS:
-        violations.append(f"Cool {cool:g}°F raised to the {limits.min_cool_f:g}°F minimum.")
-        cool = limits.min_cool_f
-    elif cool > limits.max_cool_f + _EPS:
-        violations.append(f"Cool {cool:g}°F lowered to the {limits.max_cool_f:g}°F maximum.")
-        cool = limits.max_cool_f
+def _bounds(limits: HardLimits) -> tuple[float, float, float, float]:
+    """(min heat, max heat, min cool, max cool) tightened onto the 0.5°F grid, inside the limits."""
+    return (
+        math.ceil(limits.min_heat_f * 2 - _EPS) / 2,
+        math.floor(limits.max_heat_f * 2 + _EPS) / 2,
+        math.ceil(limits.min_cool_f * 2 - _EPS) / 2,
+        math.floor(limits.max_cool_f * 2 + _EPS) / 2,
+    )
+
+
+def _hard_limits(
+    heat: float, cool: float, bounds: tuple[float, float, float, float], violations: list[str],
+) -> tuple[float, float]:
+    lo_heat, hi_heat, lo_cool, hi_cool = bounds
+    if heat < lo_heat - _EPS:
+        violations.append(f"Heat {heat:g}°F raised to the {lo_heat:g}°F minimum.")
+        heat = lo_heat
+    elif heat > hi_heat + _EPS:
+        violations.append(f"Heat {heat:g}°F lowered to the {hi_heat:g}°F maximum.")
+        heat = hi_heat
+    if cool < lo_cool - _EPS:
+        violations.append(f"Cool {cool:g}°F raised to the {lo_cool:g}°F minimum.")
+        cool = lo_cool
+    elif cool > hi_cool + _EPS:
+        violations.append(f"Cool {cool:g}°F lowered to the {hi_cool:g}°F maximum.")
+        cool = hi_cool
+    return heat, cool
+
+
+def _final_limits(
+    heat: float, cool: float, bounds: tuple[float, float, float, float], step: float, violations: list[str],
+) -> tuple[float, float]:
+    """The last clamp: a value the step limit (or the humidity guard) left outside the hard
+    limits is moved inside them, and the reason is recorded."""
+    lo_heat, hi_heat, lo_cool, hi_cool = bounds
+    for label in ("Heat", "Cool"):
+        value, lo, hi = (heat, lo_heat, hi_heat) if label == "Heat" else (cool, lo_cool, hi_cool)
+        if lo > hi:
+            continue  # no valid value at all; check() blocks
+        if value < lo - _EPS:
+            new, word = lo, "minimum"
+        elif value > hi + _EPS:
+            new, word = hi, "maximum"
+        else:
+            continue
+        violations.append(
+            f"{label} {value:g}°F would be outside the hard limits; the {new:g}°F {word} wins over the "
+            f"{step:g}°F step limit."
+        )
+        if label == "Heat":
+            heat = new
+        else:
+            cool = new
     return heat, cool
 
 
@@ -274,8 +351,9 @@ def _deadband(limits: HardLimits, settings: dict[str, Any]) -> float:
 
 def _fix_deadband(
     heat: float, cool: float, deadband: float, cur_heat: float | None, cur_cool: float | None,
-    snap: Any, cool_cap: float | None, limits: HardLimits,
+    snap: Any, cool_cap: float | None, bounds: tuple[float, float, float, float],
 ) -> tuple[float, float]:
+    lo_heat, _hi_heat, lo_cool, hi_cool = bounds
     heat_changed = cur_heat is None or abs(heat - cur_heat) > _EPS
     cool_changed = cur_cool is None or abs(cool - cur_cool) > _EPS
     heating = snap is not None and snap.hvac_mode in ("heat", "auxHeatOnly")
@@ -288,13 +366,14 @@ def _fix_deadband(
     if move_cool and cool_cap is not None:
         move_cool = False  # humid: cool may not go up, so heat gives way
     if move_cool:
-        cool = min(math.ceil((heat + deadband) * 2 - _EPS) / 2, limits.max_cool_f)
+        cool = min(math.ceil((heat + deadband) * 2 - _EPS) / 2, hi_cool)
         if cool - heat < deadband - _EPS:
-            heat = max(math.floor((cool - deadband) * 2 + _EPS) / 2, limits.min_heat_f)
+            heat = max(math.floor((cool - deadband) * 2 + _EPS) / 2, lo_heat)
     else:
-        heat = max(math.floor((cool - deadband) * 2 + _EPS) / 2, limits.min_heat_f)
+        heat = max(math.floor((cool - deadband) * 2 + _EPS) / 2, lo_heat)
         if cool - heat < deadband - _EPS:
-            ceiling = limits.max_cool_f if cool_cap is None else min(limits.max_cool_f, cool_cap)
+            # humid: cool may rise only as far as the cap, unless the hard minimum forces more
+            ceiling = hi_cool if cool_cap is None else max(lo_cool, min(hi_cool, cool_cap))
             cool = min(math.ceil((heat + deadband) * 2 - _EPS) / 2, ceiling)
     return heat, cool
 

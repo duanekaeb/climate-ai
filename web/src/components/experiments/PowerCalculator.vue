@@ -47,11 +47,11 @@ const weeks = computed(() => (out.value?.total_days == null ? null : out.value.t
       </div>
       <div class="grid grid-cols-2 gap-2">
         <label class="text-xs text-muted">
-          False-win rate
+          Alpha (two-sided)
           <select v-model.number="alpha" class="input num mt-1">
-            <option :value="0.05">5%</option>
-            <option :value="0.1">10%</option>
-            <option :value="0.2">20%</option>
+            <option :value="0.05">0.05</option>
+            <option :value="0.1">0.10</option>
+            <option :value="0.2">0.20</option>
           </select>
         </label>
         <label class="text-xs text-muted">
@@ -62,6 +62,10 @@ const weeks = computed(() => (out.value?.total_days == null ? null : out.value.t
           </select>
         </label>
       </div>
+      <p class="text-xs text-muted">
+        A false win for the change (calling it a saving when it isn't) is at most half of alpha:
+        {{ Number((alpha * 50).toFixed(1)) }}%.
+      </p>
       <AsyncState :loading="store.power.loading && !out" :error="store.power.error">
         <div v-if="out" class="space-y-1" aria-live="polite">
           <template v-if="out.days_per_arm !== null">

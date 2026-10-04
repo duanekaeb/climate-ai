@@ -5,7 +5,7 @@ import type {
   LineSeriesOption,
   TooltipComponentFormatterCallbackParams,
 } from 'echarts'
-import type { Intraday } from '@/api/types'
+import type { DailyRuntime, Intraday } from '@/api/types'
 import { UNIT_NAMES, minutes, temp } from '@/lib/format'
 import { type RuntimeDay, activeMinutes } from '@/stores/runtime'
 import { type ChartTheme, axisStyle, clock, dayLabel, dot, escapeHtml, tooltipStyle, withAlpha, yOf } from './chartKit'
@@ -102,6 +102,10 @@ export function dailyRuntimeOption({ days, unitKeys, selectedDate, theme: t }: D
           rows.push(`${dot(t.unit(k))}${escapeHtml(unitName(k))} <b>${escapeHtml(minutes(activeMinutes(r)))}</b> ${mode}${maxed}`)
         }
         rows.push(`House <b>${escapeHtml(minutes(d.total))}</b> · expected <b>${escapeHtml(minutes(d.expected))}</b>`)
+        if (d.excluded.length) {
+          const names = d.excluded.map(unitName).join(', ')
+          rows.push(`<span style="opacity:.75">${escapeHtml(names)}: baseline fails its checks, not counted</span>`)
+        }
         if (d.outdoorMean !== null) rows.push(`${dot(t.warn)}Outdoor mean <b>${escapeHtml(temp(d.outdoorMean, 0))}</b>`)
         return rows.join('<br/>')
       },
@@ -303,9 +307,26 @@ export function intradayOption({ intraday, unitKeys, tz, theme: t }: IntradayCha
   }
 }
 
-/** Minutes each unit ran on the picked day (from the 5-minute points). */
-export function intradayTotals(intraday: Intraday): Record<string, number> {
-  const out: Record<string, number> = {}
-  for (const u of intraday.units) out[u.unit_key] = u.points.reduce((s, p) => s + (p.cool_s + p.heat_s) / 60, 0)
+export type DayModes = Record<string, DailyRuntime['mode'] | undefined>
+
+export interface IntradayTotal {
+  minutes: number
+  /** What was counted: the day's mode, or both when the day has no single mode. */
+  label: 'cooling' | 'heating' | 'cool + heat'
+}
+
+/** Minutes each unit ran on the picked day (from the 5-minute points), counted the same way as
+ *  the daily totals: only the day's mode (from that day's daily row), cool + heat when the day
+ *  has no mode. */
+export function intradayTotals(intraday: Intraday, modes: DayModes = {}): Record<string, IntradayTotal> {
+  const out: Record<string, IntradayTotal> = {}
+  for (const u of intraday.units) {
+    const mode = modes[u.unit_key] ?? null
+    const secs = u.points.reduce(
+      (s, p) => s + (mode === 'cool' ? p.cool_s : mode === 'heat' ? p.heat_s : p.cool_s + p.heat_s),
+      0,
+    )
+    out[u.unit_key] = { minutes: secs / 60, label: mode === 'cool' ? 'cooling' : mode === 'heat' ? 'heating' : 'cool + heat' }
+  }
   return out
 }

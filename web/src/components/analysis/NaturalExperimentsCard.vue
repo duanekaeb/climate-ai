@@ -5,6 +5,7 @@
 import { computed, ref, watch } from 'vue'
 import AsyncState from '@/components/AsyncState.vue'
 import Card from '@/components/Card.vue'
+import Icon from '@/components/Icon.vue'
 import { minutes } from '@/lib/format'
 import { useAnalysis } from '@/stores/analysis'
 import IntervalBar from './IntervalBar.vue'
@@ -23,9 +24,31 @@ watch(days, (d) => analysis.loadNatural(d), { immediate: true })
 
 const data = computed(() => analysis.natural.data)
 const ci = computed(() => pair(data.value?.ci90))
+// controls_ok === false: a control moved materially next to the estimate, so it is NOT a finding.
+const controlsMoved = computed(() => data.value?.controls_ok === false)
+const controls = computed(() => {
+  const d = data.value
+  if (!d) return []
+  return [
+    {
+      key: 'placebo',
+      title: 'Placebo: fake event days',
+      estimate: d.placebo_estimate,
+      ci: pair(d.placebo_ci90),
+      help: 'Should be near zero; if not, something other than the floor is at work.',
+    },
+    {
+      key: 'bed',
+      title: 'Bed wing (negative control)',
+      estimate: d.bed_wing_estimate,
+      ci: pair(d.bed_wing_ci90),
+      help: 'Should be near zero; the wing is not above the main floor, so an effect there points at sun or weather.',
+    },
+  ].map((c) => ({ ...c, moved: c.ci !== null && !crossesZero(c.ci[0], c.ci[1]) }))
+})
 const events = computed(() => [...(data.value?.events ?? [])].sort((a, b) => (a.date < b.date ? 1 : -1)))
 
-/** Controls carry no interval of their own; show their size relative to the main estimate. */
+/** Each control's size relative to the main estimate. */
 function relative(v: number | null): string {
   const est = data.value?.estimate_min_per_event
   if (v === null || est === null || est === undefined || est === 0) return ''
@@ -41,39 +64,57 @@ function relative(v: number | null): string {
       :error="analysis.natural.error"
     >
       <div v-if="data" class="space-y-4">
-        <div v-if="data.estimate_min_per_event !== null" class="space-y-2">
+        <div v-if="data.estimate_min_per_event !== null && controlsMoved" role="alert"
+             class="flex items-start gap-2 rounded-xl border border-bad/40 bg-bad/10 p-3 text-sm">
+          <Icon name="alert" :size="18" class="mt-px shrink-0 text-bad" />
+          <div>
+            <p class="font-semibold">A control moved: not a finding</p>
+            <p class="mt-0.5 text-muted">
+              The placebo or the bed wing shifted by a material amount next to the estimate, so something other than the
+              main floor (sun, weather, schedules) may explain it. The number below is shown for reference only.
+            </p>
+          </div>
+        </div>
+
+        <div v-if="data.estimate_min_per_event !== null" class="space-y-2" :class="controlsMoved && 'text-muted'">
           <p class="text-sm">
             On afternoons the main floor floated warm, the upstairs ran
-            <span class="num text-lg font-semibold">{{ signedMinutes(data.estimate_min_per_event) }}</span>
-            more than its weather baseline predicts.
+            <span class="num text-lg font-semibold" :class="controlsMoved && 'text-muted line-through decoration-2'">{{ signedMinutes(data.estimate_min_per_event) }}</span>
+            more than its weather baseline predicts<template v-if="controlsMoved">, but a control moved</template>.
           </p>
-          <IntervalBar
-            :value="data.estimate_min_per_event"
-            :low="ci ? ci[0] : null"
-            :high="ci ? ci[1] : null"
-            unit=" min"
-            :digits="0"
-            :min-span="10"
-            label="Extra upstairs runtime per event"
-          />
+          <div :class="controlsMoved && 'opacity-50 grayscale'">
+            <IntervalBar
+              :value="data.estimate_min_per_event"
+              :low="ci ? ci[0] : null"
+              :high="ci ? ci[1] : null"
+              unit=" min"
+              :digits="0"
+              :min-span="10"
+              label="Extra upstairs runtime per event"
+            />
+          </div>
           <p class="text-sm">
             90% interval: <span class="num font-medium">{{ interval(ci?.[0], ci?.[1], 0, ' min') }}</span>.
-            <span v-if="!ci" class="text-muted">Without an interval this is not a finding.</span>
+            <span v-if="controlsMoved" class="text-muted">Not a finding while a control moves.</span>
+            <span v-else-if="!ci" class="text-muted">Without an interval this is not a finding.</span>
             <span v-else-if="crossesZero(ci[0], ci[1])" class="text-muted">It includes zero, so the history can't confirm the effect yet.</span>
           </p>
         </div>
         <p v-else class="rounded-xl border border-warn/40 bg-warn/10 p-3 text-sm">{{ data.note || 'Not enough events yet.' }}</p>
 
         <div class="grid gap-2 sm:grid-cols-2">
-          <div class="rounded-xl bg-surface-2 p-3">
-            <p class="text-xs text-muted">Placebo: fake event days</p>
-            <p class="num font-semibold">{{ signedMinutes(data.placebo_estimate) }}</p>
-            <p class="text-xs text-muted">{{ relative(data.placebo_estimate) }}Should be near zero; if not, something other than the floor is at work.</p>
-          </div>
-          <div class="rounded-xl bg-surface-2 p-3">
-            <p class="text-xs text-muted">Bed wing (negative control)</p>
-            <p class="num font-semibold">{{ signedMinutes(data.bed_wing_estimate) }}</p>
-            <p class="text-xs text-muted">{{ relative(data.bed_wing_estimate) }}Should be near zero; the wing is not above the main floor, so an effect there points at sun or weather.</p>
+          <div v-for="c in controls" :key="c.key" class="rounded-xl p-3"
+               :class="c.moved && controlsMoved ? 'bg-bad/10 ring-1 ring-bad/40' : 'bg-surface-2'">
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-xs text-muted">{{ c.title }}</p>
+              <span v-if="c.moved" class="chip shrink-0" :class="controlsMoved ? 'bg-bad/15 text-bad' : 'bg-warn/15 text-warn'">moved</span>
+            </div>
+            <p class="num font-semibold">{{ signedMinutes(c.estimate) }}</p>
+            <p class="num text-xs">
+              90% interval {{ interval(c.ci?.[0], c.ci?.[1], 0, ' min') }}<span v-if="c.ci" class="text-muted">{{
+                c.moved ? ' (excludes zero)' : ' (includes zero)' }}</span>
+            </p>
+            <p class="mt-1 text-xs text-muted">{{ relative(c.estimate) }}{{ c.help }}</p>
           </div>
         </div>
 

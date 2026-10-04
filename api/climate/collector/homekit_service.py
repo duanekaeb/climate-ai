@@ -5,7 +5,10 @@ Loops: mDNS discovery -> homekit_devices; the pairing handshake driven by the we
 save pairing encrypted -> paired; unpair_requested -> remove pairing); for each pairing:
 populate accessories, map aids to sensors (by name), subscribe 'ev' characteristics, poll
 every 60 s in batches of <= 49, push readings via collector.ingest.ingest_live_readings;
-execute queued control_actions with channel 'homekit'; heartbeat 'homekit' every loop.
+while a unit's live_units snapshot is more than 10 minutes old (ecobee cloud down) write a
+HomeKit-derived snapshot there instead (never over a newer one); execute queued
+control_actions with channel 'homekit' (and fail 'sent' rows a crashed run left behind);
+heartbeat 'homekit' every loop.
 
 Runs only while ``SourceSettings.homekit_enabled`` (otherwise it re-checks every 60 s). One
 device's failure never stops the loop. Pairing keys live only in ``secrets``
@@ -26,12 +29,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
-from sqlalchemy import func, select, update
+from pydantic import ValidationError
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from climate import events, notify
 from climate.collector import ingest
-from climate.sources.base import SensorReading, WriteResult
+from climate.sources.base import SensorReading, UnitSnapshot, WriteResult
 from climate.sources.homekit import (
     BAD_CODE_FORMAT_MSG,
     CLIMATE_CODES,
@@ -46,6 +51,7 @@ from climate.sources.homekit import (
     build_aid_map,
     hold_window,
     readings_from_values,
+    snapshot_from_values,
 )
 from climate.store import secrets
 from climate.store.app_settings import (
@@ -57,13 +63,18 @@ from climate.store.app_settings import (
     get_setting,
 )
 from climate.store.db import session_scope
-from climate.store.orm import ControlAction, HomekitDevice, Room, Sensor, Unit
+from climate.store.orm import ControlAction, HomekitDevice, LiveUnit, Room, Sensor, Unit
 from climate.timeutil import utcnow
 
 log = logging.getLogger("climate.homekit")
 
 SECRET_PREFIX = "homekit_pairing:"
 SERVICE = "homekit"
+SENT_MAX_AGE = timedelta(minutes=15)  # a 'sent' row older than this was left by a crashed run
+CLOUD_STALE_AFTER = timedelta(minutes=10)  # live snapshot older than this: HomeKit writes its own
+# Queued kinds (control_actions.request.kind) that resume the schedule; 'resume_program' is
+# the controller's name for it (older rows), 'clear_hold' the documented one.
+CLEAR_HOLD_KINDS = ("clear_hold", "resume_program")
 KEYS_MISSING_MSG = (
     "The saved pairing keys are missing from the database. Choose Disconnect from HomeKit on the thermostat, "
     "then pair again."

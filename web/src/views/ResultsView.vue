@@ -26,13 +26,30 @@ const MAX_DAYS = 366
 
 const analysis = useAnalysis()
 const status = useStatus()
+// The house's days, not the device's: wait for the house time zone before picking a period.
+// If the status can't load at all, fall back to the device's zone rather than never loading.
+const tzKnown = computed(() => !!status.data || !!status.error)
 const tz = computed(() => status.data?.tz)
 
 // Complete days only: the period ends yesterday (house time).
-const yesterday = computed(() => addDays(todayIn(tz.value), -1))
+const today = computed(() => todayIn(tz.value))
+const yesterday = computed(() => addDays(today.value, -1))
 const preset = ref<Preset>(14)
 const customStart = ref(addDays(yesterday.value, -13))
 const customEnd = ref(yesterday.value)
+// The custom-range defaults follow the house's "yesterday" (it changes when the time zone
+// arrives) until the owner edits them.
+let customEdited = false
+watch(yesterday, (y) => {
+  if (customEdited) return
+  customStart.value = addDays(y, -13)
+  customEnd.value = y
+})
+function editCustom(which: 'start' | 'end', value: string) {
+  customEdited = true
+  if (which === 'start') customStart.value = value
+  else customEnd.value = value
+}
 
 const range = computed(() => {
   if (preset.value === 'custom') return { start: customStart.value, end: customEnd.value }
@@ -50,9 +67,9 @@ const rangeError = computed(() => {
 })
 
 watch(
-  range,
-  (r) => {
-    if (!rangeError.value) void analysis.loadSavings(r.start, r.end)
+  [range, tzKnown],
+  ([r, known]) => {
+    if (known && !rangeError.value) void analysis.loadSavings(r.start, r.end)
   },
   { immediate: true },
 )
@@ -80,7 +97,7 @@ const hasOutdoor = computed(() => (savings.value?.days ?? []).some((d) => d.outd
           type="button"
           class="btn !px-2 !py-1"
           aria-label="Reload savings"
-          :disabled="analysis.savings.loading || !!rangeError"
+          :disabled="analysis.savings.loading || !!rangeError || !tzKnown"
           @click="analysis.loadSavings(range.start, range.end)"
         >
           <Icon name="refresh" :size="14" />
@@ -91,17 +108,19 @@ const hasOutdoor = computed(() => (savings.value?.days ?? []).some((d) => d.outd
         <div v-if="preset === 'custom'" class="grid grid-cols-2 gap-2">
           <label class="text-xs text-muted">
             From
-            <input v-model="customStart" type="date" class="input mt-1 dark:[color-scheme:dark]" :max="yesterday" />
+            <input :value="customStart" type="date" class="input mt-1 dark:[color-scheme:dark]" :max="yesterday"
+                   @input="editCustom('start', ($event.target as HTMLInputElement).value)" />
           </label>
           <label class="text-xs text-muted">
             To
-            <input v-model="customEnd" type="date" class="input mt-1 dark:[color-scheme:dark]" :max="yesterday" />
+            <input :value="customEnd" type="date" class="input mt-1 dark:[color-scheme:dark]" :max="yesterday"
+                   @input="editCustom('end', ($event.target as HTMLInputElement).value)" />
           </label>
         </div>
         <p v-if="rangeError" class="text-xs text-bad">{{ rangeError }}</p>
       </div>
       <AsyncState
-        :loading="analysis.savings.loading && !savings"
+        :loading="(analysis.savings.loading && !savings) || !tzKnown"
         :error="rangeError ? '' : analysis.savings.error"
         :empty="!rangeError && !!savings && savings.n_days === 0"
         empty-text="No complete days of runtime in this period."
