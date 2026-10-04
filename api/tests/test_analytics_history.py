@@ -7,7 +7,7 @@ the analytics read is pinned to it (``frozen_clock``), so every run fits the sam
 the same noise and the same windows, whatever the wall clock says. Built from
 ``datetime.now()`` the alignment of the seeded noise with the weather wave, the weekdays and
 the local days moved with the hour of the run, and the bed wing's balance point (weakly
-identified: every hour of the factories' weather is above 68°F, so 65-68°F fit identically)
+identified: every hour of the factories' weather is at or above 68°F, so 65-68°F fit identically)
 came out 69°F on about one start time in eight.
 """
 
